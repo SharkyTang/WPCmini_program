@@ -1,0 +1,41 @@
+<view class="page">
+  <view wx:if="{{loading}}" class="state-box">正在读取案例...</view>
+  <view wx:elif="{{errorMessage}}" class="state-box state-error">
+    {{errorMessage}}
+    <view class="back-button" bindtap="goBack">返回首页</view>
+  </view>
+  <view wx:else class="detail">
+    <image
+      wx:if="{{caseItem.coverImageUrl}}"
+      class="hero-image"
+      mode="aspectFill"
+      src="{{caseItem.coverImageUrl}}"
+    ></image>
+    <view wx:else class="hero-placeholder">暂无图片</view>
+
+    <view class="title-block">
+      <view class="case-title">{{caseItem.title}}</view>
+      <view class="case-subtitle">{{caseItem.wineType}}包装 · 适合作为设计参考</view>
+    </view>
+
+    <view class="tag-section" wx:if="{{displayTags.length}}">
+      <view class="section-title">案例标签</view>
+      <view class="tag-list">
+        <text wx:for="{{displayTags}}" wx:key="*this" class="tag">{{item}}</text>
+      </view>
+    </view>
+
+    <view class="info-card">
+      <view wx:for="{{infoRows}}" wx:key="label" class="info-row">
+        <view class="info-label">{{item.label}}</view>
+        <view class="info-value">{{item.value}}</view>
+      </view>
+      <view wx:if="{{caseItem.notes}}" class="info-row info-row-notes">
+        <view class="info-label">备注</view>
+        <view class="info-value">{{caseItem.notes}}</view>
+      </view>
+    </view>
+
+    <view class="back-button" bindtap="goBack">返回继续筛选</view>
+  </view>
+</view>

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>酒包装案例图片分类工具</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p>v0 数据准备工具</p>
+          <h1>酒包装案例图片分类</h1>
+        </div>
+
+        <section class="panel">
+          <label class="file-picker">
+            <span>选择图片文件夹</span>
+            <input id="file-input" type="file" accept="image/jpeg,image/png" webkitdirectory multiple />
+          </label>
+          <p class="hint">支持 jpg / jpeg / png。原图不会被修改。</p>
+        </section>
+
+        <section class="stats" id="stats"></section>
+
+        <section class="panel">
+          <div class="section-heading">
+            <h2>图片列表</h2>
+            <span id="progress-label">0 / 0</span>
+          </div>
+          <div class="case-list" id="case-list"></div>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">当前案例</p>
+            <h2 id="current-title">请选择图片文件夹</h2>
+          </div>
+          <div class="actions">
+            <button id="prev-button" type="button">上一张</button>
+            <button id="next-button" type="button">下一张</button>
+            <button id="skip-button" type="button">跳过</button>
+            <button id="complete-button" type="button" class="primary">标记完成</button>
+          </div>
+        </header>
+
+        <div class="content-grid">
+          <section class="preview-card">
+            <div class="image-stage" id="image-stage">
+              <p>选择图片文件夹后开始分类。</p>
+            </div>
+            <dl class="meta-grid" id="image-meta"></dl>
+          </section>
+
+          <section class="editor-card">
+            <div class="field">
+              <label for="title-input">标题</label>
+              <input id="title-input" type="text" placeholder="例如：高端白酒礼盒包装" />
+            </div>
+
+            <div class="field">
+              <label for="notes-input">备注</label>
+              <textarea id="notes-input" rows="3" placeholder="可记录客户、工艺细节、特殊说明"></textarea>
+            </div>
+
+            <div id="taxonomy-groups" class="taxonomy"></div>
+
+            <div class="validation" id="validation"></div>
+
+            <div class="export-card">
+              <div>
+                <h3>导出</h3>
+                <p>生成 `cases.json` 和压缩后的 `case_001.jpg` 图片。优先写入你选择的导出文件夹；不支持时会走浏览器下载。</p>
+              </div>
+              <div class="export-actions">
+                <button id="export-button" type="button" class="primary">导出数据和图片</button>
+                <button id="clear-button" type="button" class="danger">清空本地进度</button>
+              </div>
+              <pre id="export-log" class="log"></pre>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js?v=20260616-tag-migration"></script>
+  </body>
+</html>

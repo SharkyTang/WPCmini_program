@@ -1,0 +1,122 @@
+<view class="page">
+  <view class="hero">
+    <view class="hero-title">酒包装灵感库</view>
+    <view class="hero-subtitle">{{allCases.length}} 个白酒包装案例 · 按风格快速找参考</view>
+  </view>
+
+  <swiper
+    wx:if="{{banners.length}}"
+    class="banner-swiper"
+    autoplay
+    circular
+    interval="3600"
+    duration="450"
+    previous-margin="48rpx"
+    next-margin="48rpx"
+  >
+    <swiper-item wx:for="{{banners}}" wx:key="id">
+      <view class="banner-card" bindtap="onBannerTap" data-id="{{item.caseId}}">
+        <image class="banner-image" mode="aspectFill" src="{{item.imageUrl}}"></image>
+        <view class="banner-title" wx:if="{{item.title}}">{{item.title}}</view>
+      </view>
+    </swiper-item>
+  </swiper>
+
+  <view class="content">
+    <view class="search-box">
+      <input
+        class="search-input"
+        placeholder="搜索包装内容、风格、场景"
+        placeholder-class="search-placeholder"
+        value="{{query}}"
+        confirm-type="search"
+        bindinput="onSearchInput"
+      />
+    </view>
+
+    <view wx:if="{{selectedPills.length}}" class="selected-panel">
+      <view class="selected-head">
+        <text>已选条件</text>
+        <text class="clear-action" bindtap="clearFilters">清空</text>
+      </view>
+      <view class="selected-list">
+      <view
+        wx:for="{{selectedPills}}"
+        wx:key="id"
+          class="selected-pill"
+          bindtap="removeSelectedPill"
+          data-key="{{item.key}}"
+          data-value="{{item.value}}"
+        >
+          {{item.value}}
+        </view>
+      </view>
+    </view>
+
+    <view class="section-head">
+      <view class="section-title">筛选分类</view>
+      <view class="section-tip">点击大类展开，不占用首屏空间</view>
+    </view>
+
+    <view class="filter-list">
+      <view wx:for="{{filters}}" wx:key="key" class="filter-card">
+        <view class="filter-header" bindtap="toggleFilterGroup" data-key="{{item.key}}">
+          <view class="filter-title">{{item.title}}</view>
+          <view class="filter-summary">
+            <text wx:if="{{item.selectedValues.length}}">已选 {{item.selectedValues.length}}</text>
+            <text wx:else>未选择</text>
+            <text class="filter-arrow">{{item.isExpanded ? "⌄" : "›"}}</text>
+          </view>
+        </view>
+        <view wx:if="{{item.isExpanded}}" class="option-list">
+          <view
+            wx:for="{{item.optionItems}}"
+            wx:for-item="option"
+            wx:key="value"
+            class="option-pill {{option.selected ? 'option-pill-active' : ''}}"
+            bindtap="toggleFilterOption"
+            data-key="{{item.key}}"
+            data-value="{{option.value}}"
+          >
+            {{option.value}}
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <view class="result-head">
+      <view class="section-title">推荐案例结果</view>
+      <view class="section-tip">
+        <text wx:if="{{selectedCount}}">已筛选出 {{filteredCases.length}} 个案例</text>
+        <text wx:else>已展示全部案例</text>
+      </view>
+    </view>
+
+    <view wx:if="{{loading}}" class="state-box">正在读取案例...</view>
+    <view wx:elif="{{errorMessage}}" class="state-box state-error">{{errorMessage}}</view>
+    <view wx:elif="{{!filteredCases.length}}" class="state-box">暂无匹配案例，换个条件试试</view>
+    <view wx:else class="case-grid">
+      <view
+        wx:for="{{filteredCases}}"
+        wx:key="id"
+        class="case-card"
+        bindtap="navigateToCase"
+        data-id="{{item.id}}"
+      >
+        <image
+          wx:if="{{item.coverImageUrl}}"
+          class="case-image"
+          mode="aspectFill"
+          src="{{item.coverImageUrl}}"
+        ></image>
+        <view wx:else class="case-placeholder">暂无图片</view>
+        <view class="case-title">{{item.title}}</view>
+        <view class="case-tags">
+          <text wx:for="{{item.tags}}" wx:key="*this" wx:if="{{index < 3}}" class="case-tag">{{item}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view wx:if="{{filteredCases.length}}" class="load-more-tip">继续下滑查看更多结果</view>
+  </view>
+</view>

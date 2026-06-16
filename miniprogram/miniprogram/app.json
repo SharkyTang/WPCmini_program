@@ -1,0 +1,16 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/detail/index"
+  ],
+  "window": {
+    "backgroundColor": "#F7F3EC",
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#F7F3EC",
+    "navigationBarTitleText": "酒包装灵感库",
+    "navigationBarTextStyle": "black"
+  },
+  "sitemapLocation": "sitemap.json",
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents"
+}
