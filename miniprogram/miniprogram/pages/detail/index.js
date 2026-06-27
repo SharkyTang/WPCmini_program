@@ -4,6 +4,7 @@ const {
   fetchFavoriteForCase,
   toggleFavorite,
 } = require("../../utils/favoriteService");
+const { recordCaseView } = require("../../utils/historyService");
 
 function buildInfoRows(caseItem) {
   return [
@@ -86,6 +87,7 @@ Page({
         detailSubtitle: buildDetailSubtitle(caseItem),
       });
       this.loadFavoriteState(caseItem);
+      this.recordView(caseItem);
     } catch (error) {
       console.error("案例详情读取失败", error);
       this.setData({
@@ -104,6 +106,14 @@ Page({
       });
     } catch (error) {
       console.warn("收藏状态读取失败", error);
+    }
+  },
+
+  async recordView(caseItem) {
+    try {
+      await recordCaseView(caseItem);
+    } catch (error) {
+      console.warn("浏览记录写入失败", error);
     }
   },
 

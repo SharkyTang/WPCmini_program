@@ -4,6 +4,7 @@
     "pages/category/index",
     "pages/profile/index",
     "pages/favorites/index",
+    "pages/history/index",
     "pages/detail/index"
   ],
   "window": {

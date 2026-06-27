@@ -1,0 +1,47 @@
+<view class="page">
+  <view class="hero">
+    <view class="page-title">浏览记录</view>
+    <view class="page-subtitle">这里保存你最近看过的酒包装案例</view>
+  </view>
+
+  <view wx:if="{{needIdentity}}" class="state-card">
+    <view class="state-title">使用微信身份查看浏览记录</view>
+    <view class="state-copy">浏览记录会保存到你的微信身份下，换设备后也能继续查看。</view>
+    <view class="state-button" bindtap="loginAndLoad">使用微信身份</view>
+  </view>
+
+  <view wx:elif="{{loading}}" class="state-card">
+    <view class="state-title">正在读取浏览记录...</view>
+  </view>
+
+  <view wx:elif="{{errorMessage}}" class="state-card state-error">
+    <view class="state-title">{{errorMessage}}</view>
+    <view class="state-button" bindtap="loadHistory">重新读取</view>
+  </view>
+
+  <view wx:elif="{{!historyCards.length}}" class="state-card">
+    <view class="state-title">还没有浏览记录</view>
+    <view class="state-copy">进入案例详情页后，浏览过的案例会出现在这里。</view>
+    <view class="state-button" bindtap="goToCategory">去看案例</view>
+  </view>
+
+  <view wx:else class="history-grid">
+    <view
+      wx:for="{{historyCards}}"
+      wx:key="historyId"
+      class="case-card"
+      data-id="{{item.id}}"
+      bindtap="navigateToCase"
+    >
+      <image
+        wx:if="{{item.imageUrl}}"
+        class="case-image"
+        src="{{item.imageUrl}}"
+        mode="aspectFill"
+      ></image>
+      <view wx:else class="case-placeholder">暂无图片</view>
+      <view class="case-title">{{item.title}}</view>
+      <view class="case-tags">{{item.tagSummary}}</view>
+    </view>
+  </view>
+</view>

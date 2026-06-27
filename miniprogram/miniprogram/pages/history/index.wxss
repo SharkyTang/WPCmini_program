@@ -1,0 +1,118 @@
+page {
+  min-height: 100%;
+  background: #f7f3ec;
+  color: #241d16;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+}
+
+.page {
+  min-height: 100vh;
+  padding: 58rpx 40rpx 104rpx;
+  box-sizing: border-box;
+}
+
+.hero {
+  margin-bottom: 30rpx;
+}
+
+.page-title {
+  font-size: 44rpx;
+  line-height: 1.2;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.page-subtitle {
+  margin-top: 10rpx;
+  color: #766b60;
+  font-size: 25rpx;
+  line-height: 1.45;
+}
+
+.state-card {
+  padding: 44rpx 34rpx;
+  border: 2rpx solid #dfcfb7;
+  border-radius: 8rpx;
+  background: #fffdf9;
+  box-sizing: border-box;
+}
+
+.state-error {
+  border-color: #efc3ba;
+  background: #fff5f2;
+}
+
+.state-title {
+  color: #241d16;
+  font-size: 30rpx;
+  line-height: 1.35;
+  font-weight: 800;
+}
+
+.state-copy {
+  margin-top: 12rpx;
+  color: #766b60;
+  font-size: 24rpx;
+  line-height: 1.55;
+}
+
+.state-button {
+  margin-top: 30rpx;
+  width: 260rpx;
+  height: 68rpx;
+  border-radius: 34rpx;
+  background: #241d16;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 25rpx;
+  font-weight: 800;
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24rpx;
+}
+
+.case-card {
+  min-width: 0;
+}
+
+.case-image,
+.case-placeholder {
+  width: 100%;
+  aspect-ratio: 1.22;
+  border-radius: 8rpx;
+  background: #f5e2ae;
+}
+
+.case-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9d8d78;
+  font-size: 22rpx;
+}
+
+.case-title {
+  margin-top: 13rpx;
+  color: #241d16;
+  font-size: 27rpx;
+  line-height: 1.25;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.case-tags {
+  margin-top: 7rpx;
+  color: #8c6a3f;
+  font-size: 22rpx;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

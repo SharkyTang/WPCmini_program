@@ -28,6 +28,12 @@ Page({
       });
       return;
     }
+    if (key === "history") {
+      wx.navigateTo({
+        url: "/pages/history/index",
+      });
+      return;
+    }
 
     wx.showToast({
       title: "入口后续开放",
