@@ -7,7 +7,18 @@ const VALUE_MIGRATIONS = {
   styles: {
     "传统": "复古",
     "节日": "喜庆",
-    "年轻化": "时尚"
+    "年轻化": "时尚",
+    "国潮": "国风",
+    "高端": "轻奢"
+  },
+  priceLevel: {
+    "低端": "基础款",
+    "中端": "品质款",
+    "高端": "高端款",
+    "奢华": "珍藏款"
+  },
+  statuses: {
+    "新上传": "最新"
   }
 };
 
@@ -19,7 +30,7 @@ export const CLASSIFICATION_CONFIG = {
     options: ["白酒"]
   },
   packageTypes: {
-    label: "包装内容",
+    label: "包装",
     type: "multi",
     required: true,
     options: ["整套包装", "瓶标", "瓶子", "礼盒", "桶盒", "卡盒", "手提袋", "外箱"]
@@ -28,22 +39,16 @@ export const CLASSIFICATION_CONFIG = {
     label: "风格",
     type: "multi",
     required: false,
-    options: ["高端", "国潮", "新中式", "复古", "简约", "商务", "时尚", "喜庆"]
+    options: ["轻奢", "国风", "新中式", "复古", "简约", "商务", "时尚", "喜庆"]
   },
   priceLevel: {
-    label: "价位感",
+    label: "定位",
     type: "single",
     required: false,
-    options: ["低端", "中端", "高端", "奢华"]
-  },
-  crafts: {
-    label: "工艺",
-    type: "multi",
-    required: false,
-    options: ["烫金", "浮雕", "镭射", "特种纸", "哑膜"]
+    options: ["基础款", "品质款", "高端款", "珍藏款"]
   },
   scenes: {
-    label: "使用场景",
+    label: "场景",
     type: "multi",
     required: false,
     options: ["婚宴", "送礼", "商务招待", "节庆礼赠", "商超陈列", "电商展示", "企业纪念"]
@@ -52,7 +57,7 @@ export const CLASSIFICATION_CONFIG = {
     label: "状态",
     type: "multi",
     required: false,
-    options: ["推荐", "热门", "新上传"]
+    options: ["推荐", "热门", "最新"]
   }
 };
 
@@ -90,7 +95,6 @@ export function createEmptyRecord(file, index, previous = null) {
     packageTypes: [],
     styles: [],
     priceLevel: "",
-    crafts: [],
     scenes: [],
     statuses: [],
     keywords: [],
@@ -147,7 +151,6 @@ export function buildKeywords(record) {
     ...(cleanRecord.packageTypes || []),
     ...(cleanRecord.styles || []),
     cleanRecord.priceLevel,
-    ...(cleanRecord.crafts || []),
     ...(cleanRecord.scenes || []),
     ...(cleanRecord.statuses || [])
   ].filter(Boolean);
@@ -181,7 +184,6 @@ export function buildExportRecord(record, optimized = {}) {
     packageTypes: cleanRecord.packageTypes || [],
     styles: cleanRecord.styles || [],
     priceLevel: cleanRecord.priceLevel || "",
-    crafts: cleanRecord.crafts || [],
     scenes: cleanRecord.scenes || [],
     statuses: cleanRecord.statuses || [],
     keywords: buildKeywords(cleanRecord),
@@ -199,11 +201,12 @@ export function buildExportRecord(record, optimized = {}) {
 }
 
 export function sanitizeRecord(record = {}) {
+  const { crafts, ...rest } = record;
   return {
-    ...record,
+    ...rest,
     packageTypes: normalizeFieldValues("packageTypes", record.packageTypes),
     styles: normalizeFieldValues("styles", record.styles),
-    crafts: normalizeFieldValues("crafts", record.crafts),
+    priceLevel: normalizeFieldValue("priceLevel", record.priceLevel),
     scenes: normalizeFieldValues("scenes", record.scenes),
     statuses: normalizeFieldValues("statuses", record.statuses)
   };

@@ -17,14 +17,34 @@ import {
   summarizeRecords,
   toggleMultiValue,
   validateRecord
-} from "./classifierLogic.mjs?v=20260616-tag-migration";
+} from "./classifierLogic.mjs?v=20260623-style-crafts";
+import {
+  AI_STYLE_SESSION_STORAGE_KEY,
+  DEFAULT_AI_COST_LIMIT_USD,
+  DEFAULT_AI_PREVIEW_EDGE,
+  STYLE_GUIDE,
+  addAiSessionUsage,
+  allowedStyleOptions,
+  applyAiStyleSuggestion,
+  clampAiPreviewEdge,
+  clampBatchLimit,
+  createEmptyAiSession,
+  ignoreAiStyleSuggestion,
+  isAiCostLimitReached,
+  normalizeCostLimit,
+  sanitizeAiStyleSuggestion,
+  storeAiStyleError,
+  storeAiStyleSuggestion
+} from "./aiStyleLogic.mjs?v=20260623-style-crafts";
 
 const state = {
   files: [],
   fileUrls: new Map(),
   records: [],
   currentIndex: 0,
-  savedRecords: loadSavedRecords()
+  savedRecords: loadSavedRecords(),
+  aiSession: loadAiSession(),
+  aiBusy: false
 };
 
 const elements = {
@@ -45,7 +65,19 @@ const elements = {
   completeButton: document.querySelector("#complete-button"),
   exportButton: document.querySelector("#export-button"),
   clearButton: document.querySelector("#clear-button"),
-  exportLog: document.querySelector("#export-log")
+  exportLog: document.querySelector("#export-log"),
+  aiStatus: document.querySelector("#ai-status"),
+  aiPreviewSize: document.querySelector("#ai-preview-size"),
+  aiBatchLimit: document.querySelector("#ai-batch-limit"),
+  aiCostLimit: document.querySelector("#ai-cost-limit"),
+  aiCurrentButton: document.querySelector("#ai-current-button"),
+  aiBatchButton: document.querySelector("#ai-batch-button"),
+  aiAcceptButton: document.querySelector("#ai-accept-button"),
+  aiIgnoreButton: document.querySelector("#ai-ignore-button"),
+  aiResetCostButton: document.querySelector("#ai-reset-cost-button"),
+  aiSummary: document.querySelector("#ai-summary"),
+  aiSuggestion: document.querySelector("#ai-suggestion"),
+  styleGuideList: document.querySelector("#style-guide-list")
 };
 
 elements.fileInput.addEventListener("change", handleFileSelection);
@@ -57,8 +89,14 @@ elements.skipButton.addEventListener("click", skipCurrent);
 elements.completeButton.addEventListener("click", markCurrentComplete);
 elements.exportButton.addEventListener("click", exportAll);
 elements.clearButton.addEventListener("click", clearProgress);
+elements.aiCurrentButton.addEventListener("click", suggestCurrentStyle);
+elements.aiBatchButton.addEventListener("click", suggestBatchStyles);
+elements.aiAcceptButton.addEventListener("click", acceptCurrentAiSuggestion);
+elements.aiIgnoreButton.addEventListener("click", ignoreCurrentAiSuggestion);
+elements.aiResetCostButton.addEventListener("click", resetAiSession);
 
 renderTaxonomyGroups();
+renderStyleGuide();
 render();
 
 function loadSavedRecords() {
@@ -80,6 +118,19 @@ function persistRecords() {
   }
   state.savedRecords = bySignature;
   localStorage.setItem(CLASSIFIER_STORAGE_KEY, JSON.stringify(bySignature));
+}
+
+function loadAiSession() {
+  try {
+    const raw = localStorage.getItem(AI_STYLE_SESSION_STORAGE_KEY);
+    return raw ? { ...createEmptyAiSession(), ...JSON.parse(raw) } : createEmptyAiSession();
+  } catch {
+    return createEmptyAiSession();
+  }
+}
+
+function persistAiSession() {
+  localStorage.setItem(AI_STYLE_SESSION_STORAGE_KEY, JSON.stringify(state.aiSession));
 }
 
 function handleFileSelection(event) {
@@ -163,6 +214,12 @@ function clearProgress() {
   render();
 }
 
+function resetAiSession() {
+  state.aiSession = createEmptyAiSession();
+  persistAiSession();
+  render();
+}
+
 function render(options = {}) {
   renderStats();
   renderCaseList();
@@ -187,7 +244,13 @@ function renderCaseList() {
     .map((record, index) => {
       const complete = isComplete(record);
       const current = index === state.currentIndex ? " is-current" : "";
-      const status = record.skipped ? "已跳过" : complete ? "已完成" : "未完成";
+      const status = record.skipped
+        ? "已跳过"
+        : record.aiStyleSuggestion && !record.aiStyleReviewed
+          ? "待审核"
+          : complete
+            ? "已完成"
+            : "未完成";
       return `<button type="button" class="case-item${current}" data-index="${index}">
         <strong>${escapeHtml(record.id)} · ${escapeHtml(status)}</strong>
         <span>${escapeHtml(record.originalFileName)}</span>
@@ -210,6 +273,7 @@ function renderCurrent(options = {}) {
   elements.skipButton.disabled = !hasRecord;
   elements.completeButton.disabled = !hasRecord;
   elements.exportButton.disabled = !state.records.length;
+  updateAiControls(hasRecord);
 
   if (!hasRecord) {
     elements.currentTitle.textContent = "请选择图片文件夹";
@@ -220,6 +284,7 @@ function renderCurrent(options = {}) {
     elements.titleInput.disabled = true;
     elements.notesInput.disabled = true;
     elements.validation.innerHTML = "";
+    renderAiPanel(null);
     updateTaxonomySelection(null);
     return;
   }
@@ -233,6 +298,7 @@ function renderCurrent(options = {}) {
   renderImage(file);
   renderMeta(record, file);
   renderValidation(record);
+  renderAiPanel(record);
   updateTaxonomySelection(record);
 }
 
@@ -268,10 +334,78 @@ function renderValidation(record) {
   elements.validation.innerHTML = `<ul>${errors.map((error) => `<li>${escapeHtml(error)}</li>`).join("")}</ul>`;
 }
 
+function renderStyleGuide() {
+  elements.styleGuideList.innerHTML = STYLE_GUIDE
+    .map(
+      (item) => `<div class="style-guide-item">
+        <strong>${escapeHtml(item.style)}</strong>
+        <span>${escapeHtml(item.description)}</span>
+      </div>`
+    )
+    .join("");
+}
+
+function updateAiControls(hasRecord) {
+  const suggestion = currentRecord()?.aiStyleSuggestion;
+  const hasSuggestion = Boolean(suggestion && !suggestion.error && suggestion.styles?.length);
+  elements.aiCurrentButton.disabled = !hasRecord || state.aiBusy;
+  elements.aiBatchButton.disabled = !hasRecord || state.aiBusy || !state.records.length;
+  elements.aiAcceptButton.disabled = !hasRecord || state.aiBusy || !hasSuggestion;
+  elements.aiIgnoreButton.disabled = !hasRecord || state.aiBusy || !suggestion;
+  elements.aiPreviewSize.disabled = state.aiBusy;
+  elements.aiBatchLimit.disabled = state.aiBusy;
+  elements.aiCostLimit.disabled = state.aiBusy;
+}
+
+function renderAiPanel(record) {
+  const session = state.aiSession;
+  elements.aiSummary.innerHTML = [
+    ["本次费用", `$${formatCost(session.lastCostUSD)}`],
+    ["本轮累计", `$${formatCost(session.cumulativeCostUSD)}`],
+    ["已识别", session.recognizedCount || 0],
+    ["Tokens", formatUsage(session.lastUsage)]
+  ]
+    .map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`)
+    .join("");
+
+  if (!record) {
+    elements.aiStatus.textContent = "未识别";
+    elements.aiSuggestion.innerHTML = "<p class=\"hint\">选择图片后可以让 AI 给出风格建议。</p>";
+    return;
+  }
+
+  const suggestion = record.aiStyleSuggestion;
+  if (!suggestion) {
+    elements.aiStatus.textContent = "未识别";
+    elements.aiSuggestion.innerHTML = "<p class=\"hint\">AI 建议不会自动进入 JSON，接受后才会写入风格。</p>";
+    return;
+  }
+
+  if (suggestion.error) {
+    elements.aiStatus.textContent = "识别失败";
+    elements.aiSuggestion.innerHTML = `<p class="ai-error">${escapeHtml(suggestion.error)}</p>`;
+    return;
+  }
+
+  const cleanSuggestion = sanitizeAiStyleSuggestion(suggestion, allowedStyleOptions());
+  elements.aiStatus.textContent = record.aiStyleReviewed ? "已处理" : "待审核";
+  elements.aiSuggestion.innerHTML = `
+    <div class="ai-tags">
+      ${cleanSuggestion.styles.map((style) => `<span>${escapeHtml(style)}</span>`).join("") || "<span>无可用建议</span>"}
+    </div>
+    <p>${escapeHtml(cleanSuggestion.reason || "AI 没有给出理由。")}</p>
+    <dl class="ai-detail">
+      <div><dt>置信度</dt><dd>${Math.round(cleanSuggestion.confidence * 100)}%</dd></div>
+      <div><dt>人工复核</dt><dd>${cleanSuggestion.needsHumanReview ? "需要" : "可快速确认"}</dd></div>
+      <div><dt>本图费用</dt><dd>$${formatCost(cleanSuggestion.estimatedCostUSD)}</dd></div>
+      <div><dt>Token</dt><dd>${formatUsage(cleanSuggestion.usage)}</dd></div>
+    </dl>
+  `;
+}
+
 function renderTaxonomyGroups() {
   elements.taxonomyGroups.innerHTML = Object.entries(CLASSIFICATION_CONFIG)
     .map(([field, config]) => {
-      const required = config.required ? " · 必填" : "";
       const buttons = config.options
         .map(
           (option) =>
@@ -279,7 +413,7 @@ function renderTaxonomyGroups() {
         )
         .join("");
       return `<section class="tax-group" data-group="${field}">
-        <h3>${config.label}${required}</h3>
+        <h3>${config.label}</h3>
         <div class="tax-options">${buttons}</div>
       </section>`;
     })
@@ -319,6 +453,134 @@ function updateTaxonomySelection(record) {
     const selected = Array.isArray(record[field]) ? record[field].includes(value) : record[field] === value;
     button.classList.toggle("is-selected", selected);
   }
+}
+
+async function suggestCurrentStyle() {
+  const record = currentRecord();
+  const file = currentFile();
+  if (!record || !file || state.aiBusy) return;
+
+  state.aiBusy = true;
+  render();
+  try {
+    await suggestStyleForIndex(state.currentIndex);
+  } finally {
+    state.aiBusy = false;
+    render();
+  }
+}
+
+async function suggestBatchStyles() {
+  if (!state.records.length || state.aiBusy) return;
+
+  const batchLimit = clampBatchLimit(elements.aiBatchLimit.value);
+  const costLimit = normalizeCostLimit(elements.aiCostLimit.value);
+  const candidateIndexes = state.records
+    .map((record, index) => ({ record, index }))
+    .filter(({ record }) => !record.skipped && (!isComplete(record) || !record.aiStyleReviewed))
+    .slice(0, batchLimit)
+    .map(({ index }) => index);
+
+  if (!candidateIndexes.length) {
+    appendLog("没有需要 AI 识别的图片。");
+    return;
+  }
+
+  state.aiBusy = true;
+  render();
+  try {
+    for (const index of candidateIndexes) {
+      if (isAiCostLimitReached(state.aiSession, costLimit)) {
+        appendLog(`AI 批量识别已暂停：本轮累计费用达到 $${formatCost(costLimit)}。`);
+        break;
+      }
+      appendLog(`AI 识别 ${state.records[index].id} (${candidateIndexes.indexOf(index) + 1}/${candidateIndexes.length})`);
+      await suggestStyleForIndex(index);
+    }
+  } finally {
+    state.aiBusy = false;
+    render();
+  }
+}
+
+async function suggestStyleForIndex(index) {
+  const record = state.records[index];
+  const file = state.files[index];
+  if (!record || !file) return;
+
+  try {
+    const image = await createAiPreviewImage(file, clampAiPreviewEdge(elements.aiPreviewSize.value));
+    const response = await fetch("/api/ai-suggest-style", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: record.id,
+        image,
+        allowedStyles: allowedStyleOptions()
+      })
+    });
+    const result = await response.json();
+
+    if (!response.ok || result.error) {
+      throw new Error(result.error?.message || "AI 识别失败。");
+    }
+
+    const suggestion = sanitizeAiStyleSuggestion(result, allowedStyleOptions());
+    state.records[index] = storeAiStyleSuggestion(record, suggestion, allowedStyleOptions());
+    state.aiSession = addAiSessionUsage(state.aiSession, suggestion);
+    persistRecords();
+    persistAiSession();
+  } catch (error) {
+    state.records[index] = storeAiStyleError(record, error.message);
+    persistRecords();
+    appendLog(`${record.id} AI 识别失败：${error.message}`);
+  }
+}
+
+function acceptCurrentAiSuggestion() {
+  const record = currentRecord();
+  if (!record?.aiStyleSuggestion || record.aiStyleSuggestion.error) return;
+  state.records[state.currentIndex] = applyAiStyleSuggestion(record, record.aiStyleSuggestion, allowedStyleOptions());
+  persistRecords();
+  render();
+}
+
+function ignoreCurrentAiSuggestion() {
+  const record = currentRecord();
+  if (!record?.aiStyleSuggestion) return;
+  state.records[state.currentIndex] = ignoreAiStyleSuggestion(record);
+  persistRecords();
+  render();
+}
+
+async function createAiPreviewImage(file, maxEdge) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close?.();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.8));
+  const dataBase64 = await blobToBase64(blob);
+  return {
+    mimeType: "image/jpeg",
+    dataBase64: dataBase64.replace(/^data:image\/jpeg;base64,/, "")
+  };
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
 async function exportAll() {
@@ -424,6 +686,14 @@ function downloadBlob(blob, fileName) {
 function appendLog(message) {
   elements.exportLog.textContent += `${message}\n`;
   elements.exportLog.scrollTop = elements.exportLog.scrollHeight;
+}
+
+function formatUsage(usage = {}) {
+  return `${usage.inputTokens || 0}/${usage.outputTokens || 0}/${usage.totalTokens || 0}`;
+}
+
+function formatCost(value = 0) {
+  return Number(value || 0).toFixed(4);
 }
 
 function escapeHtml(value) {

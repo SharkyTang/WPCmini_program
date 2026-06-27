@@ -58,13 +58,58 @@
           <section class="editor-card">
             <div class="field">
               <label for="title-input">标题</label>
-              <input id="title-input" type="text" placeholder="例如：高端白酒礼盒包装" />
+              <input id="title-input" type="text" placeholder="例如：轻奢白酒礼盒包装" />
             </div>
 
             <div class="field">
               <label for="notes-input">备注</label>
-              <textarea id="notes-input" rows="3" placeholder="可记录客户、工艺细节、特殊说明"></textarea>
+              <textarea id="notes-input" rows="3" placeholder="可记录客户、材质细节、特殊说明"></textarea>
             </div>
+
+            <section class="ai-card" id="ai-card">
+              <div class="ai-header">
+                <div>
+                  <h3>AI 风格建议</h3>
+                  <p>只辅助判断风格，接受后才会写入正式分类。</p>
+                </div>
+                <span class="ai-pill" id="ai-status">未识别</span>
+              </div>
+
+              <div class="ai-settings">
+                <label>
+                  预览尺寸
+                  <select id="ai-preview-size">
+                    <option value="512">512px</option>
+                    <option value="768" selected>768px</option>
+                    <option value="1024">1024px</option>
+                  </select>
+                </label>
+                <label>
+                  批量上限
+                  <input id="ai-batch-limit" type="number" min="1" max="10" value="10" />
+                </label>
+                <label>
+                  费用上限
+                  <input id="ai-cost-limit" type="number" min="0.01" step="0.01" value="1" />
+                </label>
+              </div>
+
+              <div class="ai-actions">
+                <button id="ai-current-button" type="button">识别当前图</button>
+                <button id="ai-batch-button" type="button">批量识别最多 10 张</button>
+                <button id="ai-accept-button" type="button" class="primary">接受建议</button>
+                <button id="ai-ignore-button" type="button">忽略建议</button>
+                <button id="ai-reset-cost-button" type="button">重置费用</button>
+              </div>
+
+              <div class="ai-summary" id="ai-summary"></div>
+              <div class="ai-suggestion" id="ai-suggestion"></div>
+
+              <details class="style-guide">
+                <summary>风格判断说明</summary>
+                <div id="style-guide-list"></div>
+              </details>
+            </section>
 
             <div id="taxonomy-groups" class="taxonomy"></div>
 
@@ -86,6 +131,6 @@
       </section>
     </main>
 
-    <script type="module" src="./app.js?v=20260616-tag-migration"></script>
+    <script type="module" src="./app.js?v=20260623-style-crafts"></script>
   </body>
 </html>
