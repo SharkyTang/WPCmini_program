@@ -1,5 +1,9 @@
 const { fetchCaseById } = require("../../utils/cloudData");
 const { formatJoined } = require("../../utils/caseData");
+const {
+  fetchFavoriteForCase,
+  toggleFavorite,
+} = require("../../utils/favoriteService");
 
 function buildInfoRows(caseItem) {
   return [
@@ -48,6 +52,9 @@ Page({
     displayTags: [],
     detailHeading: "",
     detailSubtitle: "",
+    favorite: null,
+    isFavorited: false,
+    favoriteLoading: false,
   },
 
   onLoad(options) {
@@ -78,11 +85,57 @@ Page({
         detailHeading: buildDetailHeading(caseItem),
         detailSubtitle: buildDetailSubtitle(caseItem),
       });
+      this.loadFavoriteState(caseItem);
     } catch (error) {
       console.error("案例详情读取失败", error);
       this.setData({
         loading: false,
         errorMessage: "暂时读取不到这个案例，请返回后重试。",
+      });
+    }
+  },
+
+  async loadFavoriteState(caseItem) {
+    try {
+      const favorite = await fetchFavoriteForCase(caseItem);
+      this.setData({
+        favorite,
+        isFavorited: Boolean(favorite),
+      });
+    } catch (error) {
+      console.warn("收藏状态读取失败", error);
+    }
+  },
+
+  async toggleFavorite() {
+    if (!this.data.caseItem || this.data.favoriteLoading) return;
+
+    this.setData({
+      favoriteLoading: true,
+    });
+
+    try {
+      const result = await toggleFavorite(this.data.caseItem, this.data.favorite);
+      this.setData({
+        favoriteLoading: false,
+        favorite: result.favorite,
+        isFavorited: result.isFavorited,
+      });
+
+      if (result.action === "cancelled") return;
+
+      wx.showToast({
+        title: result.isFavorited ? "已收藏" : "已取消收藏",
+        icon: "success",
+      });
+    } catch (error) {
+      console.error("收藏操作失败", error);
+      this.setData({
+        favoriteLoading: false,
+      });
+      wx.showToast({
+        title: "收藏操作失败",
+        icon: "none",
       });
     }
   },

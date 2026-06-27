@@ -1,0 +1,47 @@
+<view class="page">
+  <view class="hero">
+    <view class="page-title">我的收藏</view>
+    <view class="page-subtitle">这里保存你喜欢的酒包装案例</view>
+  </view>
+
+  <view wx:if="{{needIdentity}}" class="state-card">
+    <view class="state-title">使用微信身份查看收藏</view>
+    <view class="state-copy">收藏会保存到你的微信身份下，换设备后也能继续查看。</view>
+    <view class="state-button" bindtap="loginAndLoad">使用微信身份</view>
+  </view>
+
+  <view wx:elif="{{loading}}" class="state-card">
+    <view class="state-title">正在读取收藏...</view>
+  </view>
+
+  <view wx:elif="{{errorMessage}}" class="state-card state-error">
+    <view class="state-title">{{errorMessage}}</view>
+    <view class="state-button" bindtap="loadFavorites">重新读取</view>
+  </view>
+
+  <view wx:elif="{{!favoriteCards.length}}" class="state-card">
+    <view class="state-title">还没有收藏案例</view>
+    <view class="state-copy">进入案例详情页，点击收藏后会出现在这里。</view>
+    <view class="state-button" bindtap="goToCategory">去看案例</view>
+  </view>
+
+  <view wx:else class="favorites-grid">
+    <view
+      wx:for="{{favoriteCards}}"
+      wx:key="favoriteId"
+      class="case-card"
+      data-id="{{item.id}}"
+      bindtap="navigateToCase"
+    >
+      <image
+        wx:if="{{item.imageUrl}}"
+        class="case-image"
+        src="{{item.imageUrl}}"
+        mode="aspectFill"
+      ></image>
+      <view wx:else class="case-placeholder">暂无图片</view>
+      <view class="case-title">{{item.title}}</view>
+      <view class="case-tags">{{item.tagSummary}}</view>
+    </view>
+  </view>
+</view>

@@ -39,6 +39,7 @@ page {
 .image-actions {
   margin-top: 22rpx;
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 18rpx;
 }
@@ -63,6 +64,18 @@ page {
 }
 
 .image-action-primary {
+  background: #241d16;
+  color: #fff;
+}
+
+.favorite-action {
+  border: 2rpx solid #dfcfb7;
+  background: #fffdf9;
+  color: #7a5a31;
+}
+
+.favorite-action-active {
+  border-color: #241d16;
   background: #241d16;
   color: #fff;
 }

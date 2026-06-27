@@ -19,4 +19,19 @@ Page({
       { key: "save", title: "图片可以保存参考吗？", subtitle: "详情页支持查看原图和下载图片。" },
     ],
   },
+
+  handleQuickAction(event) {
+    const key = event.currentTarget.dataset.key;
+    if (key === "favorites") {
+      wx.navigateTo({
+        url: "/pages/favorites/index",
+      });
+      return;
+    }
+
+    wx.showToast({
+      title: "入口后续开放",
+      icon: "none",
+    });
+  },
 });

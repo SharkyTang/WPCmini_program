@@ -19,6 +19,12 @@
     <view wx:else class="hero-placeholder">暂无图片</view>
 
     <view class="image-actions">
+      <view
+        class="image-action favorite-action {{isFavorited ? 'favorite-action-active' : ''}}"
+        bindtap="toggleFavorite"
+      >
+        {{favoriteLoading ? '处理中' : (isFavorited ? '已收藏' : '收藏')}}
+      </view>
       <view class="image-action image-action-secondary" bindtap="previewImage">查看原图</view>
       <view class="image-action image-action-primary" bindtap="downloadImage">下载图片</view>
     </view>

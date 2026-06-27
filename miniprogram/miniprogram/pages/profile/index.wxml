@@ -18,7 +18,13 @@
   <view class="section">
     <view class="section-title">常用入口</view>
     <view class="quick-grid">
-      <view wx:for="{{quickActions}}" wx:key="key" class="quick-item">
+      <view
+        wx:for="{{quickActions}}"
+        wx:key="key"
+        class="quick-item"
+        data-key="{{item.key}}"
+        bindtap="handleQuickAction"
+      >
         <view class="quick-icon">{{item.icon}}</view>
         <view class="quick-title">{{item.title}}</view>
       </view>
