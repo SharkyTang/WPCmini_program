@@ -1,0 +1,116 @@
+<view class="page">
+  <view class="topbar">
+    <view class="search-box">
+      <text class="search-icon">⌕</text>
+      <input
+        class="search-input"
+        placeholder="输入商品名称"
+        placeholder-class="search-placeholder"
+        value="{{query}}"
+        confirm-type="search"
+        bindinput="onSearchInput"
+      />
+    </view>
+    <view wx:if="{{selectedPills.length}}" class="selected-panel">
+      <view class="selected-list">
+        <view
+          wx:for="{{selectedPills}}"
+          wx:key="id"
+          class="selected-pill"
+          bindtap="removeSelectedPill"
+          data-key="{{item.key}}"
+          data-value="{{item.value}}"
+        >
+          {{item.value}}
+        </view>
+      </view>
+      <view class="clear-action" bindtap="clearFilters">清空</view>
+    </view>
+  </view>
+
+  <view class="main">
+    <view class="side-nav">
+      <view wx:for="{{navItems}}" wx:for-item="navItem" wx:key="key" class="nav-group">
+        <view
+          class="nav-item {{activeNavKey === navItem.key ? 'nav-item-active' : ''}}"
+          bindtap="selectNav"
+          data-key="{{navItem.key}}"
+        >
+          <view class="nav-title">{{navItem.title}}</view>
+          <view wx:if="{{navItem.selectedText}}" class="nav-badge">{{navItem.selectedText}}</view>
+        </view>
+        <view wx:if="{{navItem.expanded}}" class="sub-nav">
+          <block wx:if="{{navItem.key === 'sort'}}">
+            <view
+              wx:for="{{navItem.optionItems}}"
+              wx:for-item="optionItem"
+              wx:key="value"
+              class="sub-nav-item {{optionItem.selected ? 'sub-nav-item-active' : ''}}"
+              bindtap="selectSort"
+              data-value="{{optionItem.value}}"
+            >
+              {{optionItem.title}}
+            </view>
+          </block>
+          <block wx:else>
+            <view
+              wx:for="{{navItem.optionItems}}"
+              wx:for-item="optionItem"
+              wx:key="value"
+              class="sub-nav-item {{optionItem.selected ? 'sub-nav-item-active' : ''}}"
+              bindtap="toggleFilterOption"
+              data-key="{{navItem.key}}"
+              data-value="{{optionItem.value}}"
+            >
+              {{optionItem.value}}
+            </view>
+          </block>
+        </view>
+      </view>
+    </view>
+
+    <scroll-view class="content" scroll-y enhanced>
+      <view class="content-inner">
+        <view class="category-head">
+          <view class="category-title-row">
+            <text class="category-title">{{activePanel.displayTitle}}</text>
+          </view>
+          <view
+            wx:if="{{activePanel.displaySubtitle}}"
+            class="category-subtitle {{activePanel.showPackageNote ? 'category-package-note' : ''}}"
+          >
+            {{activePanel.displaySubtitle}}
+          </view>
+        </view>
+
+        <view class="result-count">
+          <text wx:if="{{selectedCount || query}}">已筛选出 {{filteredCases.length}} 个案例</text>
+          <text wx:else>共 {{filteredCases.length}} 个案例</text>
+        </view>
+
+        <view wx:if="{{loading}}" class="state-box">正在读取案例...</view>
+        <view wx:elif="{{errorMessage}}" class="state-box state-error">{{errorMessage}}</view>
+        <view wx:elif="{{!filteredCases.length}}" class="state-box">暂无匹配案例，换个条件试试</view>
+        <view wx:else class="case-grid">
+          <view
+            wx:for="{{filteredCases}}"
+            wx:key="id"
+            class="case-card"
+            bindtap="navigateToCase"
+            data-id="{{item.id}}"
+          >
+            <image
+              wx:if="{{item.coverImageUrl}}"
+              class="case-image"
+              mode="aspectFill"
+              src="{{item.coverImageUrl}}"
+            ></image>
+            <view wx:else class="case-placeholder">暂无图片</view>
+            <view class="case-title">{{item.title}}</view>
+            <view class="case-meta">{{item.tagSummary}}</view>
+          </view>
+        </view>
+      </view>
+    </scroll-view>
+  </view>
+</view>

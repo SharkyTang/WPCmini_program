@@ -1,0 +1,53 @@
+<view class="page">
+  <view class="hero">
+    <view class="page-title">个人中心</view>
+    <view class="page-subtitle">收藏案例、查看需求、联系顾问</view>
+  </view>
+
+  <view class="user-card">
+    <view class="avatar">
+      <view class="avatar-head"></view>
+      <view class="avatar-body"></view>
+    </view>
+    <view class="user-copy">
+      <view class="user-name">微信名称</view>
+      <view class="user-note">点击使用微信头像和名称</view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">常用入口</view>
+    <view class="quick-grid">
+      <view wx:for="{{quickActions}}" wx:key="key" class="quick-item">
+        <view class="quick-icon">{{item.icon}}</view>
+        <view class="quick-title">{{item.title}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">定制流程</view>
+    <view class="flow-list">
+      <view wx:for="{{flowSteps}}" wx:key="step" class="flow-row">
+        <view class="flow-number">{{item.step}}</view>
+        <view class="flow-copy">
+          <view class="flow-title">{{item.title}}</view>
+          <view class="flow-subtitle">{{item.subtitle}}</view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">常见问题</view>
+    <view class="faq-list">
+      <view wx:for="{{faqItems}}" wx:key="key" class="faq-row">
+        <view class="faq-copy">
+          <view class="faq-title">{{item.title}}</view>
+          <view class="faq-subtitle">{{item.subtitle}}</view>
+        </view>
+        <view class="faq-arrow">›</view>
+      </view>
+    </view>
+  </view>
+</view>

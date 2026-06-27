@@ -1,7 +1,7 @@
 <view class="page">
   <view class="hero">
-    <view class="hero-title">酒包装灵感库</view>
-    <view class="hero-subtitle">{{allCases.length}} 个白酒包装案例 · 按风格快速找参考</view>
+    <view class="brand-title">金亿城包装科技</view>
+    <view class="brand-subtitle">酒包装设计与定制灵感库</view>
   </view>
 
   <swiper
@@ -11,8 +11,8 @@
     circular
     interval="3600"
     duration="450"
-    previous-margin="48rpx"
-    next-margin="48rpx"
+    previous-margin="24rpx"
+    next-margin="24rpx"
   >
     <swiper-item wx:for="{{banners}}" wx:key="id">
       <view class="banner-card" bindtap="onBannerTap" data-id="{{item.caseId}}">
@@ -23,100 +23,69 @@
   </swiper>
 
   <view class="content">
-    <view class="search-box">
-      <input
-        class="search-input"
-        placeholder="搜索包装内容、风格、场景"
-        placeholder-class="search-placeholder"
-        value="{{query}}"
-        confirm-type="search"
-        bindinput="onSearchInput"
-      />
-    </view>
-
-    <view wx:if="{{selectedPills.length}}" class="selected-panel">
-      <view class="selected-head">
-        <text>已选条件</text>
-        <text class="clear-action" bindtap="clearFilters">清空</text>
-      </view>
-      <view class="selected-list">
-      <view
-        wx:for="{{selectedPills}}"
-        wx:key="id"
-          class="selected-pill"
-          bindtap="removeSelectedPill"
-          data-key="{{item.key}}"
-          data-value="{{item.value}}"
-        >
-          {{item.value}}
-        </view>
-      </view>
-    </view>
-
-    <view class="section-head">
-      <view class="section-title">筛选分类</view>
-      <view class="section-tip">点击大类展开，不占用首屏空间</view>
-    </view>
-
-    <view class="filter-list">
-      <view wx:for="{{filters}}" wx:key="key" class="filter-card">
-        <view class="filter-header" bindtap="toggleFilterGroup" data-key="{{item.key}}">
-          <view class="filter-title">{{item.title}}</view>
-          <view class="filter-summary">
-            <text wx:if="{{item.selectedValues.length}}">已选 {{item.selectedValues.length}}</text>
-            <text wx:else>未选择</text>
-            <text class="filter-arrow">{{item.isExpanded ? "⌄" : "›"}}</text>
-          </view>
-        </view>
-        <view wx:if="{{item.isExpanded}}" class="option-list">
-          <view
-            wx:for="{{item.optionItems}}"
-            wx:for-item="option"
-            wx:key="value"
-            class="option-pill {{option.selected ? 'option-pill-active' : ''}}"
-            bindtap="toggleFilterOption"
-            data-key="{{item.key}}"
-            data-value="{{option.value}}"
-          >
-            {{option.value}}
-          </view>
-        </view>
-      </view>
-    </view>
-
-    <view class="result-head">
-      <view class="section-title">推荐案例结果</view>
-      <view class="section-tip">
-        <text wx:if="{{selectedCount}}">已筛选出 {{filteredCases.length}} 个案例</text>
-        <text wx:else>已展示全部案例</text>
+    <view class="story-card">
+      <view class="story-title">品牌故事</view>
+      <view class="story-text">
+        专注白酒包装设计与定制生产，把瓶标、酒盒、手提袋与外箱整合成完整品牌呈现。这里先沉淀企业介绍、服务优势和案例方向。
       </view>
     </view>
 
     <view wx:if="{{loading}}" class="state-box">正在读取案例...</view>
     <view wx:elif="{{errorMessage}}" class="state-box state-error">{{errorMessage}}</view>
-    <view wx:elif="{{!filteredCases.length}}" class="state-box">暂无匹配案例，换个条件试试</view>
-    <view wx:else class="case-grid">
-      <view
-        wx:for="{{filteredCases}}"
-        wx:key="id"
-        class="case-card"
-        bindtap="navigateToCase"
-        data-id="{{item.id}}"
-      >
-        <image
-          wx:if="{{item.coverImageUrl}}"
-          class="case-image"
-          mode="aspectFill"
-          src="{{item.coverImageUrl}}"
-        ></image>
-        <view wx:else class="case-placeholder">暂无图片</view>
-        <view class="case-title">{{item.title}}</view>
-        <view class="case-tags">
-          <text wx:for="{{item.tags}}" wx:key="*this" wx:if="{{index < 3}}" class="case-tag">{{item}}</text>
+    <block wx:else>
+      <view class="section">
+        <view class="section-head">
+          <view class="section-title">热门产品</view>
+          <view class="section-tip">精选案例</view>
         </view>
+        <view wx:if="{{popularCases.length}}" class="product-grid">
+          <view
+            wx:for="{{popularCases}}"
+            wx:key="id"
+            class="product-card"
+            bindtap="navigateToCase"
+            data-id="{{item.id}}"
+          >
+            <image
+              wx:if="{{item.coverImageUrl}}"
+              class="product-image"
+              mode="aspectFill"
+              src="{{item.coverImageUrl}}"
+            ></image>
+            <view wx:else class="product-placeholder">暂无图片</view>
+            <view class="product-title">{{item.title}}</view>
+            <view class="product-meta">{{item.tagSummary}}</view>
+          </view>
+        </view>
+        <view wx:else class="state-box">暂无热门产品</view>
       </view>
-    </view>
 
-    <view wx:if="{{filteredCases.length}}" class="load-more-tip">继续下滑查看更多结果</view>
+      <view class="section">
+        <view class="section-head">
+          <view class="section-title">最新产品</view>
+          <view class="section-tip">近期更新</view>
+        </view>
+        <view wx:if="{{latestCases.length}}" class="product-grid">
+          <view
+            wx:for="{{latestCases}}"
+            wx:key="id"
+            class="product-card"
+            bindtap="navigateToCase"
+            data-id="{{item.id}}"
+          >
+            <image
+              wx:if="{{item.coverImageUrl}}"
+              class="product-image"
+              mode="aspectFill"
+              src="{{item.coverImageUrl}}"
+            ></image>
+            <view wx:else class="product-placeholder">暂无图片</view>
+            <view class="product-title">{{item.title}}</view>
+            <view class="product-meta">{{item.tagSummary}}</view>
+          </view>
+        </view>
+        <view wx:else class="state-box">暂无最新产品</view>
+      </view>
+    </block>
   </view>
 </view>

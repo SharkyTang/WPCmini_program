@@ -16,6 +16,10 @@ page {
   flex-direction: column;
 }
 
+.hero-copy {
+  margin-bottom: 30rpx;
+}
+
 .hero-image,
 .hero-placeholder {
   width: 100%;
@@ -32,6 +36,37 @@ page {
   font-size: 26rpx;
 }
 
+.image-actions {
+  margin-top: 22rpx;
+  display: flex;
+  justify-content: flex-end;
+  gap: 18rpx;
+}
+
+.image-action {
+  min-width: 150rpx;
+  height: 58rpx;
+  padding: 0 24rpx;
+  border-radius: 29rpx;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 23rpx;
+  font-weight: 700;
+}
+
+.image-action-secondary {
+  border: 2rpx solid #dfcfb7;
+  background: #fffdf9;
+  color: #7a5a31;
+}
+
+.image-action-primary {
+  background: #241d16;
+  color: #fff;
+}
+
 .title-block {
   margin-top: 34rpx;
 }
@@ -46,6 +81,21 @@ page {
 
 .case-subtitle {
   margin-top: 8rpx;
+  color: #766b60;
+  font-size: 25rpx;
+  line-height: 1.45;
+}
+
+.detail-heading {
+  color: #241d16;
+  font-size: 34rpx;
+  line-height: 1.28;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.detail-subtitle {
+  margin-top: 10rpx;
   color: #766b60;
   font-size: 25rpx;
   line-height: 1.45;
@@ -113,8 +163,21 @@ page {
   word-break: break-all;
 }
 
+.consult-button {
+  margin-top: 36rpx;
+  height: 78rpx;
+  border-radius: 39rpx;
+  background: #241d16;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26rpx;
+  font-weight: 800;
+}
+
 .back-button {
-  margin-top: 34rpx;
+  margin-top: 20rpx;
   height: 76rpx;
   border: 2rpx solid #dfcfb7;
   border-radius: 38rpx;

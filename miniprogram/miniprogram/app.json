@@ -1,6 +1,8 @@
 {
   "pages": [
     "pages/index/index",
+    "pages/category/index",
+    "pages/profile/index",
     "pages/detail/index"
   ],
   "window": {
@@ -9,6 +11,32 @@
     "navigationBarBackgroundColor": "#F7F3EC",
     "navigationBarTitleText": "酒包装灵感库",
     "navigationBarTextStyle": "black"
+  },
+  "tabBar": {
+    "color": "#8c8176",
+    "selectedColor": "#241d16",
+    "backgroundColor": "#fffdf9",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "首页",
+        "iconPath": "images/icons/home.png",
+        "selectedIconPath": "images/icons/home-active.png"
+      },
+      {
+        "pagePath": "pages/category/index",
+        "text": "分类",
+        "iconPath": "images/icons/goods.png",
+        "selectedIconPath": "images/icons/goods-active.png"
+      },
+      {
+        "pagePath": "pages/profile/index",
+        "text": "个人中心",
+        "iconPath": "images/icons/usercenter.png",
+        "selectedIconPath": "images/icons/usercenter-active.png"
+      }
+    ]
   },
   "sitemapLocation": "sitemap.json",
   "style": "v2",

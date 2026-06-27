@@ -5,6 +5,11 @@
     <view class="back-button" bindtap="goBack">返回首页</view>
   </view>
   <view wx:else class="detail">
+    <view class="hero-copy">
+      <view class="case-title">{{caseItem.title}}</view>
+      <view class="case-subtitle">产品卡片点击后进入详情确认信息</view>
+    </view>
+
     <image
       wx:if="{{caseItem.coverImageUrl}}"
       class="hero-image"
@@ -13,16 +18,14 @@
     ></image>
     <view wx:else class="hero-placeholder">暂无图片</view>
 
-    <view class="title-block">
-      <view class="case-title">{{caseItem.title}}</view>
-      <view class="case-subtitle">{{caseItem.wineType}}包装 · 适合作为设计参考</view>
+    <view class="image-actions">
+      <view class="image-action image-action-secondary" bindtap="previewImage">查看原图</view>
+      <view class="image-action image-action-primary" bindtap="downloadImage">下载图片</view>
     </view>
 
-    <view class="tag-section" wx:if="{{displayTags.length}}">
-      <view class="section-title">案例标签</view>
-      <view class="tag-list">
-        <text wx:for="{{displayTags}}" wx:key="*this" class="tag">{{item}}</text>
-      </view>
+    <view class="title-block">
+      <view class="detail-heading">{{detailHeading}}</view>
+      <view class="detail-subtitle">{{detailSubtitle}}</view>
     </view>
 
     <view class="info-card">
@@ -36,6 +39,7 @@
       </view>
     </view>
 
+    <view class="consult-button" bindtap="showConsultTip">咨询同款包装方案</view>
     <view class="back-button" bindtap="goBack">返回继续筛选</view>
   </view>
 </view>

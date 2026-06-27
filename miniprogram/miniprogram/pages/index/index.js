@@ -1,69 +1,50 @@
 const {
-  DEFAULT_FILTERS,
-  filterCases,
-  selectedFilterCount,
-} = require("../../utils/caseData");
-const {
   fetchVisibleCases,
   fetchVisibleBanners,
 } = require("../../utils/cloudData");
 
-function createFilters() {
-  return DEFAULT_FILTERS.map((filter, index) => ({
-    ...filter,
-    isExpanded: index === 0,
-    selectedValues: [],
-    optionItems: filter.options.map((value) => ({
-      value,
-      selected: false,
-    })),
-  }));
+function summarizeTags(caseItem) {
+  return [
+    ...(caseItem.packageTypes || []),
+    ...(caseItem.styles || []),
+    caseItem.priceLevel,
+  ]
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(" / ");
 }
 
-function syncOptionItems(filter) {
+function buildProductCard(caseItem) {
   return {
-    ...filter,
-    optionItems: filter.options.map((value) => ({
-      value,
-      selected: filter.selectedValues.includes(value),
-    })),
+    ...caseItem,
+    tagSummary: summarizeTags(caseItem),
   };
 }
 
-function buildSelectedFilters(filters) {
-  return filters.reduce((selected, filter) => {
-    if (filter.selectedValues.length) {
-      selected[filter.key] = filter.selectedValues;
-    }
-    return selected;
-  }, {});
-}
+function buildHomeSections(cases) {
+  const visibleCases = cases.filter((caseItem) => caseItem.isVisible);
+  const featuredCases = visibleCases.filter(
+    (caseItem) =>
+      (caseItem.statuses || []).includes("热门") ||
+      (caseItem.statuses || []).includes("推荐")
+  );
+  const popularSource = featuredCases.length ? featuredCases : visibleCases;
+  const latestSource = [...visibleCases].sort((a, b) => b.sortOrder - a.sortOrder);
 
-function buildSelectedPills(filters) {
-  return filters.reduce((pills, filter) => {
-    filter.selectedValues.forEach((value) => {
-      pills.push({
-        id: `${filter.key}:${value}`,
-        key: filter.key,
-        value,
-        title: filter.title,
-      });
-    });
-    return pills;
-  }, []);
+  return {
+    popularCases: popularSource.slice(0, 4).map(buildProductCard),
+    latestCases: latestSource.slice(0, 4).map(buildProductCard),
+  };
 }
 
 Page({
   data: {
     loading: true,
     errorMessage: "",
-    query: "",
     allCases: [],
-    filteredCases: [],
     banners: [],
-    filters: createFilters(),
-    selectedPills: [],
-    selectedCount: 0,
+    popularCases: [],
+    latestCases: [],
   },
 
   onLoad() {
@@ -83,95 +64,22 @@ Page({
     try {
       const cases = await fetchVisibleCases();
       const banners = await fetchVisibleBanners(cases);
+      const { popularCases, latestCases } = buildHomeSections(cases);
+
       this.setData({
         allCases: cases,
         banners,
+        popularCases,
+        latestCases,
         loading: false,
       });
-      this.applyFilters();
     } catch (error) {
-      console.error("案例数据读取失败", error);
+      console.error("首页数据读取失败", error);
       this.setData({
         loading: false,
         errorMessage: "暂时读取不到案例数据，请检查云环境和数据库权限。",
       });
     }
-  },
-
-  applyFilters() {
-    const selectedFilters = buildSelectedFilters(this.data.filters);
-    const filteredCases = filterCases(this.data.allCases, {
-      query: this.data.query,
-      selectedFilters,
-    });
-
-    this.setData({
-      filteredCases,
-      selectedPills: buildSelectedPills(this.data.filters),
-      selectedCount: selectedFilterCount(selectedFilters),
-    });
-  },
-
-  onSearchInput(event) {
-    this.setData({
-      query: event.detail.value,
-    });
-    this.applyFilters();
-  },
-
-  toggleFilterGroup(event) {
-    const key = event.currentTarget.dataset.key;
-    const filters = this.data.filters.map((filter) => ({
-      ...filter,
-      isExpanded: filter.key === key ? !filter.isExpanded : filter.isExpanded,
-    }));
-    this.setData({ filters });
-  },
-
-  toggleFilterOption(event) {
-    const { key, value } = event.currentTarget.dataset;
-    const filters = this.data.filters.map((filter) => {
-      if (filter.key !== key) return filter;
-
-      const exists = filter.selectedValues.includes(value);
-      const selectedValues =
-        filter.type === "single"
-          ? exists
-            ? []
-            : [value]
-          : exists
-            ? filter.selectedValues.filter((item) => item !== value)
-            : [...filter.selectedValues, value];
-
-      return syncOptionItems({
-        ...filter,
-        selectedValues,
-      });
-    });
-
-    this.setData({ filters });
-    this.applyFilters();
-  },
-
-  removeSelectedPill(event) {
-    const { key, value } = event.currentTarget.dataset;
-    const filters = this.data.filters.map((filter) => {
-      if (filter.key !== key) return filter;
-      return syncOptionItems({
-        ...filter,
-        selectedValues: filter.selectedValues.filter((item) => item !== value),
-      });
-    });
-    this.setData({ filters });
-    this.applyFilters();
-  },
-
-  clearFilters() {
-    this.setData({
-      query: "",
-      filters: createFilters(),
-    });
-    this.applyFilters();
   },
 
   navigateToCase(event) {

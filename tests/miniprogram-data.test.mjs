@@ -46,6 +46,8 @@ test("normalizes CloudBase CMS case records into display-ready fields", () => {
     wineType: "白酒",
     packageTypes: { values: ["礼盒", "瓶子"] },
     styles: ["国潮"],
+    priceLevel: "低端",
+    crafts: { values: ["烫金"] },
     scenes: null,
     statuses: { values: ["推荐"] },
     isVisible: true,
@@ -55,11 +57,17 @@ test("normalizes CloudBase CMS case records into display-ready fields", () => {
   assert.equal(normalized.id, "abc");
   assert.equal(normalized.coverImage, "cloud://cover");
   assert.deepEqual(plain(normalized.packageTypes), ["礼盒", "瓶子"]);
-  assert.deepEqual(plain(normalized.styles), ["国潮"]);
+  assert.deepEqual(plain(normalized.styles), ["国风"]);
+  assert.equal(normalized.priceLevel, "基础款");
+  assert.deepEqual(plain(normalized.crafts), []);
   assert.deepEqual(plain(normalized.scenes), []);
   assert.deepEqual(plain(normalized.statuses), ["推荐"]);
   assert.equal(normalized.sortOrder, 3);
   assert.equal(normalized.searchText.includes("礼盒"), true);
+  assert.equal(normalized.searchText.includes("国风"), true);
+  assert.equal(normalized.searchText.includes("国潮"), false);
+  assert.equal(normalized.searchText.includes("烫金"), false);
+  assert.equal(normalized.tags.includes("烫金"), false);
 });
 
 test("filters visible cases by text, single-value fields, and multi-value fields", () => {
@@ -85,11 +93,11 @@ test("filters visible cases by text, single-value fields, and multi-value fields
   ];
 
   const result = filterCases(cases, {
-    query: "国潮",
+    query: "国风",
     selectedFilters: {
       packageTypes: ["礼盒"],
-      styles: ["国潮"],
-      priceLevel: ["高端"],
+      styles: ["国风"],
+      priceLevel: ["高端款"],
     },
   });
 

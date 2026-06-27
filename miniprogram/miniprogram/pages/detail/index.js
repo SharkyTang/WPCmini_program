@@ -4,12 +4,12 @@ const { formatJoined } = require("../../utils/caseData");
 function buildInfoRows(caseItem) {
   return [
     {
-      label: "酒类",
-      value: formatJoined(caseItem.wineType),
-    },
-    {
       label: "包装内容",
       value: formatJoined(caseItem.packageTypes),
+    },
+    {
+      label: "适用场景",
+      value: formatJoined(caseItem.scenes),
     },
     {
       label: "价位感",
@@ -20,14 +20,23 @@ function buildInfoRows(caseItem) {
       value: formatJoined(caseItem.styles),
     },
     {
-      label: "工艺",
-      value: formatJoined(caseItem.crafts),
-    },
-    {
-      label: "使用场景",
-      value: formatJoined(caseItem.scenes),
+      label: "酒类",
+      value: formatJoined(caseItem.wineType),
     },
   ];
+}
+
+function buildDetailHeading(caseItem) {
+  const packageLabel = caseItem.packageTypes && caseItem.packageTypes[0];
+  const wineLabel = caseItem.wineType || "白酒";
+  return `${packageLabel || caseItem.title} · ${wineLabel}品牌视觉组合`;
+}
+
+function buildDetailSubtitle(caseItem) {
+  return formatJoined(
+    [caseItem.wineType, ...(caseItem.packageTypes || []), ...(caseItem.styles || [])].filter(Boolean),
+    "酒包装设计参考"
+  );
 }
 
 Page({
@@ -37,6 +46,8 @@ Page({
     caseItem: null,
     infoRows: [],
     displayTags: [],
+    detailHeading: "",
+    detailSubtitle: "",
   },
 
   onLoad(options) {
@@ -64,6 +75,8 @@ Page({
         caseItem,
         infoRows: buildInfoRows(caseItem),
         displayTags: caseItem.tags,
+        detailHeading: buildDetailHeading(caseItem),
+        detailSubtitle: buildDetailSubtitle(caseItem),
       });
     } catch (error) {
       console.error("案例详情读取失败", error);
@@ -74,11 +87,88 @@ Page({
     }
   },
 
+  previewImage() {
+    const imageUrl = this.data.caseItem && this.data.caseItem.coverImageUrl;
+    if (!imageUrl) {
+      wx.showToast({
+        title: "暂无图片",
+        icon: "none",
+      });
+      return;
+    }
+
+    wx.previewImage({
+      current: imageUrl,
+      urls: [imageUrl],
+    });
+  },
+
+  downloadImage() {
+    const imageUrl = this.data.caseItem && this.data.caseItem.coverImageUrl;
+    if (!imageUrl) {
+      wx.showToast({
+        title: "暂无图片可下载",
+        icon: "none",
+      });
+      return;
+    }
+
+    wx.showLoading({
+      title: "正在保存",
+    });
+
+    wx.downloadFile({
+      url: imageUrl,
+      success: (downloadResponse) => {
+        if (downloadResponse.statusCode !== 200) {
+          wx.hideLoading();
+          wx.showToast({
+            title: "图片下载失败",
+            icon: "none",
+          });
+          return;
+        }
+
+        wx.saveImageToPhotosAlbum({
+          filePath: downloadResponse.tempFilePath,
+          success() {
+            wx.hideLoading();
+            wx.showToast({
+              title: "已保存到相册",
+              icon: "success",
+            });
+          },
+          fail() {
+            wx.hideLoading();
+            wx.showToast({
+              title: "保存失败，请检查相册权限",
+              icon: "none",
+            });
+          },
+        });
+      },
+      fail() {
+        wx.hideLoading();
+        wx.showToast({
+          title: "图片下载失败",
+          icon: "none",
+        });
+      },
+    });
+  },
+
+  showConsultTip() {
+    wx.showToast({
+      title: "咨询入口后续开放",
+      icon: "none",
+    });
+  },
+
   goBack() {
     wx.navigateBack({
       fail() {
-        wx.redirectTo({
-          url: "/pages/index/index",
+        wx.switchTab({
+          url: "/pages/category/index",
         });
       },
     });

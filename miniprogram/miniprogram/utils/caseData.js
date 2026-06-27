@@ -21,19 +21,13 @@ const DEFAULT_FILTERS = [
     key: "styles",
     title: "风格",
     type: "multi",
-    options: ["高端", "国潮", "新中式", "复古", "简约", "商务", "时尚", "喜庆"],
+    options: ["轻奢", "国风", "新中式", "复古", "简约", "商务", "时尚", "喜庆"],
   },
   {
     key: "priceLevel",
     title: "价位感",
     type: "single",
-    options: ["低端", "中端", "高端", "奢华"],
-  },
-  {
-    key: "crafts",
-    title: "工艺",
-    type: "multi",
-    options: ["烫金", "浮雕", "镭射", "特种纸", "哑膜"],
+    options: ["基础款", "品质款", "高端款", "珍藏款"],
   },
   {
     key: "scenes",
@@ -43,7 +37,20 @@ const DEFAULT_FILTERS = [
   },
 ];
 
-const MULTI_FIELDS = ["packageTypes", "styles", "crafts", "scenes", "statuses"];
+const MULTI_FIELDS = ["packageTypes", "styles", "scenes", "statuses"];
+
+const VALUE_ALIASES = {
+  styles: {
+    高端: "轻奢",
+    国潮: "国风",
+  },
+  priceLevel: {
+    低端: "基础款",
+    中端: "品质款",
+    高端: "高端款",
+    奢华: "珍藏款",
+  },
+};
 
 function normalizeValues(value) {
   if (!value) return [];
@@ -51,6 +58,15 @@ function normalizeValues(value) {
   if (Array.isArray(value.values)) return value.values.filter(Boolean);
   if (typeof value === "string") return value ? [value] : [];
   return [];
+}
+
+function normalizeDisplayValue(field, value) {
+  if (!value) return value;
+  return (VALUE_ALIASES[field] && VALUE_ALIASES[field][value]) || value;
+}
+
+function normalizeDisplayValues(field, value) {
+  return normalizeValues(value).map((item) => normalizeDisplayValue(field, item));
 }
 
 function firstImage(value) {
@@ -77,21 +93,21 @@ function normalizeCaseRecord(record = {}) {
     title: record.title || record.name || "未命名案例",
     coverImage: firstImage(record.coverImage || record.image || record.images),
     wineType: record.wineType || "白酒",
-    priceLevel: record.priceLevel || "",
+    priceLevel: normalizeDisplayValue("priceLevel", record.priceLevel || ""),
     notes: record.notes || record.description || "",
     isVisible: record.isVisible !== false,
     sortOrder: toNumber(record.sortOrder ?? record.priority),
+    crafts: [],
   };
 
   MULTI_FIELDS.forEach((field) => {
-    normalized[field] = normalizeValues(record[field]);
+    normalized[field] = normalizeDisplayValues(field, record[field]);
   });
 
   normalized.tags = [
     ...normalized.packageTypes,
     ...normalized.styles,
     normalized.priceLevel,
-    ...normalized.crafts,
     ...normalized.scenes,
     ...normalized.statuses,
   ].filter(Boolean);
@@ -179,6 +195,8 @@ module.exports = {
   DEFAULT_FILTERS,
   MULTI_FIELDS,
   normalizeValues,
+  normalizeDisplayValue,
+  normalizeDisplayValues,
   firstImage,
   normalizeCaseRecord,
   normalizeBannerRecord,
