@@ -1,11 +1,14 @@
 const { fetchCaseById } = require("./cloudData");
 const {
   buildHistoryRecord,
+  getOverflowHistoryIds,
   mergeHistoryWithCases,
+  normalizeSelectedIds,
 } = require("./historyData");
 const { ensureWxIdentity, getCachedOpenId } = require("./userService");
 
 const HISTORY_COLLECTION = "browse_history";
+const HISTORY_LIMIT = 50;
 
 function getDb() {
   if (!wx.cloud) {
@@ -40,6 +43,39 @@ function buildHistoryWhere(caseItem) {
   return _.or(conditions);
 }
 
+async function removeHistoryRecords(historyIds) {
+  const ids = normalizeSelectedIds(historyIds);
+  if (!ids.length) return 0;
+
+  await Promise.all(ids.map((id) => getHistoryCollection().doc(id).remove()));
+  return ids.length;
+}
+
+async function trimHistoryLimit(limit = HISTORY_LIMIT) {
+  let removedCount = 0;
+
+  while (true) {
+    const response = await getHistoryCollection()
+      .orderBy("lastViewedAt", "desc")
+      .skip(limit)
+      .limit(100)
+      .get();
+    const overflowIds = getOverflowHistoryIds(response.data || [], 0);
+    if (!overflowIds.length) break;
+
+    removedCount += await removeHistoryRecords(overflowIds);
+    if (overflowIds.length < 100) break;
+  }
+
+  return removedCount;
+}
+
+function trimHistoryInBackground() {
+  trimHistoryLimit().catch((error) => {
+    console.warn("浏览记录上限清理失败", error);
+  });
+}
+
 async function recordCaseView(caseItem) {
   if (!caseItem) return null;
 
@@ -72,6 +108,7 @@ async function recordCaseView(caseItem) {
         lastViewedAt: db.serverDate(),
       },
     });
+    trimHistoryInBackground();
     return {
       ...existing,
       ...record,
@@ -88,6 +125,8 @@ async function recordCaseView(caseItem) {
     },
   });
 
+  trimHistoryInBackground();
+
   return {
     _id: response._id,
     ...record,
@@ -95,10 +134,25 @@ async function recordCaseView(caseItem) {
   };
 }
 
+async function clearHistory() {
+  let removedCount = 0;
+
+  while (true) {
+    const response = await getHistoryCollection().limit(100).get();
+    const ids = normalizeSelectedIds((response.data || []).map((record) => record._id || record.id));
+    if (!ids.length) break;
+
+    removedCount += await removeHistoryRecords(ids);
+    if (ids.length < 100) break;
+  }
+
+  return removedCount;
+}
+
 async function fetchHistoryCases() {
   const response = await getHistoryCollection()
     .orderBy("lastViewedAt", "desc")
-    .limit(100)
+    .limit(HISTORY_LIMIT)
     .get();
   const historyRecords = response.data || [];
   const cases = await Promise.all(
@@ -117,6 +171,10 @@ async function fetchHistoryCases() {
 
 module.exports = {
   HISTORY_COLLECTION,
+  HISTORY_LIMIT,
+  clearHistory,
+  removeHistoryRecords,
   recordCaseView,
   fetchHistoryCases,
+  trimHistoryLimit,
 };

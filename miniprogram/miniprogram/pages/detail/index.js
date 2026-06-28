@@ -132,6 +132,14 @@ Page({
         isFavorited: result.isFavorited,
       });
 
+      if (result.action === "limitReached") {
+        wx.showToast({
+          title: "收藏已满，可先取消一些收藏",
+          icon: "none",
+        });
+        return;
+      }
+
       if (result.action === "cancelled") return;
 
       wx.showToast({

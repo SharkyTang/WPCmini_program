@@ -58,8 +58,31 @@ function mergeHistoryWithCases(historyRecords, cases) {
   }, []);
 }
 
+function normalizeSelectedIds(ids) {
+  const seen = {};
+  const normalized = [];
+
+  (ids || []).forEach((id) => {
+    if (!id || seen[id]) return;
+    seen[id] = true;
+    normalized.push(id);
+  });
+
+  return normalized;
+}
+
+function getOverflowHistoryIds(historyRecords, limit) {
+  const safeLimit = Math.max(Number(limit) || 0, 0);
+  return (historyRecords || [])
+    .slice(safeLimit)
+    .map((record) => record && (record._id || record.id))
+    .filter(Boolean);
+}
+
 module.exports = {
   buildHistoryRecord,
+  getOverflowHistoryIds,
   getHistoryCaseLookupKeys,
   mergeHistoryWithCases,
+  normalizeSelectedIds,
 };

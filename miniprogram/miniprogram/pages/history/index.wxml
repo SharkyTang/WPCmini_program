@@ -1,7 +1,16 @@
 <view class="page">
   <view class="hero">
-    <view class="page-title">浏览记录</view>
-    <view class="page-subtitle">这里保存你最近看过的酒包装案例</view>
+    <view>
+      <view class="page-title">浏览记录</view>
+      <view class="page-subtitle">这里保存你最近看过的酒包装案例</view>
+    </view>
+    <view
+      wx:if="{{historyCards.length}}"
+      class="manage-button"
+      bindtap="toggleManageMode"
+    >
+      {{manageMode ? '完成' : '管理'}}
+    </view>
   </view>
 
   <view wx:if="{{needIdentity}}" class="state-card">
@@ -25,14 +34,29 @@
     <view class="state-button" bindtap="goToCategory">去看案例</view>
   </view>
 
-  <view wx:else class="history-grid">
+  <view wx:else>
+    <view wx:if="{{manageMode}}" class="manage-toolbar">
+      <view class="manage-count">已选择 {{selectedCount}} 条</view>
+      <view class="manage-actions">
+        <view class="manage-action" bindtap="toggleSelectAll">
+          {{selectedCount === historyCards.length ? '取消全选' : '全选'}}
+        </view>
+        <view class="manage-action manage-action-danger" bindtap="clearAllHistory">清空全部</view>
+      </view>
+    </view>
+
+    <view class="history-grid {{manageMode ? 'history-grid-manage' : ''}}">
     <view
       wx:for="{{historyCards}}"
       wx:key="historyId"
-      class="case-card"
+      class="case-card {{manageMode ? 'case-card-manage' : ''}} {{item.selected ? 'case-card-selected' : ''}}"
       data-id="{{item.id}}"
-      bindtap="navigateToCase"
+      data-history-id="{{item.historyId}}"
+      bindtap="handleCardTap"
     >
+      <view wx:if="{{manageMode}}" class="select-mark">
+        <view class="select-dot">{{item.selected ? '✓' : ''}}</view>
+      </view>
       <image
         wx:if="{{item.imageUrl}}"
         class="case-image"
@@ -42,6 +66,16 @@
       <view wx:else class="case-placeholder">暂无图片</view>
       <view class="case-title">{{item.title}}</view>
       <view class="case-tags">{{item.tagSummary}}</view>
+    </view>
+    </view>
+
+    <view wx:if="{{manageMode}}" class="bottom-manage-bar">
+      <view
+        class="delete-selected-button {{selectedCount ? '' : 'delete-selected-button-disabled'}}"
+        bindtap="deleteSelectedHistory"
+      >
+        删除选中
+      </view>
     </view>
   </view>
 </view>

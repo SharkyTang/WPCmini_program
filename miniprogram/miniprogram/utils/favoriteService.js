@@ -1,11 +1,13 @@
 const { fetchCaseById } = require("./cloudData");
 const {
   buildFavoriteRecord,
+  isFavoriteLimitReached,
   mergeFavoritesWithCases,
 } = require("./favoriteData");
 const { ensureWxIdentity, getCachedOpenId } = require("./userService");
 
 const FAVORITE_COLLECTION = "favorites";
+const FAVORITE_LIMIT = 100;
 
 function getDb() {
   if (!wx.cloud) {
@@ -71,6 +73,13 @@ async function addFavorite(caseItem) {
   const existing = await fetchFavoriteForCase(caseItem);
   if (existing) return existing;
 
+  const countResponse = await getFavoritesCollection().count();
+  if (isFavoriteLimitReached(countResponse.total, FAVORITE_LIMIT)) {
+    return {
+      limitReached: true,
+    };
+  }
+
   const db = getDb();
   const response = await getFavoritesCollection().add({
     data: {
@@ -102,6 +111,14 @@ async function toggleFavorite(caseItem, currentFavorite) {
   }
 
   const favorite = await addFavorite(caseItem);
+  if (favorite && favorite.limitReached) {
+    return {
+      isFavorited: false,
+      favorite: null,
+      action: "limitReached",
+    };
+  }
+
   if (!favorite) {
     return {
       isFavorited: false,
@@ -120,7 +137,7 @@ async function toggleFavorite(caseItem, currentFavorite) {
 async function fetchFavoriteCases() {
   const response = await getFavoritesCollection()
     .orderBy("createdAt", "desc")
-    .limit(100)
+    .limit(FAVORITE_LIMIT)
     .get();
   const favorites = response.data || [];
   const cases = await Promise.all(
@@ -139,6 +156,7 @@ async function fetchFavoriteCases() {
 
 module.exports = {
   FAVORITE_COLLECTION,
+  FAVORITE_LIMIT,
   fetchFavoriteForCase,
   addFavorite,
   removeFavorite,

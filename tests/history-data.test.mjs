@@ -20,8 +20,10 @@ vm.runInNewContext(source, sandbox, { filename: modulePath });
 
 const {
   buildHistoryRecord,
+  getOverflowHistoryIds,
   getHistoryCaseLookupKeys,
   mergeHistoryWithCases,
+  normalizeSelectedIds,
 } = sandbox.module.exports;
 
 function test(name, fn) {
@@ -91,4 +93,20 @@ test("merges history records with visible cases and drops invalid records", () =
       caseItem: { id: "doc_001", caseId: "case_001", title: "可见案例", isVisible: true },
     },
   ]);
+});
+
+test("normalizes selected history ids by removing duplicates and empty values", () => {
+  const ids = normalizeSelectedIds(["history_1", "", null, "history_2", "history_1"]);
+
+  assert.deepEqual(plain(ids), ["history_1", "history_2"]);
+});
+
+test("returns overflow history ids after the newest records are kept", () => {
+  const records = Array.from({ length: 5 }, (_, index) => ({
+    _id: `history_${index + 1}`,
+  }));
+
+  const overflowIds = getOverflowHistoryIds(records, 3);
+
+  assert.deepEqual(plain(overflowIds), ["history_4", "history_5"]);
 });

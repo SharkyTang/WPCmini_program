@@ -57,8 +57,13 @@ function mergeFavoritesWithCases(favorites, cases) {
   }, []);
 }
 
+function isFavoriteLimitReached(count, limit) {
+  return (Number(count) || 0) >= (Number(limit) || 0);
+}
+
 module.exports = {
   buildFavoriteRecord,
   getFavoriteCaseLookupKeys,
+  isFavoriteLimitReached,
   mergeFavoritesWithCases,
 };

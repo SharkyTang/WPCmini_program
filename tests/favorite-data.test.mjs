@@ -21,6 +21,7 @@ vm.runInNewContext(source, sandbox, { filename: modulePath });
 const {
   buildFavoriteRecord,
   getFavoriteCaseLookupKeys,
+  isFavoriteLimitReached,
   mergeFavoritesWithCases,
 } = sandbox.module.exports;
 
@@ -90,4 +91,10 @@ test("merges favorites with visible cases and drops invalid favorites", () => {
       caseItem: { id: "doc_001", caseId: "case_001", title: "可见案例", isVisible: true },
     },
   ]);
+});
+
+test("detects when the favorite limit has been reached", () => {
+  assert.equal(isFavoriteLimitReached(99, 100), false);
+  assert.equal(isFavoriteLimitReached(100, 100), true);
+  assert.equal(isFavoriteLimitReached(101, 100), true);
 });
