@@ -56,6 +56,7 @@ Page({
     favorite: null,
     isFavorited: false,
     favoriteLoading: false,
+    imagePreviewVisible: false,
   },
 
   onLoad(options) {
@@ -168,11 +169,18 @@ Page({
       return;
     }
 
-    wx.previewImage({
-      current: imageUrl,
-      urls: [imageUrl],
+    this.setData({
+      imagePreviewVisible: true,
     });
   },
+
+  closeImagePreview() {
+    this.setData({
+      imagePreviewVisible: false,
+    });
+  },
+
+  noop() {},
 
   downloadImage() {
     const imageUrl = this.data.caseItem && this.data.caseItem.coverImageUrl;

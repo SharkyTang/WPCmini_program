@@ -10,24 +10,29 @@
       <view class="case-subtitle">产品卡片点击后进入详情确认信息</view>
     </view>
 
-    <image
-      wx:if="{{caseItem.coverImageUrl}}"
-      class="hero-image"
-      mode="aspectFill"
-      src="{{caseItem.coverImageUrl}}"
-    ></image>
-    <view wx:else class="hero-placeholder">暂无图片</view>
-
-    <view class="image-actions">
+    <view wx:if="{{caseItem.coverImageUrl}}" class="hero-image-wrap" bindtap="previewImage">
+      <image
+        class="hero-image"
+        mode="aspectFill"
+        src="{{caseItem.coverImageUrl}}"
+      ></image>
       <view
-        class="image-action favorite-action {{isFavorited ? 'favorite-action-active' : ''}}"
-        bindtap="toggleFavorite"
+        class="hero-favorite {{isFavorited ? 'hero-favorite-active' : ''}}"
+        catchtap="toggleFavorite"
       >
-        {{favoriteLoading ? '处理中' : (isFavorited ? '已收藏' : '收藏')}}
+        <image
+          wx:if="{{!isFavorited}}"
+          class="hero-favorite-icon"
+          src="/assets/profile/icon-favorite.png"
+          mode="aspectFit"
+        />
+        <view wx:else class="hero-favorite-heart">♥</view>
+        <view class="hero-favorite-label">
+          {{favoriteLoading ? '处理中' : (isFavorited ? '已收藏' : '收藏')}}
+        </view>
       </view>
-      <view class="image-action image-action-secondary" bindtap="previewImage">查看原图</view>
-      <view class="image-action image-action-primary" bindtap="downloadImage">下载图片</view>
     </view>
+    <view wx:else class="hero-placeholder">暂无图片</view>
 
     <view class="title-block">
       <view class="detail-heading">{{detailHeading}}</view>
@@ -47,5 +52,33 @@
 
     <view class="consult-button" bindtap="showConsultTip">咨询同款包装方案</view>
     <view class="back-button" bindtap="goBack">返回继续筛选</view>
+  </view>
+
+  <view wx:if="{{imagePreviewVisible}}" class="image-preview-layer" bindtap="closeImagePreview">
+    <view class="image-preview-close" catchtap="closeImagePreview">×</view>
+    <movable-area class="image-preview-area" catchtap="noop">
+      <movable-view
+        class="image-preview-movable"
+        direction="all"
+        scale="{{true}}"
+        scale-min="1"
+        scale-max="4"
+        scale-area="{{true}}"
+      >
+        <image
+          class="image-preview-image"
+          mode="aspectFit"
+          src="{{caseItem.coverImageUrl}}"
+        ></image>
+      </movable-view>
+    </movable-area>
+    <view class="image-preview-download" catchtap="downloadImage">
+      <image
+        class="image-preview-download-icon"
+        src="/assets/detail/icon-download.png"
+        mode="aspectFit"
+      ></image>
+      <view>下载图片</view>
+    </view>
   </view>
 </view>
