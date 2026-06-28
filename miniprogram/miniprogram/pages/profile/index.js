@@ -1,10 +1,11 @@
 Page({
   data: {
     quickActions: [
-      { key: "favorites", icon: "♡", title: "我的收藏" },
-      { key: "history", icon: "◷", title: "浏览记录" },
-      { key: "notice", icon: "♢", title: "消息通知" },
-      { key: "service", icon: "☎", title: "联系客服" },
+      { key: "favorites", iconSrc: "/assets/profile/icon-favorite.png", title: "我的收藏" },
+      { key: "history", iconSrc: "/assets/profile/icon-history.png", title: "浏览记录" },
+      { key: "notice", iconSrc: "/assets/profile/icon-notice.png", title: "消息通知" },
+      { key: "service", iconSrc: "/assets/profile/icon-service.png", title: "联系客服" },
+      { key: "feedback", iconSrc: "/assets/profile/icon-feedback.png", title: "意见反馈" },
     ],
     flowSteps: [
       { step: "1", title: "沟通需求", subtitle: "确认酒类、包装类型、预算定位" },

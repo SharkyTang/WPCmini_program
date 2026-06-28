@@ -103,6 +103,10 @@ page {
   padding: 26rpx;
 }
 
+.quick-section {
+  padding: 30rpx 26rpx 32rpx;
+}
+
 .section-title {
   font-size: 30rpx;
   line-height: 1.3;
@@ -113,24 +117,24 @@ page {
   margin-top: 20rpx;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14rpx;
+  column-gap: 14rpx;
+  row-gap: 18rpx;
 }
 
 .quick-item {
   min-width: 0;
-  min-height: 118rpx;
-  padding: 14rpx 8rpx;
+  min-height: 128rpx;
+  padding: 16rpx 8rpx 14rpx;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
 }
 
-.quick-icon {
-  color: #b9782a;
-  font-size: 32rpx;
-  line-height: 1;
-  font-weight: 800;
+.quick-icon-image {
+  width: 52rpx;
+  height: 52rpx;
+  flex: 0 0 52rpx;
 }
 
 .quick-title {

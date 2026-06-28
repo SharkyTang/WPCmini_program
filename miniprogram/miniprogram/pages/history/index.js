@@ -190,7 +190,7 @@ Page({
 
     wx.showModal({
       title: "清空浏览记录",
-      content: "清空全部浏览记录？此操作不会删除案例图片。",
+      content: "清空全部浏览记录？清空后的浏览记录将不会恢复。",
       confirmText: "清空",
       confirmColor: "#241d16",
       success: async (response) => {

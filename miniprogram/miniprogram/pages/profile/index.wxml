@@ -15,8 +15,8 @@
     </view>
   </view>
 
-  <view class="section">
-    <view class="section-title">常用入口</view>
+  <view class="section quick-section">
+    <view class="section-title">常用功能</view>
     <view class="quick-grid">
       <view
         wx:for="{{quickActions}}"
@@ -25,7 +25,7 @@
         data-key="{{item.key}}"
         bindtap="handleQuickAction"
       >
-        <view class="quick-icon">{{item.icon}}</view>
+        <image class="quick-icon-image" src="{{item.iconSrc}}" mode="aspectFit" />
         <view class="quick-title">{{item.title}}</view>
       </view>
     </view>
