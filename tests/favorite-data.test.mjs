@@ -23,6 +23,7 @@ const {
   getFavoriteCaseLookupKeys,
   isFavoriteLimitReached,
   mergeFavoritesWithCases,
+  normalizeSelectedFavoriteIds,
 } = sandbox.module.exports;
 
 function test(name, fn) {
@@ -97,4 +98,16 @@ test("detects when the favorite limit has been reached", () => {
   assert.equal(isFavoriteLimitReached(99, 100), false);
   assert.equal(isFavoriteLimitReached(100, 100), true);
   assert.equal(isFavoriteLimitReached(101, 100), true);
+});
+
+test("normalizes selected favorite ids", () => {
+  const ids = normalizeSelectedFavoriteIds([
+    "fav_1",
+    "",
+    null,
+    "fav_2",
+    "fav_1",
+  ]);
+
+  assert.deepEqual(plain(ids), ["fav_1", "fav_2"]);
 });

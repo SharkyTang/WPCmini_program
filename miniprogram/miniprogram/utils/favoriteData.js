@@ -61,9 +61,23 @@ function isFavoriteLimitReached(count, limit) {
   return (Number(count) || 0) >= (Number(limit) || 0);
 }
 
+function normalizeSelectedFavoriteIds(ids) {
+  const selectedIds = [];
+  const seen = {};
+
+  (ids || []).forEach((id) => {
+    if (!id || seen[id]) return;
+    seen[id] = true;
+    selectedIds.push(id);
+  });
+
+  return selectedIds;
+}
+
 module.exports = {
   buildFavoriteRecord,
   getFavoriteCaseLookupKeys,
   isFavoriteLimitReached,
   mergeFavoritesWithCases,
+  normalizeSelectedFavoriteIds,
 };

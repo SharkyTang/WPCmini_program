@@ -3,6 +3,7 @@ const {
   buildFavoriteRecord,
   isFavoriteLimitReached,
   mergeFavoritesWithCases,
+  normalizeSelectedFavoriteIds,
 } = require("./favoriteData");
 const { ensureWxIdentity, getCachedOpenId } = require("./userService");
 
@@ -100,6 +101,31 @@ async function removeFavorite(favoriteId) {
   return true;
 }
 
+async function removeFavoriteRecords(favoriteIds) {
+  const ids = normalizeSelectedFavoriteIds(favoriteIds);
+  if (!ids.length) return 0;
+
+  await Promise.all(ids.map((id) => getFavoritesCollection().doc(id).remove()));
+  return ids.length;
+}
+
+async function clearFavorites() {
+  let removedCount = 0;
+
+  while (true) {
+    const response = await getFavoritesCollection().limit(100).get();
+    const ids = normalizeSelectedFavoriteIds(
+      (response.data || []).map((favorite) => favorite._id || favorite.id)
+    );
+
+    if (!ids.length) break;
+    removedCount += await removeFavoriteRecords(ids);
+    if (ids.length < 100) break;
+  }
+
+  return removedCount;
+}
+
 async function toggleFavorite(caseItem, currentFavorite) {
   if (currentFavorite && currentFavorite._id) {
     await removeFavorite(currentFavorite._id);
@@ -160,6 +186,8 @@ module.exports = {
   fetchFavoriteForCase,
   addFavorite,
   removeFavorite,
+  removeFavoriteRecords,
+  clearFavorites,
   toggleFavorite,
   fetchFavoriteCases,
 };
