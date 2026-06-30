@@ -81,3 +81,17 @@ test("feedback quick action does not navigate", () => {
   assert.equal(navigated, false);
   assert.equal(toastTitle, "入口后续开放");
 });
+
+test("notice quick action navigates to notifications page", () => {
+  let navigatedUrl = "";
+
+  const page = loadProfilePage({
+    navigateTo(options) {
+      navigatedUrl = options.url;
+    },
+  });
+
+  page.handleQuickAction({ currentTarget: { dataset: { key: "notice" } } });
+
+  assert.equal(navigatedUrl, "/pages/notifications/index");
+});

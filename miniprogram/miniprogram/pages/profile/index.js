@@ -35,6 +35,12 @@ Page({
       });
       return;
     }
+    if (key === "notice") {
+      wx.navigateTo({
+        url: "/pages/notifications/index",
+      });
+      return;
+    }
 
     wx.showToast({
       title: "入口后续开放",

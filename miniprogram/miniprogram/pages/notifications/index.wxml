@@ -1,0 +1,80 @@
+<view class="page">
+  <view class="hero">
+    <view class="page-title">消息通知</view>
+    <view class="page-subtitle">查看版本更新、产品上新和客服回复</view>
+  </view>
+
+  <scroll-view class="tab-scroll" scroll-x enhanced show-scrollbar="{{false}}">
+    <view class="tab-list">
+      <view
+        wx:for="{{tabs}}"
+        wx:key="key"
+        class="tab-item {{activeTab === item.key ? 'tab-item-active' : ''}}"
+        data-key="{{item.key}}"
+        bindtap="switchTab"
+      >
+        {{item.label}}
+      </view>
+    </view>
+  </scroll-view>
+
+  <view wx:if="{{activeTab === 'settings'}}" class="settings-card">
+    <view class="settings-title">通知设置</view>
+    <view class="settings-copy">关闭后不主动提醒，但仍可在消息页查看。</view>
+    <view class="settings-list">
+      <view
+        wx:for="{{settingItems}}"
+        wx:key="type"
+        class="setting-row"
+      >
+        <view>
+          <view class="setting-name">{{item.label}}</view>
+          <view class="setting-state">{{item.disabled ? '已关闭提醒' : '已开启提醒'}}</view>
+        </view>
+        <switch
+          checked="{{!item.disabled}}"
+          color="#241d16"
+          data-type="{{item.type}}"
+          bindchange="toggleSetting"
+        />
+      </view>
+    </view>
+  </view>
+
+  <view wx:elif="{{loading}}" class="state-card">
+    <view class="state-title">正在读取消息通知...</view>
+  </view>
+
+  <view wx:elif="{{errorMessage}}" class="state-card state-error">
+    <view class="state-title">{{errorMessage}}</view>
+    <view class="state-button" bindtap="loadNotifications">重新读取</view>
+  </view>
+
+  <view wx:elif="{{needCustomerIdentity}}" class="state-card">
+    <view class="state-title">登录后可查看客服回复</view>
+    <view class="state-copy">客服回复会保存到你的微信身份下，只有你自己能查看。</view>
+    <view class="state-button" bindtap="loginAndLoadCustomer">使用微信身份查看</view>
+  </view>
+
+  <view wx:elif="{{!displayNotifications.length}}" class="state-card">
+    <view class="state-title">
+      {{activeTab === 'customer_reply' ? '暂无客服回复' : '暂无消息通知'}}
+    </view>
+    <view class="state-copy">有新的通知后会出现在这里。</view>
+  </view>
+
+  <view wx:else class="notification-list">
+    <view
+      wx:for="{{displayNotifications}}"
+      wx:key="id"
+      class="notification-card"
+    >
+      <view class="notification-meta">
+        <view class="notification-type">{{item.typeLabel}}</view>
+        <view class="notification-time">{{item.timeText}}</view>
+      </view>
+      <view class="notification-title">{{item.title}}</view>
+      <view class="notification-content">{{item.content}}</view>
+    </view>
+  </view>
+</view>

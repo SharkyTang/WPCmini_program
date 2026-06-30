@@ -7,6 +7,7 @@ const {
 const CASE_COLLECTION = "wine_packaging";
 const BANNER_COLLECTION = "home_banners";
 const PAGE_SIZE = 20;
+const TEMP_FILE_URL_BATCH_SIZE = 50;
 
 function getDb() {
   if (!wx.cloud) {
@@ -44,16 +45,28 @@ function isCloudFileId(value) {
   return typeof value === "string" && value.indexOf("cloud://") === 0;
 }
 
+function chunkList(items, size) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
 async function getTempUrlMap(fileIds) {
   const uniqueFileIds = Array.from(new Set(fileIds.filter(isCloudFileId)));
   if (!uniqueFileIds.length) return {};
 
   try {
-    const response = await wx.cloud.getTempFileURL({
-      fileList: uniqueFileIds,
-    });
-    return (response.fileList || []).reduce((map, item) => {
-      map[item.fileID] = item.tempFileURL || item.fileID;
+    const responses = await Promise.all(
+      chunkList(uniqueFileIds, TEMP_FILE_URL_BATCH_SIZE).map((fileList) =>
+        wx.cloud.getTempFileURL({ fileList })
+      )
+    );
+    return responses.reduce((map, response) => {
+      (response.fileList || []).forEach((item) => {
+        map[item.fileID] = item.tempFileURL || item.fileID;
+      });
       return map;
     }, {});
   } catch (error) {
