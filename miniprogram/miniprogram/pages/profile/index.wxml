@@ -4,14 +4,17 @@
     <view class="page-subtitle">收藏案例、查看需求、联系顾问</view>
   </view>
 
-  <view class="user-card">
+  <view class="user-card" bindtap="openProfileEditor">
     <view class="avatar">
-      <view class="avatar-head"></view>
-      <view class="avatar-body"></view>
+      <image wx:if="{{profileInfo.avatarUrl}}" class="avatar-image" src="{{profileInfo.avatarUrl}}" mode="aspectFill" />
+      <block wx:else>
+        <view class="avatar-head"></view>
+        <view class="avatar-body"></view>
+      </block>
     </view>
     <view class="user-copy">
-      <view class="user-name">微信名称</view>
-      <view class="user-note">点击使用微信头像和名称</view>
+      <view class="user-name">{{profileInfo.nickname}}</view>
+      <view class="user-note">{{profileInfo.note}}</view>
     </view>
   </view>
 
@@ -54,6 +57,31 @@
         </view>
         <view class="faq-arrow">›</view>
       </view>
+    </view>
+  </view>
+
+  <view wx:if="{{isProfileEditorVisible}}" class="profile-editor-mask" catchtap="closeProfileEditor">
+    <view class="profile-editor-sheet" catchtap="noop">
+      <view class="profile-option-list">
+        <view class="profile-option-row profile-option-preview">
+          <view class="profile-option-title">用微信头像</view>
+          <image wx:if="{{profileDraft.avatarUrl}}" class="profile-option-avatar" src="{{profileDraft.avatarUrl}}" mode="aspectFill" />
+          <view wx:else class="profile-option-avatar profile-option-avatar-empty">
+            <view class="avatar-head"></view>
+            <view class="avatar-body"></view>
+          </view>
+        </view>
+
+        <view class="profile-option-row profile-option-preview">
+          <view class="profile-option-title">用微信名称</view>
+          <view class="profile-option-name">{{profileDraft.nickname}}</view>
+        </view>
+
+        <view class="profile-option-row profile-option-action" bindtap="chooseProfileAvatarFromAlbum">从相册选择</view>
+        <view class="profile-option-row profile-option-action" bindtap="takeProfileAvatarPhoto">拍照</view>
+      </view>
+
+      <view class="profile-cancel-button" bindtap="closeProfileEditor">取消</view>
     </view>
   </view>
 </view>

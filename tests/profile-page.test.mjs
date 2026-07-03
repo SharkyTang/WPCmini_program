@@ -9,6 +9,10 @@ const modulePath = resolve(
   __dirname,
   "../miniprogram/miniprogram/pages/profile/index.js"
 );
+const wxmlPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/profile/index.wxml"
+);
 
 function loadProfilePage(wxMock = {}) {
   const source = readFileSync(modulePath, "utf8");
@@ -25,6 +29,12 @@ function loadProfilePage(wxMock = {}) {
   };
 
   vm.runInNewContext(source, sandbox, { filename: modulePath });
+  pageConfig.setData = function setData(nextData) {
+    this.data = {
+      ...this.data,
+      ...nextData,
+    };
+  };
   return pageConfig;
 }
 
@@ -94,4 +104,90 @@ test("notice quick action navigates to notifications page", () => {
   page.handleQuickAction({ currentTarget: { dataset: { key: "notice" } } });
 
   assert.equal(navigatedUrl, "/pages/notifications/index");
+});
+
+test("profile card opens editor with current profile draft", () => {
+  const page = loadProfilePage({
+    getStorageSync() {
+      return {
+        nickname: "墨韵 ovo",
+        avatarUrl: "/tmp/avatar.png",
+      };
+    },
+  });
+
+  page.onLoad();
+  page.openProfileEditor();
+
+  assert.equal(page.data.isProfileEditorVisible, true);
+  assert.deepEqual(plain(page.data.profileDraft), {
+    nickname: "墨韵 ovo",
+    avatarUrl: "/tmp/avatar.png",
+  });
+});
+
+test("profile editor sheet does not use native avatar or nickname controls", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+
+  assert.equal(wxml.includes('open-type="chooseAvatar"'), false);
+  assert.equal(wxml.includes('type="nickname"'), false);
+  assert.equal(wxml.includes("bindchooseavatar"), false);
+  assert.equal(wxml.includes("bindblur=\"onNicknameBlur\""), false);
+});
+
+test("choosing avatar from album updates and stores profile draft", () => {
+  let chooseMediaOptions;
+  let storedValue;
+  const page = loadProfilePage({
+    chooseMedia(options) {
+      chooseMediaOptions = options;
+      options.success({
+        tempFiles: [{ tempFilePath: "/tmp/album-avatar.png" }],
+      });
+    },
+    setStorageSync(key, value) {
+      storedValue = value;
+    },
+  });
+
+  page.openProfileEditor();
+  page.chooseProfileAvatarFromAlbum();
+
+  assert.deepEqual(plain(chooseMediaOptions.sourceType), ["album"]);
+  assert.deepEqual(plain(chooseMediaOptions.mediaType), ["image"]);
+  assert.equal(page.data.profileDraft.avatarUrl, "/tmp/album-avatar.png");
+  assert.equal(page.data.profileInfo.avatarUrl, "/tmp/album-avatar.png");
+  assert.deepEqual(plain(storedValue), {
+    nickname: "微信名称",
+    avatarUrl: "/tmp/album-avatar.png",
+  });
+});
+
+test("taking profile photo uses camera source and stores profile draft", () => {
+  let chooseMediaOptions;
+  let storedValue;
+  const page = loadProfilePage({
+    chooseMedia(options) {
+      chooseMediaOptions = options;
+      options.success({
+        tempFiles: [{ tempFilePath: "/tmp/camera-avatar.png" }],
+      });
+    },
+    setStorageSync(key, value) {
+      storedValue = value;
+    },
+  });
+
+  page.openProfileEditor();
+  page.takeProfileAvatarPhoto();
+
+  assert.equal(page.data.isProfileEditorVisible, true);
+  assert.deepEqual(plain(chooseMediaOptions.sourceType), ["camera"]);
+  assert.deepEqual(plain(chooseMediaOptions.mediaType), ["image"]);
+  assert.equal(page.data.profileDraft.avatarUrl, "/tmp/camera-avatar.png");
+  assert.equal(page.data.profileInfo.avatarUrl, "/tmp/camera-avatar.png");
+  assert.deepEqual(plain(storedValue), {
+    nickname: "微信名称",
+    avatarUrl: "/tmp/camera-avatar.png",
+  });
 });

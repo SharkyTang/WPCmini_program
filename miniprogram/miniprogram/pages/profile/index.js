@@ -1,5 +1,30 @@
+const PROFILE_STORAGE_KEY = "wineProfileInfo";
+
+const DEFAULT_PROFILE_INFO = {
+  nickname: "微信名称",
+  avatarUrl: "",
+  note: "点击使用微信头像和名称",
+};
+
+function normalizeProfileInfo(profileInfo = {}) {
+  const source = profileInfo || {};
+  const nickname = typeof source.nickname === "string" ? source.nickname.trim() : "";
+  const avatarUrl = typeof source.avatarUrl === "string" ? source.avatarUrl : "";
+  return {
+    nickname: nickname || DEFAULT_PROFILE_INFO.nickname,
+    avatarUrl,
+    note: nickname || avatarUrl ? "点击修改头像和名称" : DEFAULT_PROFILE_INFO.note,
+  };
+}
+
 Page({
   data: {
+    profileInfo: DEFAULT_PROFILE_INFO,
+    profileDraft: {
+      nickname: "",
+      avatarUrl: "",
+    },
+    isProfileEditorVisible: false,
     quickActions: [
       { key: "favorites", iconSrc: "/assets/profile/icon-favorite.png", title: "我的收藏" },
       { key: "history", iconSrc: "/assets/profile/icon-history.png", title: "浏览记录" },
@@ -19,6 +44,114 @@ Page({
       { key: "time", title: "多久可以看到方案？", subtitle: "根据需求复杂度沟通确认。" },
       { key: "save", title: "图片可以保存参考吗？", subtitle: "详情页支持查看原图和下载图片。" },
     ],
+  },
+
+  onLoad() {
+    this.loadProfileInfo();
+  },
+
+  loadProfileInfo() {
+    const storedProfile = wx.getStorageSync ? wx.getStorageSync(PROFILE_STORAGE_KEY) : null;
+    this.setData({
+      profileInfo: normalizeProfileInfo(storedProfile),
+    });
+  },
+
+  openProfileEditor() {
+    const { profileInfo } = this.data;
+    this.setData({
+      isProfileEditorVisible: true,
+      profileDraft: {
+        nickname: profileInfo.nickname,
+        avatarUrl: profileInfo.avatarUrl,
+      },
+    });
+  },
+
+  closeProfileEditor() {
+    this.setData({
+      isProfileEditorVisible: false,
+    });
+  },
+
+  noop() {},
+
+  updateProfileDraftAvatar(avatarUrl) {
+    const profileDraft = {
+      ...this.data.profileDraft,
+      avatarUrl,
+    };
+
+    this.setData({
+      profileDraft,
+    });
+
+    this.persistProfileDraft({ profileDraft });
+  },
+
+  chooseProfileAvatarFromAlbum() {
+    this.chooseProfileAvatarFromMedia("album");
+  },
+
+  takeProfileAvatarPhoto() {
+    this.chooseProfileAvatarFromMedia("camera");
+  },
+
+  chooseProfileAvatarFromMedia(sourceType) {
+    if (wx.chooseMedia) {
+      wx.chooseMedia({
+        count: 1,
+        mediaType: ["image"],
+        sourceType: [sourceType],
+        sizeType: ["compressed"],
+        success: (result) => {
+          const avatarUrl = result.tempFiles && result.tempFiles[0] && result.tempFiles[0].tempFilePath;
+          if (avatarUrl) {
+            this.updateProfileDraftAvatar(avatarUrl);
+          }
+        },
+      });
+      return;
+    }
+
+    if (wx.chooseImage) {
+      wx.chooseImage({
+        count: 1,
+        sourceType: [sourceType],
+        sizeType: ["compressed"],
+        success: (result) => {
+          const avatarUrl = result.tempFilePaths && result.tempFilePaths[0];
+          if (avatarUrl) {
+            this.updateProfileDraftAvatar(avatarUrl);
+          }
+        },
+      });
+    }
+  },
+
+  persistProfileDraft(options = {}) {
+    const profileDraft = options.profileDraft || this.data.profileDraft;
+    const profileInfo = normalizeProfileInfo(profileDraft);
+    const storedProfile = {
+      nickname: profileInfo.nickname,
+      avatarUrl: profileInfo.avatarUrl,
+    };
+
+    if (wx.setStorageSync) {
+      wx.setStorageSync(PROFILE_STORAGE_KEY, storedProfile);
+    }
+
+    this.setData({
+      profileInfo,
+      isProfileEditorVisible: options.close ? false : this.data.isProfileEditorVisible,
+    });
+
+    if (options.toast) {
+      wx.showToast({
+        title: "已更新",
+        icon: "none",
+      });
+    }
   },
 
   handleQuickAction(event) {
