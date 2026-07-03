@@ -174,6 +174,12 @@ Page({
       });
       return;
     }
+    if (key === "feedback") {
+      wx.navigateTo({
+        url: "/pages/feedback/index?source=profile",
+      });
+      return;
+    }
 
     wx.showToast({
       title: "入口后续开放",

@@ -1,0 +1,140 @@
+page {
+  min-height: 100%;
+  background: #f7f3ec;
+  color: #241d16;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+}
+
+.page {
+  min-height: 100vh;
+  padding: 58rpx 40rpx 104rpx;
+  box-sizing: border-box;
+}
+
+.hero {
+  margin-bottom: 30rpx;
+}
+
+.page-title {
+  font-size: 44rpx;
+  line-height: 1.2;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.page-subtitle {
+  margin-top: 10rpx;
+  color: #766b60;
+  font-size: 25rpx;
+  line-height: 1.45;
+}
+
+.form-card {
+  padding: 30rpx 28rpx;
+  border: 2rpx solid #dfcfb7;
+  border-radius: 8rpx;
+  background: #fffdf9;
+  box-sizing: border-box;
+}
+
+.field + .field {
+  margin-top: 34rpx;
+}
+
+.field-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+}
+
+.field-label {
+  color: #241d16;
+  font-size: 27rpx;
+  line-height: 1.35;
+  font-weight: 800;
+}
+
+.field-count,
+.field-tip {
+  color: #9d8d78;
+  font-size: 22rpx;
+  line-height: 1.4;
+}
+
+.field-tip {
+  margin-top: 12rpx;
+}
+
+.type-grid {
+  margin-top: 18rpx;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16rpx;
+}
+
+.type-chip {
+  min-width: 0;
+  height: 64rpx;
+  padding: 0 20rpx;
+  border: 2rpx solid #dfcfb7;
+  border-radius: 32rpx;
+  background: #fffdf9;
+  color: #8c6a3f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24rpx;
+  font-weight: 800;
+  box-sizing: border-box;
+}
+
+.type-chip-active {
+  border-color: #241d16;
+  background: #241d16;
+  color: #fffdf9;
+}
+
+.content-input,
+.contact-input {
+  width: 100%;
+  margin-top: 18rpx;
+  border: 2rpx solid #dfcfb7;
+  border-radius: 8rpx;
+  background: #fff;
+  color: #241d16;
+  font-size: 25rpx;
+  line-height: 1.45;
+  box-sizing: border-box;
+}
+
+.content-input {
+  min-height: 260rpx;
+  padding: 22rpx 24rpx;
+}
+
+.contact-input {
+  height: 76rpx;
+  padding: 0 24rpx;
+}
+
+.input-placeholder {
+  color: #b0a493;
+}
+
+.submit-button {
+  margin-top: 32rpx;
+  height: 78rpx;
+  border-radius: 39rpx;
+  background: #241d16;
+  color: #fffdf9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 27rpx;
+  font-weight: 800;
+}
+
+.submit-button-disabled {
+  background: #d8ccbd;
+}

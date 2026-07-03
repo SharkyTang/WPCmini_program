@@ -6,6 +6,7 @@
     "pages/favorites/index",
     "pages/history/index",
     "pages/notifications/index",
+    "pages/feedback/index",
     "pages/detail/index"
   ],
   "window": {

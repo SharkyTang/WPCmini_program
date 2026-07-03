@@ -72,24 +72,18 @@ test("profile quick actions include feedback with image icon paths", () => {
   ]);
 });
 
-test("feedback quick action does not navigate", () => {
-  let page;
-  let navigated = false;
-  let toastTitle = "";
+test("feedback quick action navigates to feedback page", () => {
+  let navigatedUrl = "";
 
-  page = loadProfilePage({
-    navigateTo() {
-      navigated = true;
-    },
-    showToast(options) {
-      toastTitle = options.title;
+  const page = loadProfilePage({
+    navigateTo(options) {
+      navigatedUrl = options.url;
     },
   });
 
   page.handleQuickAction({ currentTarget: { dataset: { key: "feedback" } } });
 
-  assert.equal(navigated, false);
-  assert.equal(toastTitle, "入口后续开放");
+  assert.equal(navigatedUrl, "/pages/feedback/index?source=profile");
 });
 
 test("notice quick action navigates to notifications page", () => {
