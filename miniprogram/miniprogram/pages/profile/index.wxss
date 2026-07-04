@@ -141,6 +141,32 @@ page {
   justify-content: center;
 }
 
+.quick-contact-shell {
+  position: relative;
+  overflow: hidden;
+}
+
+.quick-contact-button {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  box-sizing: border-box;
+  line-height: normal;
+  z-index: 2;
+}
+
+.quick-contact-button::after {
+  border: none;
+}
+
 .quick-icon-image {
   width: 52rpx;
   height: 52rpx;

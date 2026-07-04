@@ -1,4 +1,8 @@
 const PROFILE_STORAGE_KEY = "wineProfileInfo";
+const {
+  CUSTOMER_SERVICE_SOURCE,
+  buildCustomerSessionFrom,
+} = require("../../utils/customerServiceData");
 
 const DEFAULT_PROFILE_INFO = {
   nickname: "微信名称",
@@ -32,6 +36,9 @@ Page({
       { key: "service", iconSrc: "/assets/profile/icon-service.png", title: "联系客服" },
       { key: "feedback", iconSrc: "/assets/profile/icon-feedback.png", title: "意见反馈" },
     ],
+    customerServiceSessionFrom: buildCustomerSessionFrom({
+      source: CUSTOMER_SERVICE_SOURCE.PROFILE,
+    }),
     flowSteps: [
       { step: "1", title: "沟通需求", subtitle: "确认酒类、包装类型、预算定位" },
       { step: "2", title: "确认方向", subtitle: "选择风格参考与包装组合" },
@@ -185,5 +192,9 @@ Page({
       title: "入口后续开放",
       icon: "none",
     });
+  },
+
+  handleContact(event) {
+    console.log("客服会话入口", event.detail || {});
   },
 });

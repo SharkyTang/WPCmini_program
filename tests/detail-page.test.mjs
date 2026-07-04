@@ -25,3 +25,12 @@ test("detail page does not show duplicate return-to-filter button", () => {
   assert.equal(wxml.includes("返回继续筛选"), false);
   assert.equal(wxml.includes("返回首页"), true);
 });
+
+test("detail consult action opens official customer service", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+
+  assert.equal(wxml.includes('open-type="contact"'), true);
+  assert.equal(wxml.includes('session-from="{{customerServiceSessionFrom}}"'), true);
+  assert.equal(wxml.includes('bindcontact="handleContact"'), true);
+  assert.equal(wxml.includes('bindtap="showConsultTip"'), false);
+});

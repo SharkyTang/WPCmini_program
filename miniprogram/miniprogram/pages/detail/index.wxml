@@ -50,7 +50,14 @@
       </view>
     </view>
 
-    <view class="consult-button" bindtap="showConsultTip">咨询同款包装方案</view>
+    <button
+      class="consult-button consult-contact-button"
+      open-type="contact"
+      session-from="{{customerServiceSessionFrom}}"
+      bindcontact="handleContact"
+    >
+      咨询同款包装方案
+    </button>
   </view>
 
   <view wx:if="{{imagePreviewVisible}}" class="image-preview-layer" bindtap="closeImagePreview">

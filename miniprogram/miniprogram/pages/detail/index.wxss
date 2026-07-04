@@ -199,6 +199,16 @@ page {
   font-weight: 800;
 }
 
+.consult-contact-button {
+  padding: 0;
+  border: none;
+  line-height: normal;
+}
+
+.consult-contact-button::after {
+  border: none;
+}
+
 .back-button {
   margin-top: 20rpx;
   height: 76rpx;

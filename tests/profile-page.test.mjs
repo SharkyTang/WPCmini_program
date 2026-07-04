@@ -16,11 +16,27 @@ const wxmlPath = resolve(
 
 function loadProfilePage(wxMock = {}) {
   const source = readFileSync(modulePath, "utf8");
+  const customerServiceModule = { exports: {} };
+  vm.runInNewContext(
+    readFileSync(
+      resolve(__dirname, "../miniprogram/miniprogram/utils/customerServiceData.js"),
+      "utf8"
+    ),
+    { module: customerServiceModule, exports: customerServiceModule.exports },
+    { filename: "customerServiceData.js" }
+  );
   let pageConfig;
   const sandbox = {
     Page(config) {
       pageConfig = config;
     },
+    require(moduleName) {
+      if (moduleName === "../../utils/customerServiceData") {
+        return customerServiceModule.exports;
+      }
+      throw new Error(`Unexpected require: ${moduleName}`);
+    },
+    console,
     wx: {
       navigateTo() {},
       showToast() {},
@@ -84,6 +100,14 @@ test("feedback quick action navigates to feedback page", () => {
   page.handleQuickAction({ currentTarget: { dataset: { key: "feedback" } } });
 
   assert.equal(navigatedUrl, "/pages/feedback/index?source=profile");
+});
+
+test("service quick action uses official customer service button", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+
+  assert.equal(wxml.includes('open-type="contact"'), true);
+  assert.equal(wxml.includes('session-from="{{customerServiceSessionFrom}}"'), true);
+  assert.equal(wxml.includes('bindcontact="handleContact"'), true);
 });
 
 test("notice quick action navigates to notifications page", () => {

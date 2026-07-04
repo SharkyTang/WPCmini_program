@@ -1,6 +1,10 @@
 const { fetchCaseById } = require("../../utils/cloudData");
 const { formatJoined } = require("../../utils/caseData");
 const {
+  CUSTOMER_SERVICE_SOURCE,
+  buildCustomerSessionFrom,
+} = require("../../utils/customerServiceData");
+const {
   fetchFavoriteForCase,
   toggleFavorite,
 } = require("../../utils/favoriteService");
@@ -57,6 +61,9 @@ Page({
     isFavorited: false,
     favoriteLoading: false,
     imagePreviewVisible: false,
+    customerServiceSessionFrom: buildCustomerSessionFrom({
+      source: CUSTOMER_SERVICE_SOURCE.DETAIL,
+    }),
   },
 
   onLoad(options) {
@@ -86,6 +93,10 @@ Page({
         displayTags: caseItem.tags,
         detailHeading: buildDetailHeading(caseItem),
         detailSubtitle: buildDetailSubtitle(caseItem),
+        customerServiceSessionFrom: buildCustomerSessionFrom({
+          source: CUSTOMER_SERVICE_SOURCE.DETAIL,
+          caseItem,
+        }),
       });
       this.loadFavoriteState(caseItem);
       this.recordView(caseItem);
@@ -236,11 +247,8 @@ Page({
     });
   },
 
-  showConsultTip() {
-    wx.showToast({
-      title: "咨询入口后续开放",
-      icon: "none",
-    });
+  handleContact(event) {
+    console.log("案例客服会话入口", event.detail || {});
   },
 
   goBack() {

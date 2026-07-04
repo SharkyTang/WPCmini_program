@@ -21,16 +21,30 @@
   <view class="section quick-section">
     <view class="section-title">常用功能</view>
     <view class="quick-grid">
-      <view
-        wx:for="{{quickActions}}"
-        wx:key="key"
-        class="quick-item"
-        data-key="{{item.key}}"
-        bindtap="handleQuickAction"
-      >
-        <image class="quick-icon-image" src="{{item.iconSrc}}" mode="aspectFit" />
-        <view class="quick-title">{{item.title}}</view>
-      </view>
+      <block wx:for="{{quickActions}}" wx:key="key">
+        <view
+          wx:if="{{item.key === 'service'}}"
+          class="quick-item quick-contact-shell"
+        >
+          <image class="quick-icon-image" src="{{item.iconSrc}}" mode="aspectFit" />
+          <view class="quick-title">{{item.title}}</view>
+          <button
+            class="quick-contact-button"
+            open-type="contact"
+            session-from="{{customerServiceSessionFrom}}"
+            bindcontact="handleContact"
+          ></button>
+        </view>
+        <view
+          wx:else
+          class="quick-item"
+          data-key="{{item.key}}"
+          bindtap="handleQuickAction"
+        >
+          <image class="quick-icon-image" src="{{item.iconSrc}}" mode="aspectFit" />
+          <view class="quick-title">{{item.title}}</view>
+        </view>
+      </block>
     </view>
   </view>
 

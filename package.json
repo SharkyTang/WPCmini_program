@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node server.mjs",
-    "test": "node tests/case-classifier.test.mjs && node tests/ai-style.test.mjs && node tests/miniprogram-data.test.mjs && node tests/cloud-data.test.mjs && node tests/favorite-data.test.mjs && node tests/history-data.test.mjs && node tests/notification-data.test.mjs && node tests/feedback-data.test.mjs && node tests/profile-page.test.mjs && node tests/detail-page.test.mjs && node tests/import-wine-packaging.test.mjs",
+    "test": "node tests/case-classifier.test.mjs && node tests/ai-style.test.mjs && node tests/miniprogram-data.test.mjs && node tests/cloud-data.test.mjs && node tests/favorite-data.test.mjs && node tests/history-data.test.mjs && node tests/notification-data.test.mjs && node tests/feedback-data.test.mjs && node tests/customer-service-data.test.mjs && node tests/profile-page.test.mjs && node tests/detail-page.test.mjs && node tests/import-wine-packaging.test.mjs",
     "import:cases:dry": "node scripts/import-wine-packaging.mjs --dry-run",
     "import:cases": "node scripts/import-wine-packaging.mjs"
   },
