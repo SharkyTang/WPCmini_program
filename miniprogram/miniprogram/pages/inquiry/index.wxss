@@ -1,0 +1,189 @@
+page {
+  min-height: 100%;
+  background: #f7f3ec;
+  color: #241d16;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+}
+
+.page {
+  min-height: 100vh;
+  padding: 58rpx 40rpx 92rpx;
+  box-sizing: border-box;
+}
+
+.hero {
+  margin-bottom: 28rpx;
+}
+
+.page-title {
+  font-size: 44rpx;
+  line-height: 1.2;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.page-subtitle {
+  margin-top: 10rpx;
+  color: #766b60;
+  font-size: 25rpx;
+  line-height: 1.45;
+}
+
+.source-card,
+.form-card {
+  border: 2rpx solid #dfcfb7;
+  border-radius: 8rpx;
+  background: #fffdf9;
+  box-sizing: border-box;
+}
+
+.source-card {
+  margin-bottom: 24rpx;
+  padding: 22rpx 24rpx;
+  color: #766b60;
+  font-size: 24rpx;
+  line-height: 1.45;
+}
+
+.source-label {
+  color: #b77a2d;
+  font-size: 22rpx;
+  font-weight: 800;
+}
+
+.source-title {
+  margin-top: 6rpx;
+  color: #241d16;
+  font-size: 28rpx;
+  line-height: 1.35;
+  font-weight: 800;
+}
+
+.source-subtitle {
+  margin-top: 4rpx;
+  color: #8c8176;
+  font-size: 22rpx;
+}
+
+.source-error {
+  color: #9d2b22;
+  background: #fff5f2;
+  border-color: #efc3ba;
+}
+
+.form-card {
+  padding: 28rpx 26rpx 32rpx;
+}
+
+.field + .field {
+  margin-top: 32rpx;
+}
+
+.field-heading {
+  min-height: 36rpx;
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.field-title {
+  color: #241d16;
+  font-size: 28rpx;
+  line-height: 1.3;
+  font-weight: 800;
+}
+
+.field-required,
+.field-optional {
+  font-size: 21rpx;
+  line-height: 1.2;
+}
+
+.field-required {
+  color: #b77a2d;
+}
+
+.field-optional {
+  color: #8c8176;
+}
+
+.chip-list {
+  margin-top: 18rpx;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14rpx;
+}
+
+.option-chip {
+  max-width: 100%;
+  padding: 14rpx 24rpx;
+  border: 2rpx solid #dfcfb7;
+  border-radius: 999rpx;
+  color: #766b60;
+  background: #fffdf9;
+  font-size: 24rpx;
+  line-height: 1.2;
+  font-weight: 700;
+  box-sizing: border-box;
+}
+
+.option-chip-active {
+  border-color: #241d16;
+  background: #241d16;
+  color: #fff;
+}
+
+.textarea,
+.input {
+  width: 100%;
+  margin-top: 16rpx;
+  border: 2rpx solid #dfcfb7;
+  border-radius: 8rpx;
+  background: #fff;
+  color: #241d16;
+  font-size: 25rpx;
+  line-height: 1.45;
+  box-sizing: border-box;
+}
+
+.textarea {
+  min-height: 220rpx;
+  padding: 20rpx;
+}
+
+.input {
+  height: 82rpx;
+  padding: 0 20rpx;
+}
+
+.field-helper {
+  margin-top: 10rpx;
+  color: #9c9184;
+  font-size: 21rpx;
+  line-height: 1.3;
+  text-align: right;
+}
+
+.submit-button {
+  margin-top: 34rpx;
+  height: 82rpx;
+  border-radius: 41rpx;
+  background: #241d16;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 27rpx;
+  font-weight: 800;
+  padding: 0;
+  border: none;
+  line-height: normal;
+}
+
+.submit-button::after {
+  border: none;
+}
+
+.submit-button-disabled {
+  opacity: 0.62;
+}

@@ -251,6 +251,16 @@ Page({
     console.log("案例客服会话入口", event.detail || {});
   },
 
+  openInquiryForm() {
+    const caseItem = this.data.caseItem;
+    if (!caseItem) return;
+
+    const caseDocId = caseItem.id || caseItem._id || caseItem.caseId;
+    wx.navigateTo({
+      url: `/pages/inquiry/index?source=detail&id=${encodeURIComponent(caseDocId)}`,
+    });
+  },
+
   goBack() {
     wx.navigateBack({
       fail() {

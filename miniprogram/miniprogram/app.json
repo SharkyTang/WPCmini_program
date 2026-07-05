@@ -7,6 +7,7 @@
     "pages/history/index",
     "pages/notifications/index",
     "pages/feedback/index",
+    "pages/inquiry/index",
     "pages/detail/index"
   ],
   "window": {

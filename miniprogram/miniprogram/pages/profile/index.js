@@ -194,6 +194,12 @@ Page({
     });
   },
 
+  openInquiryForm() {
+    wx.navigateTo({
+      url: "/pages/inquiry/index?source=profile",
+    });
+  },
+
   handleContact(event) {
     console.log("客服会话入口", event.detail || {});
   },

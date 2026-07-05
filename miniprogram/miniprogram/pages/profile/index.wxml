@@ -59,6 +59,7 @@
         </view>
       </view>
     </view>
+    <view class="inquiry-entry" bindtap="openInquiryForm">提交定制需求</view>
   </view>
 
   <view class="section">

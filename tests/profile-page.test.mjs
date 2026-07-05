@@ -102,6 +102,23 @@ test("feedback quick action navigates to feedback page", () => {
   assert.equal(navigatedUrl, "/pages/feedback/index?source=profile");
 });
 
+test("profile inquiry button navigates to inquiry page", () => {
+  let navigatedUrl = "";
+  const wxml = readFileSync(wxmlPath, "utf8");
+
+  const page = loadProfilePage({
+    navigateTo(options) {
+      navigatedUrl = options.url;
+    },
+  });
+
+  page.openInquiryForm();
+
+  assert.equal(wxml.includes('bindtap="openInquiryForm"'), true);
+  assert.equal(wxml.includes("提交定制需求"), true);
+  assert.equal(navigatedUrl, "/pages/inquiry/index?source=profile");
+});
+
 test("service quick action uses official customer service button", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
 

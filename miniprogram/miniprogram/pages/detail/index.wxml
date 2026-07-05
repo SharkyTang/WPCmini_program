@@ -50,6 +50,8 @@
       </view>
     </view>
 
+    <view class="inquiry-button" bindtap="openInquiryForm">提交定制需求</view>
+
     <button
       class="consult-button consult-contact-button"
       open-type="contact"

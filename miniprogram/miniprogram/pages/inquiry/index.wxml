@@ -1,0 +1,77 @@
+<view class="page">
+  <view class="hero">
+    <view class="page-title">定制需求</view>
+    <view class="page-subtitle">告诉我们你想做哪类酒包装，方便后续沟通。</view>
+  </view>
+
+  <view wx:if="{{caseLoading}}" class="source-card">正在带入参考案例...</view>
+  <view wx:elif="{{caseItem}}" class="source-card">
+    <view class="source-label">参考案例</view>
+    <view class="source-title">{{caseItem.title}}</view>
+    <view class="source-subtitle">{{caseItem.caseId}}</view>
+  </view>
+  <view wx:elif="{{caseError}}" class="source-card source-error">{{caseError}}</view>
+
+  <view class="form-card">
+    <view wx:for="{{optionGroups}}" wx:key="key" wx:for-item="group" class="field">
+      <view class="field-heading">
+        <view class="field-title">{{group.title}}</view>
+        <view wx:if="{{group.key === 'packageTypes'}}" class="field-required">必填</view>
+        <view wx:elif="{{group.key !== 'wineType'}}" class="field-optional">选填</view>
+      </view>
+      <view class="chip-list">
+        <view
+          wx:for="{{group.options}}"
+          wx:key="label"
+          wx:for-item="option"
+          class="option-chip {{option.selected ? 'option-chip-active' : ''}}"
+          data-key="{{group.key}}"
+          data-type="{{group.type}}"
+          data-value="{{option.label}}"
+          bindtap="toggleOption"
+        >
+          {{option.label}}
+        </view>
+      </view>
+    </view>
+
+    <view class="field">
+      <view class="field-heading">
+        <view class="field-title">补充说明</view>
+        <view class="field-required">必填</view>
+      </view>
+      <textarea
+        class="textarea"
+        value="{{draft.content}}"
+        maxlength="{{contentMaxLength}}"
+        placeholder="比如想做整套包装、偏国风、用于送礼，需要什么尺寸或预算方向..."
+        bindinput="updateContent"
+      />
+      <view class="field-helper">{{draft.content.length}}/{{contentMaxLength}}</view>
+    </view>
+
+    <view class="field">
+      <view class="field-heading">
+        <view class="field-title">联系方式</view>
+        <view class="field-required">必填</view>
+      </view>
+      <input
+        class="input"
+        value="{{draft.contact}}"
+        maxlength="{{contactMaxLength}}"
+        placeholder="微信号 / 手机 / 邮箱"
+        bindinput="updateContact"
+      />
+      <view class="field-helper">{{draft.contact.length}}/{{contactMaxLength}}</view>
+    </view>
+  </view>
+
+  <button
+    class="submit-button {{submitting ? 'submit-button-disabled' : ''}}"
+    loading="{{submitting}}"
+    disabled="{{submitting}}"
+    bindtap="submitForm"
+  >
+    {{submitting ? '正在提交' : '提交定制需求'}}
+  </button>
+</view>

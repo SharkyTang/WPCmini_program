@@ -34,3 +34,11 @@ test("detail consult action opens official customer service", () => {
   assert.equal(wxml.includes('bindcontact="handleContact"'), true);
   assert.equal(wxml.includes('bindtap="showConsultTip"'), false);
 });
+
+test("detail page keeps customer service and adds inquiry action", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+
+  assert.equal(wxml.includes("咨询同款包装方案"), true);
+  assert.equal(wxml.includes("提交定制需求"), true);
+  assert.equal(wxml.includes('bindtap="openInquiryForm"'), true);
+});
