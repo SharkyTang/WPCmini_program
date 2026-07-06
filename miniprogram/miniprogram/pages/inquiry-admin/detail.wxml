@@ -1,0 +1,93 @@
+<view class="page">
+  <view wx:if="{{loading}}" class="state-card">正在加载需求详情...</view>
+
+  <view wx:elif="{{errorMessage}}" class="state-card">
+    <view class="state-title">加载失败</view>
+    <view class="state-text">{{errorMessage}}</view>
+    <view class="state-button" bindtap="retry">重试</view>
+  </view>
+
+  <block wx:elif="{{item}}">
+    <view class="hero">
+      <view class="page-title">需求详情</view>
+      <view class="page-subtitle">{{item.createdAtText}}</view>
+    </view>
+
+    <view class="section">
+      <view class="section-head">
+        <view class="status-badge status-{{item.status}}">{{item.statusLabel}}</view>
+        <picker
+          range="{{statusOptions}}"
+          range-key="label"
+          value="{{statusIndex}}"
+          bindchange="onStatusChange"
+          disabled="{{savingStatus}}"
+        >
+          <view class="status-picker">{{savingStatus ? '更新中...' : '修改状态'}}</view>
+        </picker>
+      </view>
+
+      <view class="info-row">
+        <view class="info-label">联系方式</view>
+        <view class="info-value">{{item.contact || '未填写'}}</view>
+      </view>
+      <view class="copy-button" bindtap="copyContact">复制联系方式</view>
+    </view>
+
+    <view class="section">
+      <view class="section-title">需求信息</view>
+      <view class="info-row">
+        <view class="info-label">来源</view>
+        <view class="info-value">{{item.sourceLabel}}</view>
+      </view>
+      <view class="info-row">
+        <view class="info-label">酒类</view>
+        <view class="info-value">{{item.wineType || '未选择'}}</view>
+      </view>
+      <view class="info-row">
+        <view class="info-label">包装内容</view>
+        <view class="info-value">{{item.packageSummary || '未选择'}}</view>
+      </view>
+      <view class="info-row">
+        <view class="info-label">风格</view>
+        <view class="info-value">{{item.styleSummary || '未选择'}}</view>
+      </view>
+      <view class="info-row">
+        <view class="info-label">价位感</view>
+        <view class="info-value">{{item.priceLevel || '未选择'}}</view>
+      </view>
+      <view class="info-row">
+        <view class="info-label">使用场景</view>
+        <view class="info-value">{{item.sceneSummary || '未选择'}}</view>
+      </view>
+      <view class="content-box">{{item.content || '无补充说明'}}</view>
+    </view>
+
+    <view wx:if="{{item.caseDocId || item.caseId || item.caseTitle}}" class="section">
+      <view class="section-title">参考案例</view>
+      <view class="info-row">
+        <view class="info-label">案例编号</view>
+        <view class="info-value">{{item.caseId || '-'}}</view>
+      </view>
+      <view class="info-row">
+        <view class="info-label">案例标题</view>
+        <view class="info-value">{{item.caseTitle || '-'}}</view>
+      </view>
+      <view class="outline-button" bindtap="goToCaseDetail">查看参考案例</view>
+    </view>
+
+    <view class="section">
+      <view class="section-title">管理员备注</view>
+      <textarea
+        class="note-input"
+        value="{{adminNote}}"
+        maxlength="500"
+        placeholder="记录沟通进度、跟进结果或注意事项"
+        bindinput="onAdminNoteInput"
+      />
+      <view class="save-button {{savingNote ? 'save-button-disabled' : ''}}" bindtap="saveAdminNote">
+        {{savingNote ? '保存中...' : '保存备注'}}
+      </view>
+    </view>
+  </block>
+</view>

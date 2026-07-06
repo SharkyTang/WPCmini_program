@@ -8,6 +8,8 @@
     "pages/notifications/index",
     "pages/feedback/index",
     "pages/inquiry/index",
+    "pages/inquiry-admin/index",
+    "pages/inquiry-admin/detail",
     "pages/detail/index"
   ],
   "window": {

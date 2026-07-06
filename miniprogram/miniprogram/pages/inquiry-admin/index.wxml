@@ -1,0 +1,80 @@
+<view class="page">
+  <view class="hero">
+    <view class="page-title">需求管理</view>
+    <view class="page-subtitle">查看和跟进用户提交的定制需求</view>
+  </view>
+
+  <view wx:if="{{isCheckingAccess}}" class="state-card">正在检查权限...</view>
+
+  <view wx:elif="{{!isAdmin}}" class="state-card">
+    <view class="state-title">无权限</view>
+    <view class="state-text">当前微信身份不是需求管理员。</view>
+  </view>
+
+  <block wx:else>
+    <scroll-view class="status-scroll" scroll-x>
+      <view class="status-row">
+        <view
+          wx:for="{{statusOptions}}"
+          wx:key="value"
+          class="status-pill {{activeStatus === item.value ? 'status-pill-active' : ''}}"
+          data-status="{{item.value}}"
+          bindtap="selectStatus"
+        >
+          {{item.label}}
+        </view>
+      </view>
+    </scroll-view>
+
+    <view class="search-card">
+      <input
+        class="search-input"
+        value="{{keyword}}"
+        placeholder="搜索联系方式、案例编号、标题、说明"
+        confirm-type="search"
+        bindinput="onKeywordInput"
+        bindconfirm="searchInquiries"
+      />
+      <view class="search-action" bindtap="searchInquiries">搜索</view>
+      <view wx:if="{{keyword}}" class="search-clear" bindtap="clearKeyword">清空</view>
+    </view>
+
+    <view wx:if="{{errorMessage}}" class="state-card">
+      <view class="state-title">加载失败</view>
+      <view class="state-text">{{errorMessage}}</view>
+      <view class="state-button" bindtap="retry">重试</view>
+    </view>
+
+    <view wx:elif="{{loading}}" class="state-card">正在加载需求...</view>
+
+    <view wx:elif="{{!inquiries.length}}" class="state-card">
+      <view class="state-title">暂无需求</view>
+      <view class="state-text">当前筛选条件下没有定制需求。</view>
+    </view>
+
+    <view wx:else class="inquiry-list">
+      <view
+        wx:for="{{inquiries}}"
+        wx:key="id"
+        class="inquiry-card"
+        data-id="{{item.id}}"
+        bindtap="openDetail"
+      >
+        <view class="card-top">
+          <view class="status-badge status-{{item.status}}">{{item.statusLabel}}</view>
+          <view class="created-time">{{item.createdAtText}}</view>
+        </view>
+        <view class="contact-line">联系方式：{{item.contact || '未填写'}}</view>
+        <view class="meta-line">包装：{{item.packageSummary || '未选择'}}</view>
+        <view class="meta-line">风格：{{item.styleSummary || '未选择'}} · 价位：{{item.priceLevel || '未选择'}}</view>
+        <view class="meta-line">场景：{{item.sceneSummary || '未选择'}} · 来源：{{item.sourceLabel}}</view>
+        <view wx:if="{{item.caseId || item.caseTitle}}" class="case-line">
+          参考案例：{{item.caseId || '-'}} {{item.caseTitle}}
+        </view>
+        <view class="content-preview">{{item.contentPreview || '无补充说明'}}</view>
+      </view>
+      <view wx:if="{{loadingMore}}" class="list-tip">正在加载更多...</view>
+      <view wx:elif="{{!hasMore}}" class="list-tip">已显示全部需求</view>
+    </view>
+  </block>
+</view>

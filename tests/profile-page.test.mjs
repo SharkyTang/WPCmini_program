@@ -14,7 +14,7 @@ const wxmlPath = resolve(
   "../miniprogram/miniprogram/pages/profile/index.wxml"
 );
 
-function loadProfilePage(wxMock = {}) {
+function loadProfilePage(wxMock = {}, options = {}) {
   const source = readFileSync(modulePath, "utf8");
   const customerServiceModule = { exports: {} };
   vm.runInNewContext(
@@ -33,6 +33,12 @@ function loadProfilePage(wxMock = {}) {
     require(moduleName) {
       if (moduleName === "../../utils/customerServiceData") {
         return customerServiceModule.exports;
+      }
+      if (moduleName === "../../utils/inquiryAdminService") {
+        return {
+          checkInquiryAdminAccess:
+            options.checkInquiryAdminAccess || (async () => false),
+        };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
@@ -54,9 +60,9 @@ function loadProfilePage(wxMock = {}) {
   return pageConfig;
 }
 
-function test(name, fn) {
+async function test(name, fn) {
   try {
-    fn();
+    await fn();
     console.log(`ok - ${name}`);
   } catch (error) {
     console.error(`not ok - ${name}`);
@@ -68,7 +74,7 @@ function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-test("profile quick actions include feedback with image icon paths", () => {
+await test("profile quick actions include feedback with image icon paths", () => {
   const page = loadProfilePage();
   const actions = page.data.quickActions;
 
@@ -88,7 +94,7 @@ test("profile quick actions include feedback with image icon paths", () => {
   ]);
 });
 
-test("feedback quick action navigates to feedback page", () => {
+await test("feedback quick action navigates to feedback page", () => {
   let navigatedUrl = "";
 
   const page = loadProfilePage({
@@ -102,7 +108,7 @@ test("feedback quick action navigates to feedback page", () => {
   assert.equal(navigatedUrl, "/pages/feedback/index?source=profile");
 });
 
-test("profile inquiry button navigates to inquiry page", () => {
+await test("profile inquiry button navigates to inquiry page", () => {
   let navigatedUrl = "";
   const wxml = readFileSync(wxmlPath, "utf8");
 
@@ -119,7 +125,7 @@ test("profile inquiry button navigates to inquiry page", () => {
   assert.equal(navigatedUrl, "/pages/inquiry/index?source=profile");
 });
 
-test("service quick action uses official customer service button", () => {
+await test("service quick action uses official customer service button", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
 
   assert.equal(wxml.includes('open-type="contact"'), true);
@@ -127,7 +133,7 @@ test("service quick action uses official customer service button", () => {
   assert.equal(wxml.includes('bindcontact="handleContact"'), true);
 });
 
-test("notice quick action navigates to notifications page", () => {
+await test("notice quick action navigates to notifications page", () => {
   let navigatedUrl = "";
 
   const page = loadProfilePage({
@@ -141,7 +147,7 @@ test("notice quick action navigates to notifications page", () => {
   assert.equal(navigatedUrl, "/pages/notifications/index");
 });
 
-test("profile card opens editor with current profile draft", () => {
+await test("profile card opens editor with current profile draft", () => {
   const page = loadProfilePage({
     getStorageSync() {
       return {
@@ -161,7 +167,7 @@ test("profile card opens editor with current profile draft", () => {
   });
 });
 
-test("profile editor sheet does not use native avatar or nickname controls", () => {
+await test("profile editor sheet does not use native avatar or nickname controls", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
 
   assert.equal(wxml.includes('open-type="chooseAvatar"'), false);
@@ -170,7 +176,7 @@ test("profile editor sheet does not use native avatar or nickname controls", () 
   assert.equal(wxml.includes("bindblur=\"onNicknameBlur\""), false);
 });
 
-test("choosing avatar from album updates and stores profile draft", () => {
+await test("choosing avatar from album updates and stores profile draft", () => {
   let chooseMediaOptions;
   let storedValue;
   const page = loadProfilePage({
@@ -198,7 +204,7 @@ test("choosing avatar from album updates and stores profile draft", () => {
   });
 });
 
-test("taking profile photo uses camera source and stores profile draft", () => {
+await test("taking profile photo uses camera source and stores profile draft", () => {
   let chooseMediaOptions;
   let storedValue;
   const page = loadProfilePage({
@@ -225,4 +231,27 @@ test("taking profile photo uses camera source and stores profile draft", () => {
     nickname: "微信名称",
     avatarUrl: "/tmp/camera-avatar.png",
   });
+});
+
+await test("profile shows inquiry admin entry only for admins", async () => {
+  let navigatedUrl = "";
+  const wxml = readFileSync(wxmlPath, "utf8");
+  const page = loadProfilePage(
+    {
+      navigateTo(options) {
+        navigatedUrl = options.url;
+      },
+    },
+    {
+      checkInquiryAdminAccess: async () => true,
+    }
+  );
+
+  await page.refreshInquiryAdminAccess();
+  page.openInquiryAdmin();
+
+  assert.equal(wxml.includes("hasInquiryAdminAccess"), true);
+  assert.equal(wxml.includes("需求管理"), true);
+  assert.equal(page.data.hasInquiryAdminAccess, true);
+  assert.equal(navigatedUrl, "/pages/inquiry-admin/index");
 });

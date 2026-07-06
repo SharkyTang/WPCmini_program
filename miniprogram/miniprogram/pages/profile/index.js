@@ -3,6 +3,9 @@ const {
   CUSTOMER_SERVICE_SOURCE,
   buildCustomerSessionFrom,
 } = require("../../utils/customerServiceData");
+const {
+  checkInquiryAdminAccess,
+} = require("../../utils/inquiryAdminService");
 
 const DEFAULT_PROFILE_INFO = {
   nickname: "微信名称",
@@ -29,6 +32,8 @@ Page({
       avatarUrl: "",
     },
     isProfileEditorVisible: false,
+    hasInquiryAdminAccess: false,
+    checkingInquiryAdminAccess: false,
     quickActions: [
       { key: "favorites", iconSrc: "/assets/profile/icon-favorite.png", title: "我的收藏" },
       { key: "history", iconSrc: "/assets/profile/icon-history.png", title: "浏览记录" },
@@ -55,6 +60,10 @@ Page({
 
   onLoad() {
     this.loadProfileInfo();
+  },
+
+  onShow() {
+    this.refreshInquiryAdminAccess();
   },
 
   loadProfileInfo() {
@@ -197,6 +206,25 @@ Page({
   openInquiryForm() {
     wx.navigateTo({
       url: "/pages/inquiry/index?source=profile",
+    });
+  },
+
+  async refreshInquiryAdminAccess() {
+    if (this.data.checkingInquiryAdminAccess) return;
+    this.setData({
+      checkingInquiryAdminAccess: true,
+    });
+
+    const hasInquiryAdminAccess = await checkInquiryAdminAccess();
+    this.setData({
+      hasInquiryAdminAccess,
+      checkingInquiryAdminAccess: false,
+    });
+  },
+
+  openInquiryAdmin() {
+    wx.navigateTo({
+      url: "/pages/inquiry-admin/index",
     });
   },
 
