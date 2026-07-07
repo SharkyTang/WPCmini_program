@@ -67,6 +67,13 @@
     >
       需求管理
     </view>
+    <view
+      wx:if="{{hasCaseAdminAccess}}"
+      class="inquiry-admin-entry"
+      bindtap="openCaseAdmin"
+    >
+      案例管理
+    </view>
   </view>
 
   <view class="section">

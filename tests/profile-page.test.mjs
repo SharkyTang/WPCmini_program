@@ -40,6 +40,12 @@ function loadProfilePage(wxMock = {}, options = {}) {
             options.checkInquiryAdminAccess || (async () => false),
         };
       }
+      if (moduleName === "../../utils/caseAdminService") {
+        return {
+          checkCaseAdminAccess:
+            options.checkCaseAdminAccess || (async () => false),
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     console,
@@ -254,4 +260,27 @@ await test("profile shows inquiry admin entry only for admins", async () => {
   assert.equal(wxml.includes("需求管理"), true);
   assert.equal(page.data.hasInquiryAdminAccess, true);
   assert.equal(navigatedUrl, "/pages/inquiry-admin/index");
+});
+
+await test("profile shows case admin entry only for admins", async () => {
+  let navigatedUrl = "";
+  const wxml = readFileSync(wxmlPath, "utf8");
+  const page = loadProfilePage(
+    {
+      navigateTo(options) {
+        navigatedUrl = options.url;
+      },
+    },
+    {
+      checkCaseAdminAccess: async () => true,
+    }
+  );
+
+  await page.refreshCaseAdminAccess();
+  page.openCaseAdmin();
+
+  assert.equal(wxml.includes("hasCaseAdminAccess"), true);
+  assert.equal(wxml.includes("案例管理"), true);
+  assert.equal(page.data.hasCaseAdminAccess, true);
+  assert.equal(navigatedUrl, "/pages/case-admin/index");
 });

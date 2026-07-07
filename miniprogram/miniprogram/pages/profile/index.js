@@ -6,6 +6,9 @@ const {
 const {
   checkInquiryAdminAccess,
 } = require("../../utils/inquiryAdminService");
+const {
+  checkCaseAdminAccess,
+} = require("../../utils/caseAdminService");
 
 const DEFAULT_PROFILE_INFO = {
   nickname: "微信名称",
@@ -34,6 +37,8 @@ Page({
     isProfileEditorVisible: false,
     hasInquiryAdminAccess: false,
     checkingInquiryAdminAccess: false,
+    hasCaseAdminAccess: false,
+    checkingCaseAdminAccess: false,
     quickActions: [
       { key: "favorites", iconSrc: "/assets/profile/icon-favorite.png", title: "我的收藏" },
       { key: "history", iconSrc: "/assets/profile/icon-history.png", title: "浏览记录" },
@@ -64,6 +69,7 @@ Page({
 
   onShow() {
     this.refreshInquiryAdminAccess();
+    this.refreshCaseAdminAccess();
   },
 
   loadProfileInfo() {
@@ -225,6 +231,25 @@ Page({
   openInquiryAdmin() {
     wx.navigateTo({
       url: "/pages/inquiry-admin/index",
+    });
+  },
+
+  async refreshCaseAdminAccess() {
+    if (this.data.checkingCaseAdminAccess) return;
+    this.setData({
+      checkingCaseAdminAccess: true,
+    });
+
+    const hasCaseAdminAccess = await checkCaseAdminAccess();
+    this.setData({
+      hasCaseAdminAccess,
+      checkingCaseAdminAccess: false,
+    });
+  },
+
+  openCaseAdmin() {
+    wx.navigateTo({
+      url: "/pages/case-admin/index",
     });
   },
 

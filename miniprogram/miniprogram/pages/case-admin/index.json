@@ -1,0 +1,5 @@
+{
+  "navigationBarTitleText": "案例管理",
+  "enablePullDownRefresh": true,
+  "onReachBottomDistance": 80
+}

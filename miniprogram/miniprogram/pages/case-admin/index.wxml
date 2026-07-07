@@ -1,0 +1,86 @@
+<view class="page">
+  <view class="hero">
+    <view>
+      <view class="page-title">案例管理</view>
+      <view class="page-subtitle">新增、编辑、隐藏酒包装案例</view>
+    </view>
+    <view wx:if="{{isAdmin}}" class="primary-action" bindtap="createCase">新增案例</view>
+  </view>
+
+  <view wx:if="{{isCheckingAccess}}" class="state-card">正在确认管理权限...</view>
+
+  <view wx:elif="{{!isAdmin}}" class="state-card">
+    <view class="state-title">暂无管理权限</view>
+    <view class="state-desc">只有管理员可以查看和维护案例。</view>
+    <view class="state-button" bindtap="retry">重新检查</view>
+  </view>
+
+  <block wx:else>
+    <view class="toolbar">
+      <view class="search-row">
+        <input
+          class="search-input"
+          value="{{keyword}}"
+          placeholder="搜索标题、编号、标签"
+          confirm-type="search"
+          bindinput="onKeywordInput"
+          bindconfirm="searchCases"
+        />
+        <view class="search-button" bindtap="searchCases">搜索</view>
+      </view>
+      <view wx:if="{{keyword}}" class="clear-keyword" bindtap="clearKeyword">清空搜索</view>
+      <view class="filter-row">
+        <view
+          wx:for="{{visibilityOptions}}"
+          wx:key="value"
+          class="filter-pill {{activeVisibility === item.value ? 'filter-pill-active' : ''}}"
+          data-value="{{item.value}}"
+          bindtap="selectVisibility"
+        >
+          {{item.label}}
+        </view>
+      </view>
+    </view>
+
+    <view wx:if="{{loading}}" class="state-card">正在读取案例...</view>
+
+    <view wx:elif="{{errorMessage}}" class="state-card">
+      <view class="state-title">读取失败</view>
+      <view class="state-desc">{{errorMessage}}</view>
+      <view class="state-button" bindtap="retry">重试</view>
+    </view>
+
+    <view wx:elif="{{!cases.length}}" class="state-card">
+      <view class="state-title">暂无案例</view>
+      <view class="state-desc">可以先新增一个隐藏案例，确认后再打开显示。</view>
+      <view class="state-button" bindtap="createCase">新增案例</view>
+    </view>
+
+    <view wx:else class="case-list">
+      <view wx:for="{{cases}}" wx:key="id" class="case-card">
+        <image class="case-cover" src="{{item.coverImageUrl}}" mode="aspectFill" />
+        <view class="case-copy">
+          <view class="case-head">
+            <view class="case-title">{{item.title}}</view>
+            <view class="status-badge {{item.isVisible ? 'status-visible' : 'status-hidden'}}">{{item.visibilityLabel}}</view>
+          </view>
+          <view class="case-meta">{{item.caseId || item.id}}</view>
+          <view class="case-tags">{{item.tagSummary || '暂无标签'}}</view>
+          <view class="case-actions">
+            <view class="case-action" data-id="{{item.id}}" bindtap="editCase">编辑</view>
+            <view
+              class="case-action danger"
+              data-id="{{item.id}}"
+              data-visible="{{!item.isVisible}}"
+              bindtap="toggleCaseVisibility"
+            >
+              {{item.isVisible ? '隐藏' : '恢复'}}
+            </view>
+          </view>
+        </view>
+      </view>
+      <view wx:if="{{loadingMore}}" class="list-foot">继续读取...</view>
+      <view wx:elif="{{!hasMore}}" class="list-foot">已显示全部案例</view>
+    </view>
+  </block>
+</view>

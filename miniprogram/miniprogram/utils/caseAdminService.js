@@ -1,0 +1,152 @@
+const {
+  CASE_ADMIN_VISIBILITY_OPTIONS,
+  normalizeCaseAdminItem,
+  normalizeCaseAdminKeyword,
+} = require("./caseAdminData");
+
+const CASE_ADMIN_FUNCTION = "caseAdmin";
+const DEFAULT_PAGE_SIZE = 20;
+const TEMP_FILE_URL_BATCH_SIZE = 50;
+
+function normalizeFunctionResult(response) {
+  const result = (response && response.result) || {};
+  if (result.ok === false) {
+    const error = new Error(result.message || "案例管理请求失败");
+    error.code = result.code || "CASE_ADMIN_ERROR";
+    throw error;
+  }
+  return result;
+}
+
+async function callCaseAdmin(action, payload = {}) {
+  if (!wx.cloud) {
+    throw new Error("当前基础库不支持云开发");
+  }
+
+  const response = await wx.cloud.callFunction({
+    name: CASE_ADMIN_FUNCTION,
+    data: {
+      action,
+      ...payload,
+    },
+  });
+  return normalizeFunctionResult(response);
+}
+
+function isCloudFileId(value) {
+  return typeof value === "string" && value.indexOf("cloud://") === 0;
+}
+
+function chunkList(items, size) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+async function getTempUrlMap(fileIds) {
+  const uniqueFileIds = Array.from(new Set(fileIds.filter(isCloudFileId)));
+  if (!uniqueFileIds.length) return {};
+
+  try {
+    const responses = await Promise.all(
+      chunkList(uniqueFileIds, TEMP_FILE_URL_BATCH_SIZE).map((fileList) =>
+        wx.cloud.getTempFileURL({ fileList })
+      )
+    );
+    return responses.reduce((map, response) => {
+      (response.fileList || []).forEach((item) => {
+        map[item.fileID] = item.tempFileURL || item.fileID;
+      });
+      return map;
+    }, {});
+  } catch (error) {
+    console.warn("案例管理图片临时链接获取失败，将尝试直接使用 cloudID", error);
+    return {};
+  }
+}
+
+async function attachCaseCoverUrls(cases) {
+  const tempUrlMap = await getTempUrlMap(cases.map((item) => item.coverImage));
+  return cases.map((item) => ({
+    ...item,
+    coverImageUrl: tempUrlMap[item.coverImage] || item.coverImage,
+  }));
+}
+
+async function checkCaseAdminAccess() {
+  try {
+    const result = await callCaseAdmin("checkAccess");
+    return Boolean(result.isAdmin);
+  } catch (error) {
+    console.warn("案例管理权限检查失败", error);
+    return false;
+  }
+}
+
+async function fetchCaseAdminList(options = {}) {
+  const result = await callCaseAdmin("listCases", {
+    visibility: options.visibility || "all",
+    keyword: normalizeCaseAdminKeyword(options.keyword),
+    page: options.page || 1,
+    pageSize: options.pageSize || DEFAULT_PAGE_SIZE,
+  });
+  const items = (result.items || []).map(normalizeCaseAdminItem);
+
+  return {
+    items: await attachCaseCoverUrls(items),
+    page: result.page || 1,
+    pageSize: result.pageSize || DEFAULT_PAGE_SIZE,
+    hasMore: Boolean(result.hasMore),
+  };
+}
+
+async function fetchCaseAdminDetail(id) {
+  const result = await callCaseAdmin("getCase", { id });
+  const item = normalizeCaseAdminItem(result.item);
+  const items = await attachCaseCoverUrls(item ? [item] : []);
+  return items[0] || null;
+}
+
+async function createCaseAdmin(caseData) {
+  return callCaseAdmin("createCase", { case: caseData });
+}
+
+async function updateCaseAdmin(id, caseData) {
+  return callCaseAdmin("updateCase", { id, case: caseData });
+}
+
+async function setCaseVisibility(id, isVisible) {
+  return callCaseAdmin("setCaseVisibility", { id, isVisible });
+}
+
+async function uploadCaseCoverImage(input, maybeCloudPath) {
+  const filePath = typeof input === "object" && input ? input.filePath : input;
+  const cloudPath = typeof input === "object" && input ? input.cloudPath : maybeCloudPath;
+
+  if (!wx.cloud) {
+    throw new Error("当前基础库不支持云开发");
+  }
+  if (!filePath || !cloudPath) {
+    throw new Error("缺少上传图片路径");
+  }
+
+  const response = await wx.cloud.uploadFile({
+    cloudPath,
+    filePath,
+  });
+  return response.fileID;
+}
+
+module.exports = {
+  CASE_ADMIN_VISIBILITY_OPTIONS,
+  DEFAULT_PAGE_SIZE,
+  checkCaseAdminAccess,
+  createCaseAdmin,
+  fetchCaseAdminDetail,
+  fetchCaseAdminList,
+  setCaseVisibility,
+  updateCaseAdmin,
+  uploadCaseCoverImage,
+};

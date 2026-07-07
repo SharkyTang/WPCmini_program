@@ -10,6 +10,8 @@
     "pages/inquiry/index",
     "pages/inquiry-admin/index",
     "pages/inquiry-admin/detail",
+    "pages/case-admin/index",
+    "pages/case-admin/edit",
     "pages/detail/index"
   ],
   "window": {

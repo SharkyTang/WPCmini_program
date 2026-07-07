@@ -1,0 +1,152 @@
+<view class="page">
+  <view class="hero">
+    <view class="page-title">{{isEdit ? '编辑案例' : '新增案例'}}</view>
+    <view class="page-subtitle">{{isEdit ? '修改标题、标签、封面和显示状态' : '先创建隐藏案例，确认后再打开显示'}}</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="state-card">正在读取案例...</view>
+
+  <view wx:elif="{{errorMessage}}" class="state-card">
+    <view class="state-title">读取失败</view>
+    <view class="state-desc">{{errorMessage}}</view>
+  </view>
+
+  <view wx:else class="form-card">
+    <view class="field">
+      <view class="field-label">封面图片 *</view>
+      <view class="cover-picker" bindtap="chooseCoverImage">
+        <image wx:if="{{coverImageUrl}}" class="cover-preview" src="{{coverImageUrl}}" mode="aspectFill" />
+        <view wx:else class="cover-empty">
+          <view class="cover-plus">+</view>
+          <view>上传封面</view>
+        </view>
+        <view wx:if="{{uploading}}" class="upload-mask">上传中...</view>
+      </view>
+      <view class="field-hint">图片会上传到云存储，不会放进小程序代码包。</view>
+    </view>
+
+    <view class="field">
+      <view class="field-label">标题 *</view>
+      <input class="text-input" value="{{form.title}}" placeholder="例如：国风礼盒包装" bindinput="onTitleInput" />
+    </view>
+
+    <view class="field">
+      <view class="field-label">案例编号</view>
+      <input class="text-input" value="{{form.caseId}}" placeholder="可不填，系统自动生成" bindinput="onCaseIdInput" />
+    </view>
+
+    <view class="field">
+      <view class="field-label">酒类</view>
+      <view class="chip-row">
+        <view class="chip chip-active">白酒</view>
+      </view>
+    </view>
+
+    <view class="field">
+      <view class="field-label">包装内容 *</view>
+      <view class="chip-grid">
+        <view
+          wx:for="{{formOptions.packageTypes.options}}"
+          wx:key="*this"
+          class="chip {{form.packageTypes.indexOf(item) >= 0 ? 'chip-active' : ''}}"
+          data-field="packageTypes"
+          data-value="{{item}}"
+          bindtap="toggleMulti"
+        >
+          {{item}}
+        </view>
+      </view>
+    </view>
+
+    <view class="field">
+      <view class="field-label">风格</view>
+      <view class="chip-grid">
+        <view
+          wx:for="{{formOptions.styles.options}}"
+          wx:key="*this"
+          class="chip {{form.styles.indexOf(item) >= 0 ? 'chip-active' : ''}}"
+          data-field="styles"
+          data-value="{{item}}"
+          bindtap="toggleMulti"
+        >
+          {{item}}
+        </view>
+      </view>
+    </view>
+
+    <view class="field">
+      <view class="field-label">价位感</view>
+      <view class="chip-grid">
+        <view
+          wx:for="{{formOptions.priceLevel.options}}"
+          wx:key="*this"
+          class="chip {{form.priceLevel === item ? 'chip-active' : ''}}"
+          data-field="priceLevel"
+          data-value="{{item}}"
+          bindtap="selectSingle"
+        >
+          {{item}}
+        </view>
+      </view>
+    </view>
+
+    <view class="field">
+      <view class="field-label">使用场景</view>
+      <view class="chip-grid">
+        <view
+          wx:for="{{formOptions.scenes.options}}"
+          wx:key="*this"
+          class="chip {{form.scenes.indexOf(item) >= 0 ? 'chip-active' : ''}}"
+          data-field="scenes"
+          data-value="{{item}}"
+          bindtap="toggleMulti"
+        >
+          {{item}}
+        </view>
+      </view>
+    </view>
+
+    <view class="field">
+      <view class="field-label">状态</view>
+      <view class="chip-grid">
+        <view
+          wx:for="{{formOptions.statuses.options}}"
+          wx:key="*this"
+          class="chip {{form.statuses.indexOf(item) >= 0 ? 'chip-active' : ''}}"
+          data-field="statuses"
+          data-value="{{item}}"
+          bindtap="toggleMulti"
+        >
+          {{item}}
+        </view>
+      </view>
+    </view>
+
+    <view class="field">
+      <view class="field-label">排序</view>
+      <input class="text-input" type="number" value="{{form.sortOrder}}" placeholder="数字越小越靠前，可不填" bindinput="onSortOrderInput" />
+    </view>
+
+    <view class="field">
+      <view class="field-label">备注</view>
+      <textarea class="textarea-input" value="{{form.notes}}" maxlength="800" placeholder="可写材质、适合场景、内部说明" bindinput="onNotesInput" />
+    </view>
+
+    <view class="visible-row">
+      <view>
+        <view class="field-label">前台显示</view>
+        <view class="field-hint">新增默认隐藏，确认图片和标签后再打开。</view>
+      </view>
+      <switch checked="{{form.isVisible}}" bindchange="onVisibleChange" />
+    </view>
+
+    <button
+      class="save-button"
+      loading="{{saving}}"
+      disabled="{{saving || uploading}}"
+      bindtap="saveCase"
+    >
+      {{isEdit ? '保存修改' : '创建案例'}}
+    </button>
+  </view>
+</view>
