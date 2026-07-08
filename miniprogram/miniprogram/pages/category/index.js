@@ -4,6 +4,10 @@ const {
   selectedFilterCount,
 } = require("../../utils/caseData");
 const { fetchVisibleCases } = require("../../utils/cloudData");
+const {
+  getCaseDataVersion,
+  shouldRefreshCaseData,
+} = require("../../utils/caseRefresh");
 
 const FILTER_TITLE_OVERRIDES = {
   packageTypes: "包装",
@@ -185,6 +189,7 @@ Page({
     selectedPills: [],
     selectedCount: 0,
     focusedFilterValue: null,
+    caseDataVersion: 0,
   },
 
   onLoad() {
@@ -192,20 +197,33 @@ Page({
     this.loadData();
   },
 
+  onShow() {
+    if (!this.data.loading && shouldRefreshCaseData(this.data.caseDataVersion)) {
+      this.loadData({ silent: true });
+    }
+  },
+
   onPullDownRefresh() {
     this.loadData().finally(() => wx.stopPullDownRefresh());
   },
 
-  async loadData() {
-    this.setData({
-      loading: true,
-      errorMessage: "",
-    });
+  async loadData(options = {}) {
+    if (!options.silent) {
+      this.setData({
+        loading: true,
+        errorMessage: "",
+      });
+    } else {
+      this.setData({
+        errorMessage: "",
+      });
+    }
 
     try {
       const cases = await fetchVisibleCases();
       this.setData({
         allCases: cases,
+        caseDataVersion: getCaseDataVersion(),
         loading: false,
       });
       this.applyFilters();

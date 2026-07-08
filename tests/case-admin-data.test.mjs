@@ -32,8 +32,9 @@ const caseAdminData = loadCommonJsModule(caseAdminDataPath, {
 });
 
 const {
-  CASE_ADMIN_DEFAULT_SORT_ORDER,
+  CASE_ADMIN_FORM_OPTIONS,
   buildCaseAdminPayload,
+  buildCaseAdminOptionViews,
   buildCaseKeywords,
   createEmptyCaseForm,
   isCloudFileId,
@@ -62,6 +63,43 @@ test("creates hidden empty case form defaults", () => {
   assert.equal(form.isVisible, false);
   assert.equal(form.sortOrder, "");
   assert.deepEqual(plain(form.packageTypes), []);
+});
+
+test("exposes case admin form options by field key", () => {
+  assert.deepEqual(plain(CASE_ADMIN_FORM_OPTIONS.packageTypes.options), [
+    "整套包装",
+    "瓶标",
+    "瓶子",
+    "礼盒",
+    "桶盒",
+    "卡盒",
+    "手提袋",
+    "外箱",
+  ]);
+  assert.ok(CASE_ADMIN_FORM_OPTIONS.styles.options.includes("国风"));
+  assert.ok(CASE_ADMIN_FORM_OPTIONS.priceLevel.options.includes("品质款"));
+  assert.ok(CASE_ADMIN_FORM_OPTIONS.scenes.options.includes("送礼"));
+  assert.ok(CASE_ADMIN_FORM_OPTIONS.statuses.options.includes("推荐"));
+});
+
+test("builds selected option view models for case admin form chips", () => {
+  const optionViews = buildCaseAdminOptionViews({
+    packageTypes: ["礼盒"],
+    styles: ["国风"],
+    priceLevel: "品质款",
+    scenes: ["送礼"],
+    statuses: ["推荐"],
+  });
+
+  const findOption = (group, value) =>
+    optionViews[group].find((option) => option.value === value);
+
+  assert.equal(findOption("packageTypes", "礼盒").selected, true);
+  assert.equal(findOption("packageTypes", "瓶标").selected, false);
+  assert.equal(findOption("styles", "国风").selected, true);
+  assert.equal(findOption("priceLevel", "品质款").selected, true);
+  assert.equal(findOption("scenes", "送礼").selected, true);
+  assert.equal(findOption("statuses", "推荐").selected, true);
 });
 
 test("validates required title cover image and package types", () => {
@@ -127,7 +165,7 @@ test("normalizes case admin form and builds keywords", () => {
   ]);
 });
 
-test("builds database payload with json value fields and fallback sort order", () => {
+test("builds database payload with json value fields and leaves blank sort order for cloud default", () => {
   const payload = buildCaseAdminPayload({
     title: "测试案例",
     coverImage: "cloud://cloud1/file.jpg",
@@ -137,7 +175,7 @@ test("builds database payload with json value fields and fallback sort order", (
 
   assert.equal(payload.title, "测试案例");
   assert.equal(payload.isVisible, false);
-  assert.equal(payload.sortOrder, CASE_ADMIN_DEFAULT_SORT_ORDER);
+  assert.equal(payload.sortOrder, "");
   assert.deepEqual(plain(payload.packageTypes), { values: ["整套包装"] });
   assert.deepEqual(plain(payload.keywords.values), ["测试案例", "白酒", "整套包装"]);
 });

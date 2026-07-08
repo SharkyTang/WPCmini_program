@@ -8,6 +8,15 @@ const CASE_ADMIN_VISIBILITY_OPTIONS = [
   { value: "hidden", label: "已隐藏" },
 ];
 
+const CASE_ADMIN_FORM_OPTIONS = DEFAULT_FILTERS.reduce((options, filter) => {
+  options[filter.key] = {
+    title: filter.title,
+    type: filter.type,
+    options: filter.options || [],
+  };
+  return options;
+}, {});
+
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -53,6 +62,24 @@ function createEmptyCaseForm() {
     notes: "",
     isVisible: false,
   };
+}
+
+function isCaseAdminOptionSelected(form = {}, field, value) {
+  if (field === "priceLevel") {
+    return trimText(form.priceLevel) === value;
+  }
+  return Array.isArray(form[field]) && form[field].includes(value);
+}
+
+function buildCaseAdminOptionViews(form = {}, formOptions = CASE_ADMIN_FORM_OPTIONS) {
+  return Object.keys(formOptions).reduce((views, field) => {
+    const options = formOptions[field] && formOptions[field].options;
+    views[field] = (options || []).map((value) => ({
+      value,
+      selected: isCaseAdminOptionSelected(form, field, value),
+    }));
+    return views;
+  }, {});
 }
 
 function normalizeCaseAdminForm(form = {}) {
@@ -119,8 +146,6 @@ function validateCaseAdminForm(form = {}, options = {}) {
 
 function buildCaseAdminPayload(form = {}) {
   const normalized = normalizeCaseAdminForm(form);
-  const sortOrder =
-    normalized.sortOrder === "" ? CASE_ADMIN_DEFAULT_SORT_ORDER : normalized.sortOrder;
   return {
     title: normalized.title,
     caseId: normalized.caseId,
@@ -131,10 +156,10 @@ function buildCaseAdminPayload(form = {}) {
     priceLevel: normalized.priceLevel,
     scenes: valuesObject(normalized.scenes),
     statuses: valuesObject(normalized.statuses),
-    sortOrder,
+    sortOrder: normalized.sortOrder,
     notes: normalized.notes,
     isVisible: normalized.isVisible,
-    keywords: buildCaseKeywords({ ...normalized, sortOrder }),
+    keywords: buildCaseKeywords(normalized),
   };
 }
 
@@ -169,14 +194,16 @@ function buildCaseAdminImagePath(filePath = "", now = Date.now(), random = Math.
 
 module.exports = {
   CASE_ADMIN_DEFAULT_SORT_ORDER,
-  CASE_ADMIN_FORM_OPTIONS: DEFAULT_FILTERS,
+  CASE_ADMIN_FORM_OPTIONS,
   CASE_ADMIN_NOTES_MAX_LENGTH,
   CASE_ADMIN_VISIBILITY_OPTIONS,
   buildCaseAdminImagePath,
+  buildCaseAdminOptionViews,
   buildCaseAdminPayload,
   buildCaseKeywords,
   createEmptyCaseForm,
   isCloudFileId,
+  isCaseAdminOptionSelected,
   normalizeCaseAdminForm,
   normalizeCaseAdminItem,
   normalizeCaseAdminKeyword,

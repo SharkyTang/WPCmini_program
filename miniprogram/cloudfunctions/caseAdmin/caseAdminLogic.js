@@ -3,6 +3,9 @@ const CASE_ADMIN_DEFAULT_SORT_ORDER = 9999;
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 50;
 const SEARCH_FETCH_LIMIT = 300;
+const CASE_ID_PREFIX = "case_";
+const CASE_ID_PAD_LENGTH = 3;
+const CASE_ID_SEQUENCE_MAX = 999999;
 
 const VALID_CASE_ADMIN_ACTIONS = [
   "checkAccess",
@@ -79,6 +82,11 @@ function normalizeSortOrder(value) {
   return Number.isFinite(numberValue) ? numberValue : CASE_ADMIN_DEFAULT_SORT_ORDER;
 }
 
+function hasUsableSortOrder(value) {
+  if (value === "" || value === null || value === undefined) return false;
+  return Number.isFinite(Number(value));
+}
+
 function normalizePage(value) {
   const page = Number(value);
   return Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
@@ -95,7 +103,43 @@ function normalizeVisibilityFilter(value) {
 }
 
 function generateCaseId(now = Date.now()) {
-  return `case_${now}`;
+  return `${CASE_ID_PREFIX}${now}`;
+}
+
+function getCaseIdNumber(value) {
+  const text = trimText(value);
+  const match = new RegExp(`^${CASE_ID_PREFIX}(\\d+)$`).exec(text);
+  if (!match) return 0;
+  const numberValue = Number(match[1]);
+  if (
+    !Number.isInteger(numberValue) ||
+    numberValue <= 0 ||
+    numberValue > CASE_ID_SEQUENCE_MAX
+  ) {
+    return 0;
+  }
+  return numberValue;
+}
+
+function formatSequentialCaseId(numberValue) {
+  return `${CASE_ID_PREFIX}${String(numberValue).padStart(CASE_ID_PAD_LENGTH, "0")}`;
+}
+
+function generateSequentialCaseId(items = []) {
+  const maxNumber = items.reduce((max, item) => {
+    return Math.max(max, getCaseIdNumber(item && item.caseId));
+  }, 0);
+  return formatSequentialCaseId(maxNumber + 1);
+}
+
+function getCreateSortOrder(value, caseId, options = {}) {
+  if (hasUsableSortOrder(value)) return normalizeSortOrder(value);
+  const caseNumber = getCaseIdNumber(caseId);
+  if (caseNumber) return caseNumber;
+  if (hasUsableSortOrder(options.defaultSortOrder)) {
+    return normalizeSortOrder(options.defaultSortOrder);
+  }
+  return CASE_ADMIN_DEFAULT_SORT_ORDER;
 }
 
 function pickAllowedCaseFields(input = {}) {
@@ -151,7 +195,7 @@ function sanitizeCasePayload(input = {}, options = {}) {
     data.caseId = trimText(picked.caseId);
   }
   if (isCreate && !data.caseId) {
-    data.caseId = generateCaseId(options.now);
+    data.caseId = trimText(options.defaultCaseId) || generateCaseId(options.now);
   }
   if (isCreate && !data.caseId) {
     data.caseId = generateCaseId();
@@ -181,7 +225,9 @@ function sanitizeCasePayload(input = {}, options = {}) {
     data.statuses = { values: [] };
   }
   if (Object.prototype.hasOwnProperty.call(picked, "sortOrder") || isCreate) {
-    data.sortOrder = normalizeSortOrder(picked.sortOrder);
+    data.sortOrder = isCreate
+      ? getCreateSortOrder(picked.sortOrder, data.caseId, options)
+      : normalizeSortOrder(picked.sortOrder);
   }
   if (Object.prototype.hasOwnProperty.call(picked, "notes") || isCreate) {
     data.notes = trimText(picked.notes);
@@ -234,7 +280,9 @@ module.exports = {
   buildCaseSearchText,
   filterCaseItems,
   generateCaseId,
+  generateSequentialCaseId,
   getAdminOpenidsFromEnv,
+  getCaseIdNumber,
   isAdminOpenid,
   isCloudFileId,
   normalizePage,

@@ -3,6 +3,7 @@ const {
   normalizeCaseAdminItem,
   normalizeCaseAdminKeyword,
 } = require("./caseAdminData");
+const { markCaseDataStale } = require("./caseRefresh");
 
 const CASE_ADMIN_FUNCTION = "caseAdmin";
 const DEFAULT_PAGE_SIZE = 20;
@@ -110,15 +111,21 @@ async function fetchCaseAdminDetail(id) {
 }
 
 async function createCaseAdmin(caseData) {
-  return callCaseAdmin("createCase", { case: caseData });
+  const result = await callCaseAdmin("createCase", { case: caseData });
+  markCaseDataStale();
+  return result;
 }
 
 async function updateCaseAdmin(id, caseData) {
-  return callCaseAdmin("updateCase", { id, case: caseData });
+  const result = await callCaseAdmin("updateCase", { id, case: caseData });
+  markCaseDataStale();
+  return result;
 }
 
 async function setCaseVisibility(id, isVisible) {
-  return callCaseAdmin("setCaseVisibility", { id, isVisible });
+  const result = await callCaseAdmin("setCaseVisibility", { id, isVisible });
+  markCaseDataStale();
+  return result;
 }
 
 async function uploadCaseCoverImage(input, maybeCloudPath) {

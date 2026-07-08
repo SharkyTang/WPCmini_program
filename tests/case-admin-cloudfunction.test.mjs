@@ -15,7 +15,9 @@ const {
   VALID_CASE_ADMIN_ACTIONS,
   buildCaseSearchText,
   filterCaseItems,
+  generateSequentialCaseId,
   getAdminOpenidsFromEnv,
+  getCaseIdNumber,
   isAdminOpenid,
   pickAllowedCaseFields,
   sanitizeCasePayload,
@@ -68,16 +70,47 @@ test("sanitizes create payload with defaults", () => {
       packageTypes: { values: ["礼盒", "礼盒"] },
       isVisible: true,
     },
-    { isCreate: true, now: 1760000000000 }
+    { isCreate: true, defaultCaseId: "case_091" }
   );
 
   assert.equal(result.valid, true);
   assert.equal(result.data.title, "新案例");
-  assert.equal(result.data.caseId, "case_1760000000000");
+  assert.equal(result.data.caseId, "case_091");
   assert.equal(result.data.isVisible, false);
-  assert.equal(result.data.sortOrder, 9999);
+  assert.equal(result.data.sortOrder, 91);
   assert.deepEqual(plain(result.data.packageTypes), { values: ["礼盒"] });
-  assert.deepEqual(plain(result.data.keywords.values), ["新案例", "case_1760000000000", "白酒", "礼盒"]);
+  assert.deepEqual(plain(result.data.keywords.values), ["新案例", "case_091", "白酒", "礼盒"]);
+});
+
+test("keeps manual sort order when creating cases", () => {
+  const result = sanitizeCasePayload(
+    {
+      title: "新案例",
+      coverImage: "cloud://cloud1/file.jpg",
+      packageTypes: ["礼盒"],
+      sortOrder: "7",
+    },
+    { isCreate: true, defaultCaseId: "case_091" }
+  );
+
+  assert.equal(result.valid, true);
+  assert.equal(result.data.caseId, "case_091");
+  assert.equal(result.data.sortOrder, 7);
+});
+
+test("generates sequential case ids and ignores timestamp-like ids", () => {
+  assert.equal(getCaseIdNumber("case_089"), 89);
+  assert.equal(getCaseIdNumber("case_1783473800622"), 0);
+  assert.equal(getCaseIdNumber("draft"), 0);
+  assert.equal(
+    generateSequentialCaseId([
+      { caseId: "case_001" },
+      { caseId: "case_089" },
+      { caseId: "case_1783473800622" },
+      { caseId: "draft" },
+    ]),
+    "case_090"
+  );
 });
 
 test("rejects invalid cover file id and missing package types", () => {

@@ -2,6 +2,10 @@ const {
   fetchVisibleCases,
   fetchVisibleBanners,
 } = require("../../utils/cloudData");
+const {
+  getCaseDataVersion,
+  shouldRefreshCaseData,
+} = require("../../utils/caseRefresh");
 
 function summarizeTags(caseItem) {
   return [
@@ -45,21 +49,34 @@ Page({
     banners: [],
     popularCases: [],
     latestCases: [],
+    caseDataVersion: 0,
   },
 
   onLoad() {
     this.loadData();
   },
 
+  onShow() {
+    if (!this.data.loading && shouldRefreshCaseData(this.data.caseDataVersion)) {
+      this.loadData({ silent: true });
+    }
+  },
+
   onPullDownRefresh() {
     this.loadData().finally(() => wx.stopPullDownRefresh());
   },
 
-  async loadData() {
-    this.setData({
-      loading: true,
-      errorMessage: "",
-    });
+  async loadData(options = {}) {
+    if (!options.silent) {
+      this.setData({
+        loading: true,
+        errorMessage: "",
+      });
+    } else {
+      this.setData({
+        errorMessage: "",
+      });
+    }
 
     try {
       const cases = await fetchVisibleCases();
@@ -71,6 +88,7 @@ Page({
         banners,
         popularCases,
         latestCases,
+        caseDataVersion: getCaseDataVersion(),
         loading: false,
       });
     } catch (error) {

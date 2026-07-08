@@ -3,6 +3,8 @@ const {
   CASE_COLLECTION,
   SEARCH_FETCH_LIMIT,
   filterCaseItems,
+  generateSequentialCaseId,
+  getCaseIdNumber,
   isAdminOpenid,
   normalizePage,
   normalizePageSize,
@@ -78,11 +80,26 @@ async function getCase(event) {
   return ok({ item: response.data || null });
 }
 
+async function getCreateCaseDefaults() {
+  const response = await db
+    .collection(CASE_COLLECTION)
+    .field({ caseId: true })
+    .limit(SEARCH_FETCH_LIMIT)
+    .get();
+  const defaultCaseId = generateSequentialCaseId(response.data || []);
+  return {
+    defaultCaseId,
+    defaultSortOrder: getCaseIdNumber(defaultCaseId),
+  };
+}
+
 async function createCase(event, openid) {
   const input = event.case || event.data || {};
+  const defaults = await getCreateCaseDefaults();
   const result = sanitizeCasePayload(input, {
     isCreate: true,
     now: Date.now(),
+    ...defaults,
   });
   if (!result.valid) return fail(result.code, result.message);
 

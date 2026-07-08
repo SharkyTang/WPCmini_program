@@ -1,6 +1,7 @@
 const {
   CASE_ADMIN_FORM_OPTIONS,
   buildCaseAdminImagePath,
+  buildCaseAdminOptionViews,
   buildCaseAdminPayload,
   createEmptyCaseForm,
   validateCaseAdminForm,
@@ -35,6 +36,7 @@ Page({
     coverImageUrl: "",
     form: createEmptyCaseForm(),
     formOptions: CASE_ADMIN_FORM_OPTIONS,
+    optionViews: buildCaseAdminOptionViews(createEmptyCaseForm(), CASE_ADMIN_FORM_OPTIONS),
   },
 
   onLoad(options = {}) {
@@ -53,26 +55,28 @@ Page({
 
     try {
       const caseItem = await fetchCaseAdminDetail(id);
+      const form = {
+        title: caseItem.title || "",
+        caseId: caseItem.caseId || "",
+        coverImage: caseItem.coverImage || "",
+        wineType: caseItem.wineType || "白酒",
+        packageTypes: caseItem.packageTypes || [],
+        styles: caseItem.styles || [],
+        priceLevel: caseItem.priceLevel || "",
+        scenes: caseItem.scenes || [],
+        statuses: caseItem.statuses || [],
+        sortOrder:
+          caseItem.sortOrder === undefined || caseItem.sortOrder === null
+            ? ""
+            : String(caseItem.sortOrder),
+        notes: caseItem.notes || "",
+        isVisible: caseItem.isVisible !== false,
+      };
       this.setData({
         loading: false,
         coverImageUrl: caseItem.coverImageUrl || caseItem.coverImage || "",
-        form: {
-          title: caseItem.title || "",
-          caseId: caseItem.caseId || "",
-          coverImage: caseItem.coverImage || "",
-          wineType: caseItem.wineType || "白酒",
-          packageTypes: caseItem.packageTypes || [],
-          styles: caseItem.styles || [],
-          priceLevel: caseItem.priceLevel || "",
-          scenes: caseItem.scenes || [],
-          statuses: caseItem.statuses || [],
-          sortOrder:
-            caseItem.sortOrder === undefined || caseItem.sortOrder === null
-              ? ""
-              : String(caseItem.sortOrder),
-          notes: caseItem.notes || "",
-          isVisible: caseItem.isVisible !== false,
-        },
+        form,
+        optionViews: buildCaseAdminOptionViews(form, this.data.formOptions),
       });
     } catch (error) {
       console.warn("读取案例详情失败", error);
@@ -84,8 +88,13 @@ Page({
   },
 
   updateFormField(field, value) {
+    const form = {
+      ...this.data.form,
+      [field]: value,
+    };
     this.setData({
       [`form.${field}`]: value,
+      optionViews: buildCaseAdminOptionViews(form, this.data.formOptions),
     });
   },
 
@@ -164,10 +173,15 @@ Page({
         filePath: compressedPath,
         cloudPath,
       });
+      const form = {
+        ...this.data.form,
+        coverImage: fileID,
+      };
       this.setData({
         uploading: false,
         coverImageUrl: compressedPath,
         "form.coverImage": fileID,
+        optionViews: buildCaseAdminOptionViews(form, this.data.formOptions),
       });
       wx.showToast({
         title: "图片已上传",

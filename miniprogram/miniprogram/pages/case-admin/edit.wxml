@@ -46,14 +46,14 @@
       <view class="field-label">包装内容 *</view>
       <view class="chip-grid">
         <view
-          wx:for="{{formOptions.packageTypes.options}}"
-          wx:key="*this"
-          class="chip {{form.packageTypes.indexOf(item) >= 0 ? 'chip-active' : ''}}"
+          wx:for="{{optionViews.packageTypes}}"
+          wx:key="value"
+          class="chip {{item.selected ? 'chip-active' : ''}}"
           data-field="packageTypes"
-          data-value="{{item}}"
+          data-value="{{item.value}}"
           bindtap="toggleMulti"
         >
-          {{item}}
+          {{item.value}}
         </view>
       </view>
     </view>
@@ -62,14 +62,14 @@
       <view class="field-label">风格</view>
       <view class="chip-grid">
         <view
-          wx:for="{{formOptions.styles.options}}"
-          wx:key="*this"
-          class="chip {{form.styles.indexOf(item) >= 0 ? 'chip-active' : ''}}"
+          wx:for="{{optionViews.styles}}"
+          wx:key="value"
+          class="chip {{item.selected ? 'chip-active' : ''}}"
           data-field="styles"
-          data-value="{{item}}"
+          data-value="{{item.value}}"
           bindtap="toggleMulti"
         >
-          {{item}}
+          {{item.value}}
         </view>
       </view>
     </view>
@@ -78,14 +78,14 @@
       <view class="field-label">价位感</view>
       <view class="chip-grid">
         <view
-          wx:for="{{formOptions.priceLevel.options}}"
-          wx:key="*this"
-          class="chip {{form.priceLevel === item ? 'chip-active' : ''}}"
+          wx:for="{{optionViews.priceLevel}}"
+          wx:key="value"
+          class="chip {{item.selected ? 'chip-active' : ''}}"
           data-field="priceLevel"
-          data-value="{{item}}"
+          data-value="{{item.value}}"
           bindtap="selectSingle"
         >
-          {{item}}
+          {{item.value}}
         </view>
       </view>
     </view>
@@ -94,14 +94,14 @@
       <view class="field-label">使用场景</view>
       <view class="chip-grid">
         <view
-          wx:for="{{formOptions.scenes.options}}"
-          wx:key="*this"
-          class="chip {{form.scenes.indexOf(item) >= 0 ? 'chip-active' : ''}}"
+          wx:for="{{optionViews.scenes}}"
+          wx:key="value"
+          class="chip {{item.selected ? 'chip-active' : ''}}"
           data-field="scenes"
-          data-value="{{item}}"
+          data-value="{{item.value}}"
           bindtap="toggleMulti"
         >
-          {{item}}
+          {{item.value}}
         </view>
       </view>
     </view>
@@ -110,14 +110,14 @@
       <view class="field-label">状态</view>
       <view class="chip-grid">
         <view
-          wx:for="{{formOptions.statuses.options}}"
-          wx:key="*this"
-          class="chip {{form.statuses.indexOf(item) >= 0 ? 'chip-active' : ''}}"
+          wx:for="{{optionViews.statuses}}"
+          wx:key="value"
+          class="chip {{item.selected ? 'chip-active' : ''}}"
           data-field="statuses"
-          data-value="{{item}}"
+          data-value="{{item.value}}"
           bindtap="toggleMulti"
         >
-          {{item}}
+          {{item.value}}
         </view>
       </view>
     </view>
