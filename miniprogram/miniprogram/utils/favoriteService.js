@@ -21,9 +21,7 @@ function getFavoritesCollection() {
   return getDb().collection(FAVORITE_COLLECTION);
 }
 
-function buildFavoriteWhere(caseItem) {
-  const db = getDb();
-  const _ = db.command;
+function buildFavoriteLookupConditions(caseItem) {
   const record = buildFavoriteRecord(caseItem);
   const conditions = [];
 
@@ -35,12 +33,9 @@ function buildFavoriteWhere(caseItem) {
   }
 
   if (!conditions.length) {
-    return { caseDocId: "__missing_case__" };
+    return [{ caseDocId: "__missing_case__" }];
   }
-  if (conditions.length === 1) {
-    return conditions[0];
-  }
-  return _.or(conditions);
+  return conditions;
 }
 
 async function ensureIdentityForRead(options = {}) {
@@ -60,11 +55,13 @@ async function fetchFavoriteForCase(caseItem, options = {}) {
   const hasIdentity = await ensureIdentityForRead(options);
   if (!hasIdentity) return null;
 
-  const response = await getFavoritesCollection()
-    .where(buildFavoriteWhere(caseItem))
-    .limit(1)
-    .get();
-  return (response.data || [])[0] || null;
+  const conditions = buildFavoriteLookupConditions(caseItem);
+  for (const condition of conditions) {
+    const response = await getFavoritesCollection().where(condition).limit(1).get();
+    const favorite = (response.data || [])[0];
+    if (favorite) return favorite;
+  }
+  return null;
 }
 
 async function addFavorite(caseItem) {

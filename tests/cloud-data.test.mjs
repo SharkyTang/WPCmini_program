@@ -38,7 +38,11 @@ function test(name, fn) {
     });
 }
 
-function buildQuery(records) {
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function buildQuery(records, onGet = () => {}) {
   const query = {
     offset: 0,
     pageSize: 20,
@@ -57,6 +61,7 @@ function buildQuery(records) {
       return this;
     },
     async get() {
+      onGet();
       return {
         data: records.slice(this.offset, this.offset + this.pageSize),
       };
@@ -67,12 +72,15 @@ function buildQuery(records) {
 
 function mockCloudData(records) {
   const tempUrlBatches = [];
+  let queryCount = 0;
   global.wx = {
     cloud: {
       database() {
         return {
           collection() {
-            return buildQuery(records);
+            return buildQuery(records, () => {
+              queryCount += 1;
+            });
           },
         };
       },
@@ -100,6 +108,65 @@ function mockCloudData(records) {
   return {
     ...cloudData,
     tempUrlBatches,
+    getQueryCount() {
+      return queryCount;
+    },
+  };
+}
+
+function mockCaseLookupData(records) {
+  const docCalls = [];
+  const whereCalls = [];
+  global.wx = {
+    cloud: {
+      database() {
+        return {
+          collection() {
+            return {
+              doc(id) {
+                docCalls.push(id);
+                return {
+                  async get() {
+                    throw new Error("doc lookup should not be used for caseId");
+                  },
+                };
+              },
+              where(condition) {
+                whereCalls.push(condition);
+                return {
+                  limit() {
+                    return this;
+                  },
+                  async get() {
+                    return {
+                      data: records.filter((record) => record.caseId === condition.caseId),
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+      async getTempFileURL() {
+        return { fileList: [] };
+      },
+    },
+  };
+
+  const caseData = loadCommonJS(caseDataPath);
+  const cloudData = loadCommonJS(cloudDataPath, {
+    wx: global.wx,
+    require(request) {
+      if (request === "./caseData") return caseData;
+      throw new Error(`Unexpected require: ${request}`);
+    },
+  });
+
+  return {
+    ...cloudData,
+    docCalls,
+    whereCalls,
   };
 }
 
@@ -122,4 +189,59 @@ await test("fetches image temp URLs in batches of at most 50 cloud IDs", async (
     [50, 5]
   );
   assert.equal(cases[0].coverImageUrl, "cloud://image_1?temp=1");
+});
+
+await test("caches visible cases and temp URLs until explicitly cleared", async () => {
+  const records = [
+    {
+      _id: "case_doc_1",
+      caseId: "case_001",
+      title: "case_001",
+      coverImage: "cloud://image_1",
+      isVisible: true,
+      sortOrder: 1,
+    },
+  ];
+
+  const {
+    fetchVisibleCases,
+    clearCloudDataCache,
+    tempUrlBatches,
+    getQueryCount,
+  } = mockCloudData(records);
+
+  await fetchVisibleCases();
+  await fetchVisibleCases();
+
+  assert.equal(getQueryCount(), 1);
+  assert.equal(tempUrlBatches.length, 1);
+
+  await fetchVisibleCases({ forceRefresh: true });
+
+  assert.equal(getQueryCount(), 2);
+  assert.equal(tempUrlBatches.length, 1);
+
+  clearCloudDataCache();
+  await fetchVisibleCases();
+
+  assert.equal(getQueryCount(), 3);
+  assert.equal(tempUrlBatches.length, 2);
+});
+
+await test("fetchCaseById uses the caseId index directly for stable case ids", async () => {
+  const { fetchCaseById, docCalls, whereCalls } = mockCaseLookupData([
+    {
+      _id: "doc_001",
+      caseId: "case_001",
+      title: "case_001",
+      coverImage: "https://example.com/case.png",
+      isVisible: true,
+    },
+  ]);
+
+  const caseItem = await fetchCaseById("case_001");
+
+  assert.deepEqual(docCalls, []);
+  assert.deepEqual(plain(whereCalls), [{ caseId: "case_001" }]);
+  assert.equal(caseItem.id, "doc_001");
 });

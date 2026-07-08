@@ -9,6 +9,26 @@ const BANNER_COLLECTION = "home_banners";
 const PAGE_SIZE = 20;
 const TEMP_FILE_URL_BATCH_SIZE = 50;
 
+let visibleCasesCache = null;
+let visibleBannersCache = null;
+const tempFileUrlCache = new Map();
+
+function shouldForceRefresh(options = {}) {
+  return Boolean(options && options.forceRefresh);
+}
+
+function copyList(items) {
+  return (items || []).map((item) => ({ ...item }));
+}
+
+function clearCloudDataCache(options = {}) {
+  visibleCasesCache = null;
+  visibleBannersCache = null;
+  if (options.clearTempUrls !== false) {
+    tempFileUrlCache.clear();
+  }
+}
+
 function getDb() {
   if (!wx.cloud) {
     throw new Error("当前基础库不支持云开发");
@@ -53,25 +73,43 @@ function chunkList(items, size) {
   return chunks;
 }
 
+function isStableCaseId(id) {
+  return typeof id === "string" && id.indexOf("case_") === 0;
+}
+
 async function getTempUrlMap(fileIds) {
   const uniqueFileIds = Array.from(new Set(fileIds.filter(isCloudFileId)));
   if (!uniqueFileIds.length) return {};
+  const tempUrlMap = {};
+  const missingFileIds = [];
+
+  uniqueFileIds.forEach((fileID) => {
+    if (tempFileUrlCache.has(fileID)) {
+      tempUrlMap[fileID] = tempFileUrlCache.get(fileID);
+    } else {
+      missingFileIds.push(fileID);
+    }
+  });
+
+  if (!missingFileIds.length) return tempUrlMap;
 
   try {
     const responses = await Promise.all(
-      chunkList(uniqueFileIds, TEMP_FILE_URL_BATCH_SIZE).map((fileList) =>
+      chunkList(missingFileIds, TEMP_FILE_URL_BATCH_SIZE).map((fileList) =>
         wx.cloud.getTempFileURL({ fileList })
       )
     );
     return responses.reduce((map, response) => {
       (response.fileList || []).forEach((item) => {
-        map[item.fileID] = item.tempFileURL || item.fileID;
+        const url = item.tempFileURL || item.fileID;
+        tempFileUrlCache.set(item.fileID, url);
+        map[item.fileID] = url;
       });
       return map;
-    }, {});
+    }, tempUrlMap);
   } catch (error) {
     console.warn("图片临时链接获取失败，将尝试直接使用 cloudID", error);
-    return {};
+    return tempUrlMap;
   }
 }
 
@@ -91,26 +129,48 @@ async function attachBannerImageUrls(banners) {
   }));
 }
 
-async function fetchVisibleCases() {
+async function fetchVisibleCases(options = {}) {
+  if (!shouldForceRefresh(options) && visibleCasesCache) {
+    return copyList(visibleCasesCache);
+  }
   const records = await fetchAll(CASE_COLLECTION, {
     where: { isVisible: true },
     orderField: "sortOrder",
   });
   const cases = records.map(normalizeCaseRecord);
-  return attachCaseImageUrls(cases);
+  visibleCasesCache = await attachCaseImageUrls(cases);
+  return copyList(visibleCasesCache);
 }
 
-async function fetchVisibleBanners(cases) {
+async function fetchVisibleBanners(cases, options = {}) {
+  if (!shouldForceRefresh(options) && visibleBannersCache) {
+    return copyList(visibleBannersCache);
+  }
   const records = await fetchAll(BANNER_COLLECTION, {
     where: { isVisible: true },
     orderField: "sortOrder",
   });
   const banners = buildFallbackBanners(records.map(normalizeBannerRecord), cases);
-  return attachBannerImageUrls(banners);
+  visibleBannersCache = await attachBannerImageUrls(banners);
+  return copyList(visibleBannersCache);
 }
 
 async function fetchCaseById(id) {
   const db = getDb();
+  if (isStableCaseId(id)) {
+    const response = await db
+      .collection(CASE_COLLECTION)
+      .where({ caseId: id })
+      .limit(1)
+      .get();
+    const record = (response.data || [])[0];
+    if (!record) {
+      throw new Error(`案例不存在：${id}`);
+    }
+    const cases = await attachCaseImageUrls([normalizeCaseRecord(record)]);
+    return cases[0];
+  }
+
   try {
     const response = await db.collection(CASE_COLLECTION).doc(id).get();
     const cases = await attachCaseImageUrls([normalizeCaseRecord(response.data)]);
@@ -134,4 +194,5 @@ module.exports = {
   fetchVisibleCases,
   fetchVisibleBanners,
   fetchCaseById,
+  clearCloudDataCache,
 };

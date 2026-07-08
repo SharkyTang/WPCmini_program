@@ -3,6 +3,7 @@ const {
   normalizeCaseAdminItem,
   normalizeCaseAdminKeyword,
 } = require("./caseAdminData");
+const { clearCloudDataCache } = require("./cloudData");
 const { markCaseDataStale } = require("./caseRefresh");
 
 const CASE_ADMIN_FUNCTION = "caseAdmin";
@@ -110,21 +111,26 @@ async function fetchCaseAdminDetail(id) {
   return items[0] || null;
 }
 
+function markCaseDataChanged() {
+  markCaseDataStale();
+  clearCloudDataCache();
+}
+
 async function createCaseAdmin(caseData) {
   const result = await callCaseAdmin("createCase", { case: caseData });
-  markCaseDataStale();
+  markCaseDataChanged();
   return result;
 }
 
 async function updateCaseAdmin(id, caseData) {
   const result = await callCaseAdmin("updateCase", { id, case: caseData });
-  markCaseDataStale();
+  markCaseDataChanged();
   return result;
 }
 
 async function setCaseVisibility(id, isVisible) {
   const result = await callCaseAdmin("setCaseVisibility", { id, isVisible });
-  markCaseDataStale();
+  markCaseDataChanged();
   return result;
 }
 
