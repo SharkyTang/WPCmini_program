@@ -21,9 +21,7 @@ function getHistoryCollection() {
   return getDb().collection(HISTORY_COLLECTION);
 }
 
-function buildHistoryWhere(caseItem) {
-  const db = getDb();
-  const _ = db.command;
+function buildHistoryLookupConditions(caseItem) {
   const record = buildHistoryRecord(caseItem);
   const conditions = [];
 
@@ -35,12 +33,9 @@ function buildHistoryWhere(caseItem) {
   }
 
   if (!conditions.length) {
-    return { caseDocId: "__missing_case__" };
+    return [{ caseDocId: "__missing_case__" }];
   }
-  if (conditions.length === 1) {
-    return conditions[0];
-  }
-  return _.or(conditions);
+  return conditions;
 }
 
 async function removeHistoryRecords(historyIds) {
@@ -93,11 +88,13 @@ async function recordCaseView(caseItem) {
   const db = getDb();
   const _ = db.command;
   const record = buildHistoryRecord(caseItem);
-  const existingResponse = await getHistoryCollection()
-    .where(buildHistoryWhere(caseItem))
-    .limit(1)
-    .get();
-  const existing = (existingResponse.data || [])[0];
+  let existing = null;
+  const conditions = buildHistoryLookupConditions(caseItem);
+  for (const condition of conditions) {
+    const existingResponse = await getHistoryCollection().where(condition).limit(1).get();
+    existing = (existingResponse.data || [])[0] || null;
+    if (existing) break;
+  }
 
   if (existing && existing._id) {
     await getHistoryCollection().doc(existing._id).update({
