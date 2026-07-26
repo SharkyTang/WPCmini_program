@@ -92,8 +92,38 @@
   <view wx:if="{{isProfileEditorVisible}}" class="profile-editor-mask" catchtap="closeProfileEditor">
     <view class="profile-editor-sheet" catchtap="noop">
       <view class="profile-option-list">
+        <view class="profile-editor-header">
+          <view class="profile-option-avatar profile-option-avatar-large">
+            <image wx:if="{{profileDraft.avatarUrl}}" class="profile-option-avatar-image" src="{{profileDraft.avatarUrl}}" mode="aspectFill" />
+            <block wx:else>
+              <view class="avatar-head"></view>
+              <view class="avatar-body"></view>
+            </block>
+          </view>
+          <view class="profile-editor-title">编辑资料</view>
+        </view>
+
+        <view class="profile-field-row">
+          <view class="profile-field-label">昵称</view>
+          <input
+            class="profile-nickname-input"
+            value="{{profileDraft.nickname}}"
+            placeholder="请输入昵称"
+            placeholder-class="profile-input-placeholder"
+            bindinput="onNicknameInput"
+          />
+        </view>
+
+        <button
+          class="profile-option-row profile-option-action profile-wechat-avatar-button"
+          open-type="chooseAvatar"
+          bindchooseavatar="onChooseWechatAvatar"
+        >
+          使用微信头像
+        </button>
+
         <view class="profile-option-row profile-option-preview">
-          <view class="profile-option-title">用微信头像</view>
+          <view class="profile-option-title">当前头像</view>
           <image wx:if="{{profileDraft.avatarUrl}}" class="profile-option-avatar" src="{{profileDraft.avatarUrl}}" mode="aspectFill" />
           <view wx:else class="profile-option-avatar profile-option-avatar-empty">
             <view class="avatar-head"></view>
@@ -101,13 +131,10 @@
           </view>
         </view>
 
-        <view class="profile-option-row profile-option-preview">
-          <view class="profile-option-title">用微信名称</view>
-          <view class="profile-option-name">{{profileDraft.nickname}}</view>
-        </view>
-
         <view class="profile-option-row profile-option-action" bindtap="chooseProfileAvatarFromAlbum">从相册选择</view>
         <view class="profile-option-row profile-option-action" bindtap="takeProfileAvatarPhoto">拍照</view>
+        <view class="profile-option-row profile-option-save" bindtap="saveProfileDraft">保存资料</view>
+        <view class="profile-option-row profile-option-reset" bindtap="resetProfileInfo">恢复默认资料</view>
       </view>
 
       <view class="profile-cancel-button" bindtap="closeProfileEditor">取消</view>

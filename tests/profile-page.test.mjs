@@ -173,27 +173,52 @@ await test("profile card opens editor with current profile draft", () => {
   });
 });
 
-await test("profile editor sheet does not use native avatar or nickname controls", () => {
+await test("profile editor sheet supports WeChat avatar and nickname editing", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
 
-  assert.equal(wxml.includes('open-type="chooseAvatar"'), false);
-  assert.equal(wxml.includes('type="nickname"'), false);
-  assert.equal(wxml.includes("bindchooseavatar"), false);
-  assert.equal(wxml.includes("bindblur=\"onNicknameBlur\""), false);
+  assert.equal(wxml.includes('open-type="chooseAvatar"'), true);
+  assert.equal(wxml.includes('bindchooseavatar="onChooseWechatAvatar"'), true);
+  assert.equal(wxml.includes('bindinput="onNicknameInput"'), true);
+  assert.equal(wxml.includes("保存资料"), true);
+  assert.equal(wxml.includes("恢复默认资料"), true);
 });
 
-await test("choosing avatar from album updates and stores profile draft", () => {
+await test("choosing WeChat avatar updates the profile draft", () => {
+  const page = loadProfilePage();
+
+  page.openProfileEditor();
+  page.onChooseWechatAvatar({
+    detail: {
+      avatarUrl: "/tmp/wechat-avatar.png",
+    },
+  });
+
+  assert.equal(page.data.profileDraft.avatarUrl, "/tmp/wechat-avatar.png");
+  assert.equal(page.data.profileInfo.avatarUrl, "");
+});
+
+await test("typing nickname updates the profile draft", () => {
+  const page = loadProfilePage();
+
+  page.openProfileEditor();
+  page.onNicknameInput({
+    detail: {
+      value: "新昵称",
+    },
+  });
+
+  assert.equal(page.data.profileDraft.nickname, "新昵称");
+  assert.equal(page.data.profileInfo.nickname, "微信名称");
+});
+
+await test("choosing avatar from album only updates the profile draft", () => {
   let chooseMediaOptions;
-  let storedValue;
   const page = loadProfilePage({
     chooseMedia(options) {
       chooseMediaOptions = options;
       options.success({
         tempFiles: [{ tempFilePath: "/tmp/album-avatar.png" }],
       });
-    },
-    setStorageSync(key, value) {
-      storedValue = value;
     },
   });
 
@@ -203,25 +228,17 @@ await test("choosing avatar from album updates and stores profile draft", () => 
   assert.deepEqual(plain(chooseMediaOptions.sourceType), ["album"]);
   assert.deepEqual(plain(chooseMediaOptions.mediaType), ["image"]);
   assert.equal(page.data.profileDraft.avatarUrl, "/tmp/album-avatar.png");
-  assert.equal(page.data.profileInfo.avatarUrl, "/tmp/album-avatar.png");
-  assert.deepEqual(plain(storedValue), {
-    nickname: "微信名称",
-    avatarUrl: "/tmp/album-avatar.png",
-  });
+  assert.equal(page.data.profileInfo.avatarUrl, "");
 });
 
-await test("taking profile photo uses camera source and stores profile draft", () => {
+await test("taking profile photo only updates the profile draft", () => {
   let chooseMediaOptions;
-  let storedValue;
   const page = loadProfilePage({
     chooseMedia(options) {
       chooseMediaOptions = options;
       options.success({
         tempFiles: [{ tempFilePath: "/tmp/camera-avatar.png" }],
       });
-    },
-    setStorageSync(key, value) {
-      storedValue = value;
     },
   });
 
@@ -232,11 +249,64 @@ await test("taking profile photo uses camera source and stores profile draft", (
   assert.deepEqual(plain(chooseMediaOptions.sourceType), ["camera"]);
   assert.deepEqual(plain(chooseMediaOptions.mediaType), ["image"]);
   assert.equal(page.data.profileDraft.avatarUrl, "/tmp/camera-avatar.png");
-  assert.equal(page.data.profileInfo.avatarUrl, "/tmp/camera-avatar.png");
-  assert.deepEqual(plain(storedValue), {
-    nickname: "微信名称",
-    avatarUrl: "/tmp/camera-avatar.png",
+  assert.equal(page.data.profileInfo.avatarUrl, "");
+});
+
+await test("saving profile draft stores nickname and avatar then closes editor", () => {
+  let storedKey = "";
+  let storedValue = null;
+  let toastTitle = "";
+  const page = loadProfilePage({
+    setStorageSync(key, value) {
+      storedKey = key;
+      storedValue = value;
+    },
+    showToast(options) {
+      toastTitle = options.title;
+    },
   });
+
+  page.openProfileEditor();
+  page.onNicknameInput({ detail: { value: "新昵称" } });
+  page.onChooseWechatAvatar({ detail: { avatarUrl: "/tmp/wechat-avatar.png" } });
+  page.saveProfileDraft();
+
+  assert.equal(storedKey, "wineProfileInfo");
+  assert.deepEqual(plain(storedValue), {
+    nickname: "新昵称",
+    avatarUrl: "/tmp/wechat-avatar.png",
+  });
+  assert.equal(page.data.profileInfo.nickname, "新昵称");
+  assert.equal(page.data.profileInfo.avatarUrl, "/tmp/wechat-avatar.png");
+  assert.equal(page.data.isProfileEditorVisible, false);
+  assert.equal(toastTitle, "已更新");
+});
+
+await test("resetting profile clears storage and restores default profile", () => {
+  let removedKey = "";
+  let toastTitle = "";
+  const page = loadProfilePage({
+    removeStorageSync(key) {
+      removedKey = key;
+    },
+    showToast(options) {
+      toastTitle = options.title;
+    },
+  });
+
+  page.openProfileEditor();
+  page.onNicknameInput({ detail: { value: "新昵称" } });
+  page.onChooseWechatAvatar({ detail: { avatarUrl: "/tmp/wechat-avatar.png" } });
+  page.resetProfileInfo();
+
+  assert.equal(removedKey, "wineProfileInfo");
+  assert.deepEqual(plain(page.data.profileInfo), {
+    nickname: "微信名称",
+    avatarUrl: "",
+    note: "点击使用微信头像和名称",
+  });
+  assert.equal(page.data.isProfileEditorVisible, false);
+  assert.equal(toastTitle, "已恢复默认资料");
 });
 
 await test("profile shows inquiry admin entry only for admins", async () => {
