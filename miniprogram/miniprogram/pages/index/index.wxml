@@ -35,8 +35,13 @@
     <block wx:else>
       <view class="section">
         <view class="section-head">
-          <view class="section-title">热门产品</view>
-          <view class="section-tip">精选案例</view>
+          <view class="section-title-group">
+            <view class="section-title">热门产品</view>
+            <view class="section-tip">精选案例</view>
+          </view>
+          <view class="section-more" bindtap="navigateToCategory" data-sort="popular">
+            查看更多 >
+          </view>
         </view>
         <view wx:if="{{popularCases.length}}" class="product-grid">
           <view
@@ -62,8 +67,13 @@
 
       <view class="section">
         <view class="section-head">
-          <view class="section-title">最新产品</view>
-          <view class="section-tip">近期更新</view>
+          <view class="section-title-group">
+            <view class="section-title">最新产品</view>
+            <view class="section-tip">近期更新</view>
+          </view>
+          <view class="section-more" bindtap="navigateToCategory" data-sort="latest">
+            查看更多 >
+          </view>
         </view>
         <view wx:if="{{latestCases.length}}" class="product-grid">
           <view

@@ -7,6 +7,8 @@ const {
   shouldRefreshCaseData,
 } = require("../../utils/caseRefresh");
 
+const PENDING_CATEGORY_SORT_KEY = "pendingCategorySort";
+
 function summarizeTags(caseItem) {
   return [
     ...(caseItem.packageTypes || []),
@@ -37,7 +39,7 @@ function buildHomeSections(cases) {
 
   return {
     popularCases: popularSource.slice(0, 4).map(buildProductCard),
-    latestCases: latestSource.slice(0, 4).map(buildProductCard),
+    latestCases: latestSource.slice(0, 6).map(buildProductCard),
   };
 }
 
@@ -105,6 +107,18 @@ Page({
     if (!id) return;
     wx.navigateTo({
       url: `/pages/detail/index?id=${encodeURIComponent(id)}`,
+    });
+  },
+
+  navigateToCategory(event) {
+    const sort = event.currentTarget.dataset.sort;
+    const app = typeof getApp === "function" ? getApp() : null;
+    if (app && app.globalData) {
+      app.globalData[PENDING_CATEGORY_SORT_KEY] = sort || "";
+    }
+    wx.setStorageSync(PENDING_CATEGORY_SORT_KEY, sort || "");
+    wx.switchTab({
+      url: "/pages/category/index",
     });
   },
 
