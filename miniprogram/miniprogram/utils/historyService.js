@@ -21,19 +21,19 @@ function getHistoryCollection() {
   return getDb().collection(HISTORY_COLLECTION);
 }
 
-function buildHistoryLookupConditions(caseItem) {
+function buildHistoryLookupConditions(caseItem, openid) {
   const record = buildHistoryRecord(caseItem);
   const conditions = [];
 
   if (record.caseDocId) {
-    conditions.push({ caseDocId: record.caseDocId });
+    conditions.push({ _openid: openid, caseDocId: record.caseDocId });
   }
   if (record.caseId && record.caseId !== record.caseDocId) {
-    conditions.push({ caseId: record.caseId });
+    conditions.push({ _openid: openid, caseId: record.caseId });
   }
 
   if (!conditions.length) {
-    return [{ caseDocId: "__missing_case__" }];
+    return [{ _openid: openid, caseDocId: "__missing_case__" }];
   }
   return conditions;
 }
@@ -42,15 +42,30 @@ async function removeHistoryRecords(historyIds) {
   const ids = normalizeSelectedIds(historyIds);
   if (!ids.length) return 0;
 
-  await Promise.all(ids.map((id) => getHistoryCollection().doc(id).remove()));
-  return ids.length;
+  const openid = getCachedOpenId() || await ensureWxIdentity({ silent: true });
+  if (!openid) return 0;
+
+  const results = await Promise.all(ids.map(async (id) => {
+    const response = await getHistoryCollection()
+      .where({ _id: id, _openid: openid })
+      .limit(1)
+      .get();
+    const record = (response.data || [])[0];
+    if (!record || !record._id) return false;
+    await getHistoryCollection().doc(record._id).remove();
+    return true;
+  }));
+  return results.filter(Boolean).length;
 }
 
-async function trimHistoryLimit(limit = HISTORY_LIMIT) {
+async function trimHistoryLimit(limit = HISTORY_LIMIT, openid = getCachedOpenId()) {
+  if (!openid) return 0;
+
   let removedCount = 0;
 
   while (true) {
     const response = await getHistoryCollection()
+      .where({ _openid: openid })
       .orderBy("lastViewedAt", "desc")
       .skip(limit)
       .limit(100)
@@ -65,8 +80,8 @@ async function trimHistoryLimit(limit = HISTORY_LIMIT) {
   return removedCount;
 }
 
-function trimHistoryInBackground() {
-  trimHistoryLimit().catch((error) => {
+function trimHistoryInBackground(openid) {
+  trimHistoryLimit(HISTORY_LIMIT, openid).catch((error) => {
     console.warn("浏览记录上限清理失败", error);
   });
 }
@@ -89,7 +104,7 @@ async function recordCaseView(caseItem) {
   const _ = db.command;
   const record = buildHistoryRecord(caseItem);
   let existing = null;
-  const conditions = buildHistoryLookupConditions(caseItem);
+  const conditions = buildHistoryLookupConditions(caseItem, openid);
   for (const condition of conditions) {
     const existingResponse = await getHistoryCollection().where(condition).limit(1).get();
     existing = (existingResponse.data || [])[0] || null;
@@ -101,11 +116,12 @@ async function recordCaseView(caseItem) {
       data: {
         caseDocId: record.caseDocId,
         caseId: record.caseId,
+        openid,
         viewCount: _.inc(1),
         lastViewedAt: db.serverDate(),
       },
     });
-    trimHistoryInBackground();
+    trimHistoryInBackground(openid);
     return {
       ...existing,
       ...record,
@@ -116,13 +132,14 @@ async function recordCaseView(caseItem) {
   const response = await getHistoryCollection().add({
     data: {
       ...record,
+      openid,
       viewCount: 1,
       createdAt: db.serverDate(),
       lastViewedAt: db.serverDate(),
     },
   });
 
-  trimHistoryInBackground();
+  trimHistoryInBackground(openid);
 
   return {
     _id: response._id,
@@ -132,10 +149,16 @@ async function recordCaseView(caseItem) {
 }
 
 async function clearHistory() {
+  const openid = getCachedOpenId() || await ensureWxIdentity({ silent: true });
+  if (!openid) return 0;
+
   let removedCount = 0;
 
   while (true) {
-    const response = await getHistoryCollection().limit(100).get();
+    const response = await getHistoryCollection()
+      .where({ _openid: openid })
+      .limit(100)
+      .get();
     const ids = normalizeSelectedIds((response.data || []).map((record) => record._id || record.id));
     if (!ids.length) break;
 
@@ -147,7 +170,11 @@ async function clearHistory() {
 }
 
 async function fetchHistoryCases() {
+  const openid = getCachedOpenId() || await ensureWxIdentity({ silent: true });
+  if (!openid) return [];
+
   const response = await getHistoryCollection()
+    .where({ _openid: openid })
     .orderBy("lastViewedAt", "desc")
     .limit(HISTORY_LIMIT)
     .get();

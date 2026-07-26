@@ -21,41 +21,42 @@ function getFavoritesCollection() {
   return getDb().collection(FAVORITE_COLLECTION);
 }
 
-function buildFavoriteLookupConditions(caseItem) {
+function buildFavoriteLookupConditions(caseItem, openid) {
   const record = buildFavoriteRecord(caseItem);
   const conditions = [];
 
   if (record.caseDocId) {
-    conditions.push({ caseDocId: record.caseDocId });
+    conditions.push({ _openid: openid, caseDocId: record.caseDocId });
   }
   if (record.caseId && record.caseId !== record.caseDocId) {
-    conditions.push({ caseId: record.caseId });
+    conditions.push({ _openid: openid, caseId: record.caseId });
   }
 
   if (!conditions.length) {
-    return [{ caseDocId: "__missing_case__" }];
+    return [{ _openid: openid, caseDocId: "__missing_case__" }];
   }
   return conditions;
 }
 
 async function ensureIdentityForRead(options = {}) {
-  if (getCachedOpenId()) return true;
-  if (!options.silentIdentity) return false;
+  const cachedOpenId = getCachedOpenId();
+  if (cachedOpenId) return cachedOpenId;
+  if (!options.silentIdentity) return "";
 
   try {
     const openid = await ensureWxIdentity({ silent: true });
-    return Boolean(openid);
+    return openid || "";
   } catch (error) {
     console.warn("静默读取微信身份失败", error);
-    return false;
+    return "";
   }
 }
 
 async function fetchFavoriteForCase(caseItem, options = {}) {
-  const hasIdentity = await ensureIdentityForRead(options);
-  if (!hasIdentity) return null;
+  const openid = await ensureIdentityForRead(options);
+  if (!openid) return null;
 
-  const conditions = buildFavoriteLookupConditions(caseItem);
+  const conditions = buildFavoriteLookupConditions(caseItem, openid);
   for (const condition of conditions) {
     const response = await getFavoritesCollection().where(condition).limit(1).get();
     const favorite = (response.data || [])[0];
@@ -71,7 +72,7 @@ async function addFavorite(caseItem) {
   const existing = await fetchFavoriteForCase(caseItem);
   if (existing) return existing;
 
-  const countResponse = await getFavoritesCollection().count();
+  const countResponse = await getFavoritesCollection().where({ _openid: openid }).count();
   if (isFavoriteLimitReached(countResponse.total, FAVORITE_LIMIT)) {
     return {
       limitReached: true,
@@ -82,6 +83,7 @@ async function addFavorite(caseItem) {
   const response = await getFavoritesCollection().add({
     data: {
       ...buildFavoriteRecord(caseItem),
+      openid,
       createdAt: db.serverDate(),
     },
   });
@@ -94,7 +96,17 @@ async function addFavorite(caseItem) {
 
 async function removeFavorite(favoriteId) {
   if (!favoriteId) return false;
-  await getFavoritesCollection().doc(favoriteId).remove();
+  const openid = getCachedOpenId() || await ensureWxIdentity({ silent: true });
+  if (!openid) return false;
+
+  const response = await getFavoritesCollection()
+    .where({ _id: favoriteId, _openid: openid })
+    .limit(1)
+    .get();
+  const favorite = (response.data || [])[0];
+  if (!favorite || !favorite._id) return false;
+
+  await getFavoritesCollection().doc(favorite._id).remove();
   return true;
 }
 
@@ -102,15 +114,21 @@ async function removeFavoriteRecords(favoriteIds) {
   const ids = normalizeSelectedFavoriteIds(favoriteIds);
   if (!ids.length) return 0;
 
-  await Promise.all(ids.map((id) => getFavoritesCollection().doc(id).remove()));
-  return ids.length;
+  const results = await Promise.all(ids.map((id) => removeFavorite(id)));
+  return results.filter(Boolean).length;
 }
 
 async function clearFavorites() {
+  const openid = getCachedOpenId() || await ensureWxIdentity({ silent: true });
+  if (!openid) return 0;
+
   let removedCount = 0;
 
   while (true) {
-    const response = await getFavoritesCollection().limit(100).get();
+    const response = await getFavoritesCollection()
+      .where({ _openid: openid })
+      .limit(100)
+      .get();
     const ids = normalizeSelectedFavoriteIds(
       (response.data || []).map((favorite) => favorite._id || favorite.id)
     );
@@ -158,7 +176,11 @@ async function toggleFavorite(caseItem, currentFavorite) {
 }
 
 async function fetchFavoriteCases() {
+  const openid = await ensureIdentityForRead({ silentIdentity: true });
+  if (!openid) return [];
+
   const response = await getFavoritesCollection()
+    .where({ _openid: openid })
     .orderBy("createdAt", "desc")
     .limit(FAVORITE_LIMIT)
     .get();
