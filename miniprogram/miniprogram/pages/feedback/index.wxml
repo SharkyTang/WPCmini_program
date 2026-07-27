@@ -1,10 +1,18 @@
 <view class="page">
+  <mp-toptips
+    msg="{{topTips.message}}"
+    type="{{topTips.type}}"
+    show="{{topTips.show}}"
+    bindhide="hideTopTips"
+  />
+
   <view class="hero">
     <view class="page-title">意见反馈</view>
     <view class="page-subtitle">告诉我哪里不好用，或者你想增加什么功能</view>
   </view>
 
   <view class="form-card">
+    <view class="form-section-title">反馈分类</view>
     <view class="field">
       <view class="field-label">反馈类型</view>
       <view class="type-grid">
@@ -20,6 +28,7 @@
       </view>
     </view>
 
+    <view class="form-section-title">反馈内容</view>
     <view class="field">
       <view class="field-heading">
         <view class="field-label">反馈内容</view>
@@ -35,6 +44,7 @@
       />
     </view>
 
+    <view class="form-section-title">联系信息</view>
     <view class="field">
       <view class="field-label">联系方式（选填）</view>
       <input

@@ -9,6 +9,14 @@ const modulePath = resolve(
   __dirname,
   "../miniprogram/miniprogram/utils/feedbackData.js"
 );
+const feedbackWxmlPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/feedback/index.wxml"
+);
+const feedbackJsonPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/feedback/index.json"
+);
 const source = readFileSync(modulePath, "utf8");
 const sandbox = {
   module: { exports: {} },
@@ -67,6 +75,17 @@ test("validates required type and content length", () => {
   assert.equal(validateFeedbackDraft({ type: "", content: "页面卡顿了" }).valid, false);
   assert.equal(validateFeedbackDraft({ type: "bug", content: "卡" }).message, "请至少填写 5 个字");
   assert.equal(validateFeedbackDraft({ type: "bug", content: "页面加载时偶尔卡顿" }).valid, true);
+});
+
+test("feedback page uses WeUI top tips and sectioned form layout", () => {
+  const wxml = readFileSync(feedbackWxmlPath, "utf8");
+  const pageJson = JSON.parse(readFileSync(feedbackJsonPath, "utf8"));
+
+  assert.equal(pageJson.usingComponents["mp-toptips"], "weui-miniprogram/toptips/toptips");
+  assert.equal(wxml.includes("<mp-toptips"), true);
+  assert.equal(wxml.includes("反馈分类"), true);
+  assert.equal(wxml.includes("反馈内容"), true);
+  assert.equal(wxml.includes("联系信息"), true);
 });
 
 test("validates maximum content and contact length", () => {

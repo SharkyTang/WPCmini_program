@@ -22,6 +22,9 @@
     "navigationBarTitleText": "酒包装灵感库",
     "navigationBarTextStyle": "black"
   },
+  "useExtendedLib": {
+    "weui": true
+  },
   "tabBar": {
     "color": "#8c8176",
     "selectedColor": "#241d16",

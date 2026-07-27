@@ -1,4 +1,11 @@
 <view class="page">
+  <mp-toptips
+    msg="{{topTips.message}}"
+    type="{{topTips.type}}"
+    show="{{topTips.show}}"
+    bindhide="hideTopTips"
+  />
+
   <view class="hero">
     <view class="page-title">{{isEdit ? '编辑案例' : '新增案例'}}</view>
     <view class="page-subtitle">{{isEdit ? '修改标题、标签、封面和显示状态' : '先创建隐藏案例，确认后再打开显示'}}</view>
@@ -12,6 +19,7 @@
   </view>
 
   <view wx:else class="form-card">
+    <view class="form-section-title">基础信息</view>
     <view class="field">
       <view class="field-label">案例图片 *</view>
       <view class="gallery-upload-wrap">
@@ -53,6 +61,7 @@
       </view>
     </view>
 
+    <view class="form-section-title">分类标签</view>
     <view class="field">
       <view class="field-label">包装内容 *</view>
       <view class="chip-grid">
@@ -133,6 +142,7 @@
       </view>
     </view>
 
+    <view class="form-section-title">排序与备注</view>
     <view class="field">
       <view class="field-label">排序</view>
       <input class="text-input" type="number" value="{{form.sortOrder}}" placeholder="数字越小越靠前，可不填" bindinput="onSortOrderInput" />
@@ -143,6 +153,7 @@
       <textarea class="textarea-input" value="{{form.notes}}" maxlength="800" placeholder="可写材质、适合场景、内部说明" bindinput="onNotesInput" />
     </view>
 
+    <view class="form-section-title">展示设置</view>
     <view class="visible-row">
       <view>
         <view class="field-label">前台显示</view>

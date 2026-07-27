@@ -30,6 +30,14 @@ const inquiryDataPath = resolve(
   __dirname,
   "../miniprogram/miniprogram/utils/inquiryData.js"
 );
+const inquiryWxmlPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/inquiry/index.wxml"
+);
+const inquiryJsonPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/inquiry/index.json"
+);
 const inquiryData = loadCommonJsModule(inquiryDataPath, {
   "./caseData": caseData,
 });
@@ -103,6 +111,17 @@ test("validates required package types, content, and contact", () => {
     }).valid,
     true
   );
+});
+
+test("inquiry page uses WeUI top tips and sectioned form layout", () => {
+  const wxml = readFileSync(inquiryWxmlPath, "utf8");
+  const pageJson = JSON.parse(readFileSync(inquiryJsonPath, "utf8"));
+
+  assert.equal(pageJson.usingComponents["mp-toptips"], "weui-miniprogram/toptips/toptips");
+  assert.equal(wxml.includes("<mp-toptips"), true);
+  assert.equal(wxml.includes("包装方向"), true);
+  assert.equal(wxml.includes("需求说明"), true);
+  assert.equal(wxml.includes("联系信息"), true);
 });
 
 test("validates maximum inquiry content and contact length", () => {

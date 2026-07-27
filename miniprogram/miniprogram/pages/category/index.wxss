@@ -1,6 +1,6 @@
 page {
   min-height: 100%;
-  background: #f7f3ec;
+  background: #f5efe4;
   color: #241d16;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
 }
@@ -14,15 +14,17 @@ page {
 
 .topbar {
   padding: 36rpx 38rpx 26rpx;
-  background: #fffdf9;
+  background:
+    linear-gradient(180deg, #fff8ef 0%, #fffdf8 100%);
   flex: 0 0 auto;
 }
 
 .search-box {
   height: 70rpx;
-  border: 2rpx solid #dfcfb7;
+  border: 2rpx solid #e0cfb8;
   border-radius: 35rpx;
   background: #fff;
+  box-shadow: 0 8rpx 20rpx rgba(72, 49, 25, 0.06);
   display: flex;
   align-items: center;
   padding: 0 24rpx;
@@ -57,7 +59,7 @@ page {
   width: 150rpx;
   flex: 0 0 150rpx;
   padding: 28rpx 18rpx 48rpx;
-  background: #efebe3;
+  background: #eee5d9;
   box-sizing: border-box;
   overflow-y: auto;
 }
@@ -65,9 +67,9 @@ page {
 .nav-item {
   min-height: 64rpx;
   margin-bottom: 18rpx;
-  border: 2rpx solid #eadcca;
+  border: 2rpx solid #e2cfb4;
   border-radius: 32rpx;
-  background: #fffdf9;
+  background: #fffaf2;
   color: #241d16;
   display: flex;
   align-items: center;
@@ -81,8 +83,8 @@ page {
 }
 
 .nav-item-active {
-  border-color: #241d16;
-  background: #241d16;
+  border-color: #b77a2d;
+  background: #2a2119;
   color: #fff;
 }
 
@@ -131,15 +133,15 @@ page {
 }
 
 .sub-nav-item-active {
-  color: #241d16;
+  color: #8f5d22;
   font-weight: 800;
-  background: linear-gradient(to bottom, transparent 52%, #f3df4a 52%, #f3df4a 78%, transparent 78%);
+  background: linear-gradient(to bottom, transparent 54%, #f0d47b 54%, #f0d47b 80%, transparent 80%);
 }
 
 .content {
   flex: 1;
   height: auto;
-  background: #fffdf9;
+  background: #fffdf8;
 }
 
 .content-inner {
@@ -176,9 +178,10 @@ page {
 .selected-panel {
   margin-top: 18rpx;
   padding: 18rpx;
-  border: 2rpx solid #dfcfb7;
+  border: 2rpx solid rgba(223, 207, 183, 0.86);
   border-radius: 8rpx;
-  background: #fff;
+  background: #fffaf2;
+  box-shadow: 0 10rpx 24rpx rgba(72, 49, 25, 0.07);
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -207,7 +210,7 @@ page {
 
 .selected-pill {
   padding: 11rpx 18rpx;
-  background: #241d16;
+  background: #2a2119;
   color: #fff;
   font-size: 22rpx;
 }
@@ -225,15 +228,15 @@ page {
 
 .option-pill {
   padding: 14rpx 24rpx;
-  border: 2rpx solid #dfcfb7;
+  border: 2rpx solid #e0cfb8;
   background: #fff;
   color: #6d6257;
   font-size: 24rpx;
 }
 
 .option-pill-active {
-  border-color: #241d16;
-  background: #241d16;
+  border-color: #b77a2d;
+  background: #2a2119;
   color: #fff;
 }
 
@@ -253,6 +256,10 @@ page {
 
 .case-card {
   min-width: 0;
+  padding: 10rpx;
+  border-radius: 8rpx;
+  background: #fffdf8;
+  box-shadow: 0 10rpx 22rpx rgba(72, 49, 25, 0.07);
 }
 
 .case-image,
@@ -260,7 +267,7 @@ page {
   width: 100%;
   height: 190rpx;
   border-radius: 8rpx;
-  background: #f5e2ae;
+  background: linear-gradient(135deg, #f5e2ae 0%, #ead1a1 100%);
 }
 
 .case-placeholder {

@@ -31,6 +31,11 @@ const caseAdminEditWxmlPath = resolve(
   __dirname,
   "../miniprogram/miniprogram/pages/case-admin/edit.wxml"
 );
+const caseAdminEditJsonPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/case-admin/edit.json"
+);
+const appJsonPath = resolve(__dirname, "../miniprogram/miniprogram/app.json");
 const caseAdminData = loadCommonJsModule(caseAdminDataPath, {
   "./caseData": caseData,
 });
@@ -98,9 +103,17 @@ test("exposes case admin form options by field key", () => {
 
 test("case admin edit form shows home section controls after visibility switch", () => {
   const wxml = readFileSync(caseAdminEditWxmlPath, "utf8");
+  const pageJson = JSON.parse(readFileSync(caseAdminEditJsonPath, "utf8"));
+  const appJson = JSON.parse(readFileSync(appJsonPath, "utf8"));
   const visibleIndex = wxml.indexOf("前台显示");
   const homeSectionIndex = wxml.indexOf("首页展示位置");
 
+  assert.equal(appJson.useExtendedLib.weui, true);
+  assert.equal(pageJson.usingComponents["mp-toptips"], "weui-miniprogram/toptips/toptips");
+  assert.equal(wxml.includes("<mp-toptips"), true);
+  assert.equal(wxml.includes("基础信息"), true);
+  assert.equal(wxml.includes("分类标签"), true);
+  assert.equal(wxml.includes("展示设置"), true);
   assert.notEqual(homeSectionIndex, -1);
   assert.equal(wxml.includes("首页轮播显示"), false);
   assert.ok(homeSectionIndex > visibleIndex);

@@ -43,6 +43,11 @@ Page({
     coverImageUrl: "",
     galleryPreviewUrls: [],
     galleryMax: CASE_ADMIN_GALLERY_MAX,
+    topTips: {
+      show: false,
+      message: "",
+      type: "error",
+    },
     form: createEmptyCaseForm(),
     formOptions: CASE_ADMIN_FORM_OPTIONS,
     optionViews: buildCaseAdminOptionViews(createEmptyCaseForm(), CASE_ADMIN_FORM_OPTIONS),
@@ -138,6 +143,22 @@ Page({
     this.updateFormField("isPinned", event.detail.value === true);
   },
 
+  showTopTips(message, type = "error") {
+    this.setData({
+      topTips: {
+        show: true,
+        message,
+        type,
+      },
+    });
+  },
+
+  hideTopTips() {
+    this.setData({
+      "topTips.show": false,
+    });
+  },
+
   selectSingle(event) {
     const { field, value } = event.currentTarget.dataset;
     if (!field) return;
@@ -155,6 +176,7 @@ Page({
   chooseGalleryImages() {
     const remaining = CASE_ADMIN_GALLERY_MAX - this.data.form.galleryImages.length;
     if (remaining <= 0) {
+      this.showTopTips("最多上传 5 张图片");
       wx.showToast({ title: "最多上传 5 张图片", icon: "none" });
       return;
     }
@@ -237,11 +259,15 @@ Page({
         title: uploadedCount ? `已上传 ${uploadedCount} 张` : "图片上传失败",
         icon: "none",
       });
+      if (!uploadedCount) {
+        this.showTopTips("图片上传失败，请重新选择一张图片");
+      }
     } catch (error) {
       console.warn("上传案例封面失败", error);
       this.setData({
         uploading: false,
       });
+      this.showTopTips("图片上传失败，请重新选择一张图片");
       wx.showToast({
         title: "图片上传失败",
         icon: "none",
@@ -290,6 +316,7 @@ Page({
     const galleryImages = [...this.data.form.galleryImages];
     const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
     if (galleryImages.length <= 1) {
+      this.showTopTips("案例至少保留一张图片");
       wx.showToast({ title: "案例至少保留一张图片", icon: "none" });
       return;
     }
@@ -315,6 +342,7 @@ Page({
     });
 
     if (!validation.valid) {
+      this.showTopTips(validation.message);
       wx.showToast({
         title: validation.message,
         icon: "none",
@@ -344,6 +372,7 @@ Page({
       }, 350);
     } catch (error) {
       console.warn("保存案例失败", error);
+      this.showTopTips("保存失败，请稍后重试");
       wx.showToast({
         title: "保存失败，请稍后重试",
         icon: "none",

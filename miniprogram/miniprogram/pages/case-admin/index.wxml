@@ -97,4 +97,15 @@
       <view wx:elif="{{!isHomeDisplay && !hasMore}}" class="list-foot">已显示全部案例</view>
     </view>
   </block>
+
+  <mp-dialog
+    ext-class="brand-dialog"
+    show="{{confirmDialog.show}}"
+    title="{{confirmDialog.title}}"
+    buttons="{{confirmDialog.buttons}}"
+    bindbuttontap="handleConfirmDialogTap"
+    bindclose="closeConfirmDialog"
+  >
+    <view class="dialog-content">{{confirmDialog.content}}</view>
+  </mp-dialog>
 </view>

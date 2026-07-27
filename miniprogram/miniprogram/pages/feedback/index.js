@@ -18,6 +18,11 @@ Page({
     contentMaxLength: CONTENT_MAX_LENGTH,
     submitting: false,
     sourcePage: "",
+    topTips: {
+      show: false,
+      message: "",
+      type: "error",
+    },
   },
 
   onLoad(options = {}) {
@@ -47,6 +52,22 @@ Page({
     });
   },
 
+  showTopTips(message, type = "error") {
+    this.setData({
+      topTips: {
+        show: true,
+        message,
+        type,
+      },
+    });
+  },
+
+  hideTopTips() {
+    this.setData({
+      "topTips.show": false,
+    });
+  },
+
   async submitForm() {
     if (this.data.submitting) return;
 
@@ -57,6 +78,7 @@ Page({
     };
     const validation = validateFeedbackDraft(draft);
     if (!validation.valid) {
+      this.showTopTips(validation.message);
       wx.showToast({
         title: validation.message,
         icon: "none",
@@ -89,6 +111,7 @@ Page({
       }, 700);
     } catch (error) {
       console.error("意见反馈提交失败", error);
+      this.showTopTips("提交失败，请稍后重试");
       wx.showToast({
         title: "提交失败，请稍后重试",
         icon: "none",

@@ -57,6 +57,11 @@ Page({
     contentMaxLength: CONTENT_MAX_LENGTH,
     contactMaxLength: CONTACT_MAX_LENGTH,
     submitting: false,
+    topTips: {
+      show: false,
+      message: "",
+      type: "error",
+    },
   },
 
   onLoad(options = {}) {
@@ -147,11 +152,28 @@ Page({
     });
   },
 
+  showTopTips(message, type = "error") {
+    this.setData({
+      topTips: {
+        show: true,
+        message,
+        type,
+      },
+    });
+  },
+
+  hideTopTips() {
+    this.setData({
+      "topTips.show": false,
+    });
+  },
+
   async submitForm() {
     if (this.data.submitting) return;
 
     const validation = validateInquiryDraft(this.data.draft);
     if (!validation.valid) {
+      this.showTopTips(validation.message);
       wx.showToast({
         title: validation.message,
         icon: "none",
@@ -185,6 +207,7 @@ Page({
       }, 800);
     } catch (error) {
       console.error("需求提交失败", error);
+      this.showTopTips(error.code === "INVALID_INQUIRY" ? error.message : "提交失败，请稍后重试");
       wx.showToast({
         title: error.code === "INVALID_INQUIRY" ? error.message : "提交失败，请稍后重试",
         icon: "none",

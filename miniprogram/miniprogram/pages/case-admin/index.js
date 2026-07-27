@@ -39,6 +39,15 @@ Page({
     page: 1,
     pageSize: DEFAULT_PAGE_SIZE,
     hasMore: false,
+    confirmDialog: {
+      show: false,
+      title: "",
+      content: "",
+      action: "",
+      id: "",
+      nextVisible: false,
+      buttons: [{ text: "取消" }, { text: "确认" }],
+    },
   },
 
   onLoad() {
@@ -177,27 +186,13 @@ Page({
 
     if (!id) return;
 
-    wx.showModal({
+    this.openConfirmDialog({
       title,
       content,
       confirmText: nextVisible ? "恢复" : "隐藏",
-      success: async (result) => {
-        if (!result.confirm) return;
-        try {
-          await setCaseVisibility(id, nextVisible);
-          wx.showToast({
-            title: nextVisible ? "已恢复显示" : "已隐藏",
-            icon: "none",
-          });
-          this.loadCases({ reset: true });
-        } catch (error) {
-          console.warn("更新案例显示状态失败", error);
-          wx.showToast({
-            title: "操作失败，请稍后重试",
-            icon: "none",
-          });
-        }
-      },
+      action: "visibility",
+      id,
+      nextVisible,
     });
   },
 
@@ -205,29 +200,83 @@ Page({
     const id = event.currentTarget.dataset.id;
     if (!id) return;
 
-    wx.showModal({
+    this.openConfirmDialog({
       title: "删除这个案例？",
       content: "删除后将从前台和案例管理中移除，无法恢复。",
       confirmText: "删除",
-      confirmColor: "#b04236",
-      success: async (result) => {
-        if (!result.confirm) return;
-        try {
-          await deleteCaseAdmin(id);
-          wx.showToast({
-            title: "已删除",
-            icon: "none",
-          });
-          this.loadCases({ reset: true });
-        } catch (error) {
-          console.warn("删除案例失败", error);
-          wx.showToast({
-            title: "删除失败，请稍后重试",
-            icon: "none",
-          });
-        }
+      action: "delete",
+      id,
+    });
+  },
+
+  openConfirmDialog(options = {}) {
+    this.setData({
+      confirmDialog: {
+        show: true,
+        title: options.title || "",
+        content: options.content || "",
+        action: options.action || "",
+        id: options.id || "",
+        nextVisible: options.nextVisible === true,
+        buttons: [
+          { text: "取消" },
+          { text: options.confirmText || "确认", extClass: options.action === "delete" ? "dialog-button-danger" : "dialog-button-primary" },
+        ],
       },
     });
+  },
+
+  closeConfirmDialog() {
+    this.setData({
+      "confirmDialog.show": false,
+    });
+  },
+
+  async handleConfirmDialogTap(event) {
+    const index = event.detail && event.detail.index;
+    const dialog = this.data.confirmDialog;
+    this.closeConfirmDialog();
+    if (index !== 1) return;
+
+    if (dialog.action === "delete") {
+      await this.performDeleteCase(dialog.id);
+    } else if (dialog.action === "visibility") {
+      await this.performCaseVisibility(dialog.id, dialog.nextVisible);
+    }
+  },
+
+  async performCaseVisibility(id, nextVisible) {
+    try {
+      await setCaseVisibility(id, nextVisible);
+      wx.showToast({
+        title: nextVisible ? "已恢复显示" : "已隐藏",
+        icon: "none",
+      });
+      this.loadCases({ reset: true });
+    } catch (error) {
+      console.warn("更新案例显示状态失败", error);
+      wx.showToast({
+        title: "操作失败，请稍后重试",
+        icon: "none",
+      });
+    }
+  },
+
+  async performDeleteCase(id) {
+    try {
+      await deleteCaseAdmin(id);
+      wx.showToast({
+        title: "已删除",
+        icon: "none",
+      });
+      this.loadCases({ reset: true });
+    } catch (error) {
+      console.warn("删除案例失败", error);
+      wx.showToast({
+        title: "删除失败，请稍后重试",
+        icon: "none",
+      });
+    }
   },
 
   retry() {

@@ -7,6 +7,7 @@ import vm from "node:vm";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pagePath = resolve(__dirname, "../miniprogram/miniprogram/pages/case-admin/index.js");
 const wxmlPath = resolve(__dirname, "../miniprogram/miniprogram/pages/case-admin/index.wxml");
+const jsonPath = resolve(__dirname, "../miniprogram/miniprogram/pages/case-admin/index.json");
 
 function loadCaseAdminPage(options = {}) {
   let pageConfig;
@@ -107,14 +108,18 @@ async function test(name, fn) {
 
 await test("case admin list shows delete after visibility action", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
+  const pageJson = JSON.parse(readFileSync(jsonPath, "utf8"));
   const visibilityIndex = wxml.indexOf('bindtap="toggleCaseVisibility"');
   const deleteIndex = wxml.indexOf('bindtap="deleteCase"');
 
+  assert.equal(pageJson.usingComponents["mp-dialog"], "weui-miniprogram/dialog/dialog");
   assert.notEqual(deleteIndex, -1);
   assert.ok(deleteIndex > visibilityIndex);
   assert.equal(wxml.includes("删除"), true);
   assert.equal(wxml.includes('scroll-x="true"'), true);
   assert.equal(wxml.includes("首页轮播"), false);
+  assert.equal(wxml.includes("<mp-dialog"), true);
+  assert.equal(wxml.includes('bindbuttontap="handleConfirmDialogTap"'), true);
 });
 
 await test("homepage view replaces visibility filtering and does not paginate", async () => {
@@ -141,12 +146,7 @@ await test("pinned view uses the normal editable list endpoint", async () => {
 });
 
 await test("canceling delete does not call delete service", async () => {
-  let modalOptions;
-  const { page, calls } = loadCaseAdminPage({
-    onShowModal(options) {
-      modalOptions = options;
-    },
-  });
+  const { page, calls } = loadCaseAdminPage();
 
   page.deleteCase({
     currentTarget: {
@@ -155,19 +155,15 @@ await test("canceling delete does not call delete service", async () => {
       },
     },
   });
-  await modalOptions.success({ confirm: false });
+  assert.equal(page.data.confirmDialog.title, "删除这个案例？");
+  await page.handleConfirmDialogTap({ detail: { index: 0 } });
 
   assert.deepEqual(calls.deletes, []);
   assert.deepEqual(calls.fetches, []);
 });
 
 await test("confirming delete calls service and refreshes list", async () => {
-  let modalOptions;
-  const { page, calls } = loadCaseAdminPage({
-    onShowModal(options) {
-      modalOptions = options;
-    },
-  });
+  const { page, calls } = loadCaseAdminPage();
 
   page.deleteCase({
     currentTarget: {
@@ -176,10 +172,10 @@ await test("confirming delete calls service and refreshes list", async () => {
       },
     },
   });
-  assert.equal(modalOptions.title, "删除这个案例？");
-  assert.equal(modalOptions.confirmText, "删除");
+  assert.equal(page.data.confirmDialog.title, "删除这个案例？");
+  assert.equal(page.data.confirmDialog.buttons[1].text, "删除");
 
-  await modalOptions.success({ confirm: true });
+  await page.handleConfirmDialogTap({ detail: { index: 1 } });
 
   assert.deepEqual(calls.deletes, ["case_doc_1"]);
   assert.equal(calls.toasts[0].title, "已删除");
@@ -188,13 +184,9 @@ await test("confirming delete calls service and refreshes list", async () => {
 });
 
 await test("delete failure shows a clear toast", async () => {
-  let modalOptions;
   const { page, calls } = loadCaseAdminPage({
     deleteError: true,
     silentConsole: true,
-    onShowModal(options) {
-      modalOptions = options;
-    },
   });
 
   page.deleteCase({
@@ -204,7 +196,7 @@ await test("delete failure shows a clear toast", async () => {
       },
     },
   });
-  await modalOptions.success({ confirm: true });
+  await page.handleConfirmDialogTap({ detail: { index: 1 } });
 
   assert.deepEqual(calls.deletes, ["case_doc_1"]);
   assert.equal(calls.toasts[0].title, "删除失败，请稍后重试");
