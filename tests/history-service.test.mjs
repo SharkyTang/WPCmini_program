@@ -10,9 +10,10 @@ const modulePath = resolve(
   "../miniprogram/miniprogram/utils/historyService.js"
 );
 
-function loadHistoryService(recordsByCondition = {}) {
+function loadHistoryService(recordsByCondition = {}, options = {}) {
   const whereCalls = [];
   const updates = [];
+  const removedIds = [];
   const sandbox = {
     module: { exports: {} },
     exports: {},
@@ -20,7 +21,7 @@ function loadHistoryService(recordsByCondition = {}) {
     require(path) {
       if (path === "./cloudData") {
         return {
-          fetchCaseById: async () => null,
+          fetchCaseById: options.fetchCaseById || (async () => null),
         };
       }
       if (path === "./historyData") {
@@ -32,7 +33,7 @@ function loadHistoryService(recordsByCondition = {}) {
             };
           },
           getOverflowHistoryIds: () => [],
-          mergeHistoryWithCases: () => [],
+          mergeHistoryWithCases: options.mergeHistoryWithCases || ((records, cases) => cases),
           normalizeSelectedIds: (ids) => ids.filter(Boolean),
         };
       }
@@ -75,7 +76,11 @@ function loadHistoryService(recordsByCondition = {}) {
                     },
                     async get() {
                       const key = JSON.stringify(condition);
-                      return { data: recordsByCondition[key] || [] };
+                      if (Object.prototype.hasOwnProperty.call(recordsByCondition, key)) {
+                        return { data: recordsByCondition[key] };
+                      }
+                      if (condition._id) return { data: [{ _id: condition._id }] };
+                      return { data: options.listRecords || [] };
                     },
                   };
                 },
@@ -85,7 +90,10 @@ function loadHistoryService(recordsByCondition = {}) {
                       updates.push({ id, payload });
                       return {};
                     },
-                    remove: async () => ({}),
+                    remove: async () => {
+                      removedIds.push(id);
+                      return {};
+                    },
                   };
                 },
                 add: async () => ({ _id: "history_new" }),
@@ -99,7 +107,7 @@ function loadHistoryService(recordsByCondition = {}) {
                   return this;
                 },
                 async get() {
-                  return { data: [] };
+                  return { data: options.listRecords || [] };
                 },
               };
             },
@@ -116,6 +124,7 @@ function loadHistoryService(recordsByCondition = {}) {
     service: sandbox.module.exports,
     updates,
     whereCalls,
+    removedIds,
   };
 }
 
@@ -152,4 +161,24 @@ await test("recordCaseView uses simple indexed lookups before updating history",
   assert.equal(updates.length, 1);
   assert.equal(history._id, "history_1");
   assert.equal(history.viewCount, 3);
+});
+
+await test("fetchHistoryCases removes records whose cases no longer exist", async () => {
+  const staleError = new Error("案例不存在：doc_missing");
+  staleError.code = "CASE_NOT_FOUND";
+  const { service, removedIds } = loadHistoryService({}, {
+    listRecords: [
+      { _id: "history_missing", caseDocId: "doc_missing", caseId: "case_999" },
+      { _id: "history_live", caseDocId: "doc_live", caseId: "case_001" },
+    ],
+    fetchCaseById: async (id) => {
+      if (id === "doc_missing") throw staleError;
+      return { _id: "doc_live", caseId: "case_001" };
+    },
+  });
+
+  const cases = await service.fetchHistoryCases();
+
+  assert.deepEqual(plain(removedIds), ["history_missing"]);
+  assert.deepEqual(plain(cases), [{ _id: "doc_live", caseId: "case_001" }]);
 });

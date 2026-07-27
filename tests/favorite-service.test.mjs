@@ -10,8 +10,9 @@ const modulePath = resolve(
   "../miniprogram/miniprogram/utils/favoriteService.js"
 );
 
-function loadFavoriteService(recordsByCondition = {}) {
+function loadFavoriteService(recordsByCondition = {}, options = {}) {
   const whereCalls = [];
+  const removedIds = [];
   const sandbox = {
     module: { exports: {} },
     exports: {},
@@ -19,7 +20,7 @@ function loadFavoriteService(recordsByCondition = {}) {
     require(path) {
       if (path === "./cloudData") {
         return {
-          fetchCaseById: async () => null,
+          fetchCaseById: options.fetchCaseById || (async () => null),
         };
       }
       if (path === "./favoriteData") {
@@ -31,7 +32,7 @@ function loadFavoriteService(recordsByCondition = {}) {
             };
           },
           isFavoriteLimitReached: () => false,
-          mergeFavoritesWithCases: () => [],
+          mergeFavoritesWithCases: options.mergeFavoritesWithCases || ((favorites, cases) => cases),
           normalizeSelectedFavoriteIds: (ids) => ids.filter(Boolean),
         };
       }
@@ -60,20 +61,30 @@ function loadFavoriteService(recordsByCondition = {}) {
                 where(condition) {
                   whereCalls.push(condition);
                   return {
+                    orderBy() {
+                      return this;
+                    },
                     limit() {
                       return this;
                     },
                     async get() {
                       const key = JSON.stringify(condition);
-                      return { data: recordsByCondition[key] || [] };
+                      if (Object.prototype.hasOwnProperty.call(recordsByCondition, key)) {
+                        return { data: recordsByCondition[key] };
+                      }
+                      if (condition._id) return { data: [{ _id: condition._id }] };
+                      return { data: options.listRecords || [] };
                     },
                   };
                 },
                 count: async () => ({ total: 0 }),
                 add: async () => ({ _id: "fav_new" }),
-                doc() {
+                doc(id) {
                   return {
-                    remove: async () => ({}),
+                    remove: async () => {
+                      removedIds.push(id);
+                      return {};
+                    },
                   };
                 },
                 orderBy() {
@@ -83,7 +94,7 @@ function loadFavoriteService(recordsByCondition = {}) {
                   return this;
                 },
                 async get() {
-                  return { data: [] };
+                  return { data: options.listRecords || [] };
                 },
               };
             },
@@ -99,6 +110,7 @@ function loadFavoriteService(recordsByCondition = {}) {
   return {
     service: sandbox.module.exports,
     whereCalls,
+    removedIds,
   };
 }
 
@@ -131,4 +143,24 @@ await test("fetchFavoriteForCase uses simple indexed lookups instead of an OR qu
     { _openid: "openid_1", caseId: "case_001" },
   ]);
   assert.deepEqual(plain(favorite), { _id: "fav_1" });
+});
+
+await test("fetchFavoriteCases removes records whose cases no longer exist", async () => {
+  const staleError = new Error("案例不存在：doc_missing");
+  staleError.code = "CASE_NOT_FOUND";
+  const { service, removedIds } = loadFavoriteService({}, {
+    listRecords: [
+      { _id: "fav_missing", caseDocId: "doc_missing", caseId: "case_999" },
+      { _id: "fav_live", caseDocId: "doc_live", caseId: "case_001" },
+    ],
+    fetchCaseById: async (id) => {
+      if (id === "doc_missing") throw staleError;
+      return { _id: "doc_live", caseId: "case_001" };
+    },
+  });
+
+  const cases = await service.fetchFavoriteCases();
+
+  assert.deepEqual(plain(removedIds), ["fav_missing"]);
+  assert.deepEqual(plain(cases), [{ _id: "doc_live", caseId: "case_001" }]);
 });

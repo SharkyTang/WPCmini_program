@@ -38,6 +38,10 @@ function buildHistoryLookupConditions(caseItem, openid) {
   return conditions;
 }
 
+function isCaseNotFoundError(error) {
+  return Boolean(error && error.code === "CASE_NOT_FOUND");
+}
+
 async function ensureIdentityForHistory() {
   try {
     const identity = await ensureProfileIdentity({
@@ -190,18 +194,39 @@ async function fetchHistoryCases() {
     .limit(HISTORY_LIMIT)
     .get();
   const historyRecords = response.data || [];
-  const cases = await Promise.all(
+  const resolvedHistory = await Promise.all(
     historyRecords.map(async (record) => {
       try {
-        return await fetchCaseById(record.caseDocId || record.caseId);
+        return {
+          record,
+          caseItem: await fetchCaseById(record.caseDocId || record.caseId),
+        };
       } catch (error) {
+        if (isCaseNotFoundError(error)) {
+          return { record, caseItem: null, isStale: true };
+        }
         console.warn("浏览记录案例读取失败", record, error);
-        return null;
+        return { record, caseItem: null };
       }
     })
   );
 
-  return mergeHistoryWithCases(historyRecords, cases.filter(Boolean));
+  const staleIds = resolvedHistory
+    .filter((item) => item.isStale)
+    .map((item) => item.record._id || item.record.id)
+    .filter(Boolean);
+  if (staleIds.length) {
+    try {
+      await removeHistoryRecords(staleIds);
+    } catch (error) {
+      console.warn("失效浏览记录清理失败", error);
+    }
+  }
+
+  return mergeHistoryWithCases(
+    historyRecords.filter((record) => !staleIds.includes(record._id || record.id)),
+    resolvedHistory.map((item) => item.caseItem).filter(Boolean)
+  );
 }
 
 module.exports = {

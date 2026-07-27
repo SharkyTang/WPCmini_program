@@ -227,6 +227,12 @@ async function fetchVisibleBanners(cases, options = {}) {
   return copyList(visibleBannersCache);
 }
 
+function createCaseNotFoundError(id) {
+  const error = new Error(`案例不存在：${id}`);
+  error.code = "CASE_NOT_FOUND";
+  return error;
+}
+
 async function fetchCaseById(id) {
   const db = getDb();
   if (isStableCaseId(id)) {
@@ -237,7 +243,7 @@ async function fetchCaseById(id) {
       .get();
     const record = (response.data || [])[0];
     if (!record) {
-      throw new Error(`案例不存在：${id}`);
+      throw createCaseNotFoundError(id);
     }
     const cases = await attachCaseImageUrls([normalizeCaseRecord(record)], { preferThumbnail: false });
     return cases[0];
@@ -254,7 +260,7 @@ async function fetchCaseById(id) {
       .limit(1)
       .get();
     const record = (response.data || [])[0];
-    if (!record) throw error;
+    if (!record) throw createCaseNotFoundError(id);
     const cases = await attachCaseImageUrls([normalizeCaseRecord(record)], { preferThumbnail: false });
     return cases[0];
   }
