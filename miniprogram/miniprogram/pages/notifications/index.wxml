@@ -51,9 +51,9 @@
   </view>
 
   <view wx:elif="{{needCustomerIdentity}}" class="state-card">
-    <view class="state-title">登录后可查看客服回复</view>
-    <view class="state-copy">客服回复会保存到你的微信身份下，只有你自己能查看。</view>
-    <view class="state-button" bindtap="loginAndLoadCustomer">使用微信身份查看</view>
+    <view class="state-title">完善个人资料后可查看客服回复</view>
+    <view class="state-copy">资料会用于识别并保护只属于你的客服回复。</view>
+    <view class="state-button" bindtap="loginAndLoadCustomer">去完善资料</view>
   </view>
 
   <view wx:elif="{{!displayNotifications.length}}" class="state-card">

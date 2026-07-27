@@ -38,7 +38,7 @@ function loadHistoryService(recordsByCondition = {}) {
       }
       if (path === "./userService") {
         return {
-          ensureWxIdentity: async () => "openid_1",
+          ensureProfileIdentity: async () => ({ ready: true, openid: "openid_1" }),
           getCachedOpenId: () => "openid_1",
         };
       }

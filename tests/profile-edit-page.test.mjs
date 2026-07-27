@@ -13,15 +13,25 @@ function loadEditPage(wxMock = {}, service = {}) {
   const sandbox = {
     Page(config) { pageConfig = config; },
     require(moduleName) {
-      if (moduleName !== "../../../utils/profileService") throw new Error(`Unexpected require: ${moduleName}`);
-      return {
-        cacheProfile: service.cacheProfile || (() => {}),
-        fetchProfile: service.fetchProfile || (async () => null),
-        getLegacyProfile: service.getLegacyProfile || (() => ({})),
-        hasCompletedProfile: service.hasCompletedProfile || ((profile) => Boolean(profile.nickname && String(profile.avatarFileId || "").startsWith("cloud://"))),
-        saveProfile: service.saveProfile || (async (profile) => ({ ...profile, avatarUrl: "https://avatar" })),
-        uploadProfileAvatar: service.uploadProfileAvatar || (async () => "cloud://uploaded"),
-      };
+      if (moduleName === "../../../utils/profileService") {
+        return {
+          cacheProfile: service.cacheProfile || (() => {}),
+          fetchProfile: service.fetchProfile || (async () => null),
+          getLegacyProfile: service.getLegacyProfile || (() => ({})),
+          hasCompletedProfile: service.hasCompletedProfile || ((profile) => Boolean(profile.nickname && String(profile.avatarFileId || "").startsWith("cloud://"))),
+          saveProfile: service.saveProfile || (async (profile) => ({ ...profile, avatarUrl: "https://avatar" })),
+          uploadProfileAvatar: service.uploadProfileAvatar || (async () => "cloud://uploaded"),
+        };
+      }
+      if (moduleName === "../../../utils/userService") {
+        return {
+          cacheCompletedProfileIdentity: service.cacheCompletedProfileIdentity || (() => {}),
+          clearPendingProfileAction: service.clearPendingProfileAction || (() => {}),
+          fetchOpenId: service.fetchOpenId || (async () => "openid_1"),
+          resumePendingProfileAction: service.resumePendingProfileAction || (() => Promise.resolve()),
+        };
+      }
+      throw new Error(`Unexpected require: ${moduleName}`);
     },
     console,
     setTimeout(callback) { callback(); },
@@ -75,6 +85,8 @@ await test("saving uploads a selected avatar and persists profile data", async (
   let uploadInput = "";
   let savedInput = null;
   let cached = null;
+  let cachedIdentity = null;
+  let resumed = 0;
   let navigatedBack = false;
   const page = loadEditPage(
     { navigateBack() { navigatedBack = true; } },
@@ -82,6 +94,9 @@ await test("saving uploads a selected avatar and persists profile data", async (
       uploadProfileAvatar: async (filePath) => { uploadInput = filePath; return "cloud://uploaded"; },
       saveProfile: async (profile) => { savedInput = profile; return { ...profile, avatarUrl: "https://avatar" }; },
       cacheProfile(profile) { cached = profile; },
+      fetchOpenId: async () => "openid_1",
+      cacheCompletedProfileIdentity(openid, profile) { cachedIdentity = { openid, profile }; },
+      resumePendingProfileAction() { resumed += 1; },
     }
   );
   page.setData({
@@ -92,5 +107,8 @@ await test("saving uploads a selected avatar and persists profile data", async (
   assert.equal(uploadInput, "/tmp/avatar.png");
   assert.deepEqual(JSON.parse(JSON.stringify(savedInput)), { nickname: "酒友", avatarFileId: "cloud://uploaded" });
   assert.equal(cached.avatarFileId, "cloud://uploaded");
+  assert.equal(cachedIdentity.openid, "openid_1");
+  assert.equal(cachedIdentity.profile.avatarFileId, "cloud://uploaded");
+  assert.equal(resumed, 1);
   assert.equal(navigatedBack, true);
 });

@@ -3,7 +3,7 @@ const {
   fetchHistoryCases,
   removeHistoryRecords,
 } = require("../../utils/historyService");
-const { ensureWxIdentity, getCachedOpenId } = require("../../utils/userService");
+const { ensureProfileIdentity, getCachedOpenId } = require("../../utils/userService");
 
 function buildHistoryCards(items, selectedIds = []) {
   const selectedMap = selectedIds.reduce((map, id) => {
@@ -32,7 +32,7 @@ Page({
   data: {
     loading: false,
     errorMessage: "",
-    needIdentity: true,
+    profileBlocked: false,
     manageMode: false,
     selectedCount: 0,
     selectedHistoryIds: [],
@@ -40,28 +40,27 @@ Page({
   },
 
   onShow() {
-    if (getCachedOpenId()) {
-      this.loadHistory();
-      return;
-    }
-
-    this.setData({
-      loading: false,
-      errorMessage: "",
-      needIdentity: true,
-      manageMode: false,
-      selectedCount: 0,
-      selectedHistoryIds: [],
-      historyCards: [],
-    });
+    this.ensureProfileAndLoad();
   },
 
-  async loginAndLoad() {
-    const openid = await ensureWxIdentity({
-      content: "浏览记录需要识别你的微信身份，用来保存和查看自己看过的案例。",
-      confirmText: "查看记录",
+  async ensureProfileAndLoad() {
+    this.setData({
+      loading: true,
+      errorMessage: "",
+      profileBlocked: false,
     });
-    if (!openid) return;
+    const identity = await ensureProfileIdentity();
+    if (!identity.ready) {
+      this.setData({
+        loading: false,
+        profileBlocked: !identity.error,
+        manageMode: false,
+        selectedCount: 0,
+        selectedHistoryIds: [],
+        historyCards: [],
+      });
+      return;
+    }
     this.loadHistory();
   },
 
@@ -69,7 +68,7 @@ Page({
     if (!getCachedOpenId()) {
       this.setData({
         loading: false,
-        needIdentity: true,
+        profileBlocked: true,
         historyCards: [],
       });
       return;
@@ -78,7 +77,7 @@ Page({
     this.setData({
       loading: true,
       errorMessage: "",
-      needIdentity: false,
+      profileBlocked: false,
     });
 
     try {

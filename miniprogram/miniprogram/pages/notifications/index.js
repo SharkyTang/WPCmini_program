@@ -9,7 +9,7 @@ const {
   fetchPublicNotifications,
   toggleNotificationPreference,
 } = require("../../utils/notificationService");
-const { getCachedOpenId } = require("../../utils/userService");
+const { ensureProfileIdentity, getCachedOpenId } = require("../../utils/userService");
 
 const TAB_ITEMS = [
   { key: "all", label: "全部" },
@@ -39,6 +39,7 @@ Page({
     loading: false,
     errorMessage: "",
     needCustomerIdentity: false,
+    hasProfileIdentity: false,
     publicNotifications: [],
     customerNotifications: [],
     displayNotifications: [],
@@ -61,7 +62,7 @@ Page({
         fetchPublicNotifications(),
         fetchNotificationPreferences(),
       ]);
-      const customerNotifications = getCachedOpenId()
+      const customerNotifications = this.data.activeTab === "customer_reply" && getCachedOpenId()
         ? await fetchCustomerNotifications()
         : [];
 
@@ -69,6 +70,7 @@ Page({
         loading: false,
         publicNotifications,
         customerNotifications,
+        hasProfileIdentity: Boolean(preferences.hasIdentity),
         disabledTypes: preferences.disabledTypes || [],
         settingItems: buildSettingItems(preferences.disabledTypes || []),
       });
@@ -91,11 +93,11 @@ Page({
     this.setData({
       displayNotifications: filterNotifications(allNotifications, this.data.activeTab),
       needCustomerIdentity:
-        this.data.activeTab === "customer_reply" && !getCachedOpenId(),
+        this.data.activeTab === "customer_reply" && !this.data.hasProfileIdentity,
     });
   },
 
-  switchTab(event) {
+  async switchTab(event) {
     const key = event.currentTarget.dataset.key;
     if (!key) return;
 
@@ -103,6 +105,18 @@ Page({
       activeTab: key,
       errorMessage: "",
     });
+
+    if (key === "customer_reply") {
+      const identity = await ensureProfileIdentity();
+      if (!identity.ready) {
+        this.setData({ hasProfileIdentity: false });
+        this.refreshDisplayNotifications();
+        return;
+      }
+      this.loginAndLoadCustomer();
+      return;
+    }
+
     this.refreshDisplayNotifications();
   },
 
@@ -113,13 +127,19 @@ Page({
     });
 
     try {
-      const customerNotifications = await fetchCustomerNotifications({
-        requireIdentity: true,
-      });
+      const identity = await ensureProfileIdentity();
+      if (!identity.ready) {
+        this.setData({ loading: false, hasProfileIdentity: false });
+        this.refreshDisplayNotifications();
+        return;
+      }
+
+      const customerNotifications = await fetchCustomerNotifications();
       const preferences = await fetchNotificationPreferences();
       this.setData({
         loading: false,
         customerNotifications,
+        hasProfileIdentity: true,
         disabledTypes: preferences.disabledTypes || [],
         settingItems: buildSettingItems(preferences.disabledTypes || []),
       });
@@ -137,6 +157,15 @@ Page({
     const type = event.currentTarget.dataset.type;
     if (!type) return;
 
+    const identity = await ensureProfileIdentity({
+      resume: () => this.applyNotificationSetting(type),
+    });
+    if (!identity.ready) return;
+
+    return this.applyNotificationSetting(type);
+  },
+
+  async applyNotificationSetting(type) {
     try {
       const preferences = await toggleNotificationPreference(type);
       if (!preferences.hasIdentity) return;

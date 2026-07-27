@@ -5,7 +5,7 @@ const {
   mergeFavoritesWithCases,
   normalizeSelectedFavoriteIds,
 } = require("./favoriteData");
-const { ensureWxIdentity, getCachedOpenId } = require("./userService");
+const { ensureProfileIdentity } = require("./userService");
 
 const FAVORITE_COLLECTION = "favorites";
 const FAVORITE_LIMIT = 100;
@@ -39,13 +39,12 @@ function buildFavoriteLookupConditions(caseItem, openid) {
 }
 
 async function ensureIdentityForRead(options = {}) {
-  const cachedOpenId = getCachedOpenId();
-  if (cachedOpenId) return cachedOpenId;
-  if (!options.silentIdentity) return "";
-
   try {
-    const openid = await ensureWxIdentity({ silent: true });
-    return openid || "";
+    const identity = await ensureProfileIdentity({
+      redirectToSetup: false,
+      showError: false,
+    });
+    return identity.ready ? identity.openid : "";
   } catch (error) {
     console.warn("静默读取微信身份失败", error);
     return "";
@@ -66,7 +65,11 @@ async function fetchFavoriteForCase(caseItem, options = {}) {
 }
 
 async function addFavorite(caseItem) {
-  const openid = await ensureWxIdentity();
+  const identity = await ensureProfileIdentity({
+    redirectToSetup: false,
+    showError: false,
+  });
+  const openid = identity.ready ? identity.openid : "";
   if (!openid) return null;
 
   const existing = await fetchFavoriteForCase(caseItem);
@@ -96,7 +99,7 @@ async function addFavorite(caseItem) {
 
 async function removeFavorite(favoriteId) {
   if (!favoriteId) return false;
-  const openid = getCachedOpenId() || await ensureWxIdentity({ silent: true });
+  const openid = await ensureIdentityForRead({ silentIdentity: true });
   if (!openid) return false;
 
   const response = await getFavoritesCollection()
@@ -119,7 +122,7 @@ async function removeFavoriteRecords(favoriteIds) {
 }
 
 async function clearFavorites() {
-  const openid = getCachedOpenId() || await ensureWxIdentity({ silent: true });
+  const openid = await ensureIdentityForRead({ silentIdentity: true });
   if (!openid) return 0;
 
   let removedCount = 0;
