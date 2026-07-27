@@ -1,11 +1,21 @@
 const {
-  CASE_ADMIN_VISIBILITY_OPTIONS,
+  CASE_ADMIN_VIEW_OPTIONS,
   DEFAULT_PAGE_SIZE,
   checkCaseAdminAccess,
   deleteCaseAdmin,
+  fetchCaseAdminHomepageDisplay,
   fetchCaseAdminList,
   setCaseVisibility,
 } = require("../../utils/caseAdminService");
+
+const HOME_DISPLAY_VIEWS = new Set(["banner", "popular", "latest"]);
+
+function getEmptyState(view) {
+  if (view === "banner") return { title: "暂无首页轮播", description: "当前首页没有正在展示的轮播图。" };
+  if (view === "popular") return { title: "暂无热门产品", description: "当前首页没有正在展示的热门产品。" };
+  if (view === "latest") return { title: "暂无最新产品", description: "当前首页没有正在展示的最新产品。" };
+  return { title: "暂无案例", description: "可以先新增一个隐藏案例，确认后再打开显示。" };
+}
 
 function toBoolean(value) {
   return value === true || value === "true";
@@ -20,8 +30,11 @@ Page({
     errorMessage: "",
     cases: [],
     keyword: "",
-    activeVisibility: "all",
-    visibilityOptions: CASE_ADMIN_VISIBILITY_OPTIONS,
+    activeView: "all",
+    viewOptions: CASE_ADMIN_VIEW_OPTIONS,
+    isHomeDisplay: false,
+    emptyTitle: "暂无案例",
+    emptyDescription: "可以先新增一个隐藏案例，确认后再打开显示。",
     page: 1,
     pageSize: DEFAULT_PAGE_SIZE,
     hasMore: false,
@@ -67,6 +80,7 @@ Page({
   async loadCases(options = {}) {
     const reset = options.reset !== false;
     const nextPage = reset ? 1 : this.data.page + 1;
+    const homeDisplay = HOME_DISPLAY_VIEWS.has(this.data.activeView);
 
     this.setData({
       loading: reset,
@@ -75,17 +89,22 @@ Page({
     });
 
     try {
-      const result = await fetchCaseAdminList({
-        keyword: this.data.keyword,
-        visibility: this.data.activeVisibility,
-        page: nextPage,
-        pageSize: this.data.pageSize,
-      });
+      const result = homeDisplay
+        ? await fetchCaseAdminHomepageDisplay({
+          slot: this.data.activeView,
+          keyword: this.data.keyword,
+        })
+        : await fetchCaseAdminList({
+          keyword: this.data.keyword,
+          visibility: this.data.activeView,
+          page: nextPage,
+          pageSize: this.data.pageSize,
+        });
 
       this.setData({
-        cases: reset ? result.items : this.data.cases.concat(result.items),
-        page: nextPage,
-        hasMore: result.hasMore,
+        cases: homeDisplay || reset ? result.items : this.data.cases.concat(result.items),
+        page: homeDisplay ? 1 : nextPage,
+        hasMore: homeDisplay ? false : result.hasMore,
         loading: false,
         loadingMore: false,
       });
@@ -116,13 +135,21 @@ Page({
     this.loadCases({ reset: true });
   },
 
-  selectVisibility(event) {
+  selectView(event) {
     const value = event.currentTarget.dataset.value || "all";
-    if (value === this.data.activeVisibility) return;
+    if (value === this.data.activeView) return;
+    const emptyState = getEmptyState(value);
     this.setData({
-      activeVisibility: value,
+      activeView: value,
+      isHomeDisplay: HOME_DISPLAY_VIEWS.has(value),
+      emptyTitle: emptyState.title,
+      emptyDescription: emptyState.description,
     });
     this.loadCases({ reset: true });
+  },
+
+  selectVisibility(event) {
+    this.selectView(event);
   },
 
   createCase() {

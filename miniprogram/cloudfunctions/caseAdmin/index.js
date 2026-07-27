@@ -4,11 +4,13 @@ const {
   CASE_COLLECTION,
   IMAGE_URL_BATCH_SIZE,
   SEARCH_FETCH_LIMIT,
+  buildHomepageDisplayItems,
   filterCaseItems,
   generateSequentialCaseId,
   getCaseIdNumber,
   isAdminOpenid,
   normalizeCloudFileIds,
+  normalizeHomepageDisplaySlot,
   normalizePage,
   normalizePageSize,
   normalizeVisibilityFilter,
@@ -75,6 +77,33 @@ async function listCases(event) {
     pageSize,
     hasMore: (response.data || []).length === pageSize,
   });
+}
+
+async function listHomepageDisplay(event) {
+  const slot = normalizeHomepageDisplaySlot(event.slot);
+  if (!slot) return fail("INVALID_HOME_SLOT", "首页展示位置无效");
+
+  const casesRequest = db
+    .collection(CASE_COLLECTION)
+    .where({ isVisible: true })
+    .orderBy("sortOrder", "asc")
+    .limit(SEARCH_FETCH_LIMIT)
+    .get();
+  const bannersRequest = slot === "banner"
+    ? db
+      .collection(BANNER_COLLECTION)
+      .where({ isVisible: true })
+      .orderBy("sortOrder", "asc")
+      .limit(SEARCH_FETCH_LIMIT)
+      .get()
+    : Promise.resolve({ data: [] });
+  const [caseResponse, bannerResponse] = await Promise.all([casesRequest, bannersRequest]);
+  const items = buildHomepageDisplayItems(caseResponse.data || [], bannerResponse.data || [], {
+    slot,
+    keyword: trimText(event.keyword),
+  });
+
+  return ok({ slot, items });
 }
 
 async function getCase(event) {
@@ -317,6 +346,7 @@ exports.main = async (event = {}) => {
 
   try {
     if (action === "listCases") return listCases(event);
+    if (action === "listHomepageDisplay") return listHomepageDisplay(event);
     if (action === "getCase") return getCase(event);
     if (action === "getCaseImageUrls") return getCaseImageUrls(event);
     if (action === "createCase") return createCase(event, OPENID);

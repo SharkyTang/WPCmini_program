@@ -12,6 +12,16 @@ const CASE_ADMIN_VISIBILITY_OPTIONS = [
   { value: "visible", label: "显示中" },
   { value: "hidden", label: "已隐藏" },
 ];
+const CASE_ADMIN_VIEW_OPTIONS = [
+  ...CASE_ADMIN_VISIBILITY_OPTIONS,
+  { value: "banner", label: "首页轮播" },
+  { value: "popular", label: "热门产品" },
+  { value: "latest", label: "最新产品" },
+];
+const HOME_SECTION_LABELS = HOME_SECTION_OPTIONS.reduce((labels, option) => {
+  labels[option.value] = String(option.label || option.value).replace("显示", "");
+  return labels;
+}, {});
 
 const CASE_ADMIN_FORM_OPTIONS = DEFAULT_FILTERS.reduce((options, filter) => {
   options[filter.key] = {
@@ -191,14 +201,58 @@ function getTagSummary(caseItem = {}) {
     .join(" / ");
 }
 
+function getHomeSectionSummary(caseItem = {}) {
+  return normalizeStringList(caseItem.homeSections)
+    .map((value) => HOME_SECTION_LABELS[value] || value)
+    .join(" / ");
+}
+
 function normalizeCaseAdminItem(record = {}) {
   const item = normalizeCaseRecord(record || {});
   const visible = item.isVisible !== false;
   return {
     ...item,
+    displayKey: `case:${item.id || item.caseId || item.coverImage}`,
     visibilityStatus: visible ? "visible" : "hidden",
     visibilityLabel: visible ? "显示中" : "已隐藏",
     tagSummary: getTagSummary(item),
+    homeSectionSummary: getHomeSectionSummary(item),
+    source: "case",
+    sourceLabel: "案例",
+  };
+}
+
+function normalizeCaseAdminHomepageDisplayItem(item = {}) {
+  const source = item.source === "banner" ? "banner" : "case";
+  const image = trimText(item.coverImage || item.image);
+  const documentId = trimText(item.id);
+  const base = source === "case"
+    ? normalizeCaseAdminItem({
+      ...item,
+      _id: documentId || item._id,
+      coverImage: image,
+      isVisible: true,
+    })
+    : {
+      id: trimText(item.id) || trimText(item.caseId) || image,
+      caseId: trimText(item.caseId),
+      title: trimText(item.title) || "未命名轮播图",
+      coverImage: image,
+      isVisible: true,
+      visibilityStatus: "visible",
+      visibilityLabel: "显示中",
+      tagSummary: "",
+      homeSectionSummary: "",
+    };
+  return {
+    ...base,
+    id: source === "case" ? documentId || base.id : base.id,
+    source,
+    sourceLabel: source === "banner" ? "独立轮播图" : "案例",
+    displayLabel: trimText(item.displayLabel),
+    displayOrder: Number(item.displayOrder) || 0,
+    displayOrderLabel: trimText(item.displayOrderLabel),
+    displayKey: `${source}:${base.id || base.caseId || image}`,
   };
 }
 
@@ -218,15 +272,18 @@ module.exports = {
   CASE_ADMIN_DEFAULT_SORT_ORDER,
   CASE_ADMIN_FORM_OPTIONS,
   CASE_ADMIN_NOTES_MAX_LENGTH,
+  CASE_ADMIN_VIEW_OPTIONS,
   CASE_ADMIN_VISIBILITY_OPTIONS,
   buildCaseAdminImagePath,
   buildCaseAdminOptionViews,
   buildCaseAdminPayload,
   buildCaseKeywords,
   createEmptyCaseForm,
+  getHomeSectionSummary,
   isCloudFileId,
   isCaseAdminOptionSelected,
   normalizeCaseAdminForm,
+  normalizeCaseAdminHomepageDisplayItem,
   normalizeCaseAdminItem,
   normalizeCaseAdminKeyword,
   normalizeStringList,

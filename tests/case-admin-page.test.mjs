@@ -13,6 +13,7 @@ function loadCaseAdminPage(options = {}) {
   const calls = {
     deletes: [],
     fetches: [],
+    homepageFetches: [],
     toasts: [],
   };
   const sandbox = {
@@ -22,6 +23,14 @@ function loadCaseAdminPage(options = {}) {
     require(moduleName) {
       if (moduleName === "../../utils/caseAdminService") {
         return {
+          CASE_ADMIN_VIEW_OPTIONS: [
+            { value: "all", label: "全部" },
+            { value: "visible", label: "显示中" },
+            { value: "hidden", label: "已隐藏" },
+            { value: "banner", label: "首页轮播" },
+            { value: "popular", label: "热门产品" },
+            { value: "latest", label: "最新产品" },
+          ],
           CASE_ADMIN_VISIBILITY_OPTIONS: [
             { value: "all", label: "全部" },
             { value: "visible", label: "显示中" },
@@ -42,6 +51,10 @@ function loadCaseAdminPage(options = {}) {
               pageSize: query.pageSize,
               hasMore: false,
             };
+          },
+          fetchCaseAdminHomepageDisplay: async (query) => {
+            calls.homepageFetches.push(query);
+            return { items: [], slot: query.slot };
           },
           setCaseVisibility: async () => ({}),
         };
@@ -99,6 +112,22 @@ await test("case admin list shows delete after visibility action", () => {
   assert.notEqual(deleteIndex, -1);
   assert.ok(deleteIndex > visibilityIndex);
   assert.equal(wxml.includes("删除"), true);
+  assert.equal(wxml.includes('scroll-x="true"'), true);
+  assert.equal(wxml.includes("首页轮播"), false);
+});
+
+await test("homepage view replaces visibility filtering and does not paginate", async () => {
+  const { page, calls } = loadCaseAdminPage();
+
+  page.selectView({ currentTarget: { dataset: { value: "banner" } } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(page.data.activeView, "banner");
+  assert.equal(page.data.isHomeDisplay, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.homepageFetches)), [{ slot: "banner", keyword: "" }]);
+  assert.equal(page.data.hasMore, false);
+  page.onReachBottom();
+  assert.equal(calls.homepageFetches.length, 1);
 });
 
 await test("canceling delete does not call delete service", async () => {
