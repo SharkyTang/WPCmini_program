@@ -34,6 +34,12 @@ function loadProfilePage(wxMock = {}, options = {}) {
         };
       }
       if (moduleName === "../../utils/customerServiceData") return customerServiceModule.exports;
+      if (moduleName === "../../utils/userService") {
+        return {
+          cacheCompletedProfileIdentity: options.cacheCompletedProfileIdentity || (() => {}),
+          fetchOpenId: options.fetchOpenId || (async () => "openid_1"),
+        };
+      }
       if (moduleName === "../../utils/inquiryAdminService") {
         return { checkInquiryAdminAccess: options.checkInquiryAdminAccess || (async () => false) };
       }
@@ -81,11 +87,14 @@ await test("unconfigured profile card opens the setup page", async () => {
 await test("configured cloud profile opens the independent edit page", async () => {
   let navigatedUrl = "";
   let cachedProfile = null;
+  let cachedIdentity = null;
   const page = loadProfilePage(
     { navigateTo(options) { navigatedUrl = options.url; } },
     {
       fetchProfile: async () => ({ nickname: "墨韵 ovo", avatarFileId: "cloud://avatar", avatarUrl: "https://avatar" }),
       cacheProfile(profile) { cachedProfile = profile; },
+      fetchOpenId: async () => "openid_1",
+      cacheCompletedProfileIdentity(openid, profile) { cachedIdentity = { openid, profile }; },
     }
   );
   await page.loadProfileInfo();
@@ -93,6 +102,7 @@ await test("configured cloud profile opens the independent edit page", async () 
   assert.equal(navigatedUrl, "/pages/profile/edit/index?mode=edit");
   assert.equal(page.data.profileInfo.nickname, "墨韵 ovo");
   assert.equal(cachedProfile.avatarFileId, "cloud://avatar");
+  assert.equal(cachedIdentity.openid, "openid_1");
 });
 
 await test("profile read failures do not route users into setup", async () => {

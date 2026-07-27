@@ -9,6 +9,10 @@ let skipNextProfileSetupRedirect = false;
 let pendingProfileAction = null;
 let verifiedProfileIdentity = null;
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function getAppInstance() {
   return typeof getApp === "function" ? getApp() : null;
 }
@@ -85,7 +89,13 @@ async function verifyProfileIdentity() {
   if (!profileVerificationPromise) {
     profileVerificationPromise = (async () => {
       const openid = getCachedOpenId() || await fetchOpenId();
-      const profile = await fetchProfileRecord();
+      let profile;
+      try {
+        profile = await fetchProfileRecord();
+      } catch (firstError) {
+        await wait(250);
+        profile = await fetchProfileRecord();
+      }
       const identity = {
         openid,
         profile,

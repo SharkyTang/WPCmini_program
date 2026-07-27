@@ -6,6 +6,10 @@ const {
   hasCompletedProfile,
 } = require("../../utils/profileService");
 const {
+  cacheCompletedProfileIdentity,
+  fetchOpenId,
+} = require("../../utils/userService");
+const {
   CUSTOMER_SERVICE_SOURCE,
   buildCustomerSessionFrom,
 } = require("../../utils/customerServiceData");
@@ -94,6 +98,12 @@ Page({
       const profile = await fetchProfile();
       if (profile && hasCompletedProfile(profile)) {
         cacheProfile(profile);
+        try {
+          const openid = await fetchOpenId();
+          cacheCompletedProfileIdentity(openid, profile);
+        } catch (identityError) {
+          console.warn("个人资料已读取，但身份缓存恢复失败", identityError);
+        }
         this.setData({
           profileInfo: toProfileInfo(profile),
           hasCompletedProfile: true,
