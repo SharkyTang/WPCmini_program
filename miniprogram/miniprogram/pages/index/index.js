@@ -1,4 +1,5 @@
 const {
+  attachCaseImageUrls,
   fetchVisibleCases,
   fetchVisibleBanners,
 } = require("../../utils/cloudData");
@@ -43,6 +44,26 @@ function buildHomeSections(cases) {
   };
 }
 
+async function attachHomeSectionImages(sections) {
+  const cards = [...sections.popularCases, ...sections.latestCases];
+  const cardsWithImages = await attachCaseImageUrls(cards);
+  const imageById = cardsWithImages.reduce((map, card) => {
+    map[card.id] = card.coverImageUrl;
+    return map;
+  }, {});
+
+  return {
+    popularCases: sections.popularCases.map((card) => ({
+      ...card,
+      coverImageUrl: imageById[card.id] || "",
+    })),
+    latestCases: sections.latestCases.map((card) => ({
+      ...card,
+      coverImageUrl: imageById[card.id] || "",
+    })),
+  };
+}
+
 Page({
   data: {
     loading: true,
@@ -81,9 +102,11 @@ Page({
     }
 
     try {
-      const cases = await fetchVisibleCases();
+      const cases = await fetchVisibleCases({ includeImageUrls: false });
       const banners = await fetchVisibleBanners(cases);
-      const { popularCases, latestCases } = buildHomeSections(cases);
+      const { popularCases, latestCases } = await attachHomeSectionImages(
+        buildHomeSections(cases)
+      );
 
       this.setData({
         allCases: cases,

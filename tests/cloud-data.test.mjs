@@ -84,13 +84,19 @@ function mockCloudData(records) {
           },
         };
       },
-      async getTempFileURL({ fileList }) {
+      async callFunction({ name, data }) {
+        assert.equal(name, "caseAdmin");
+        assert.equal(data.action, "getVisibleImageUrls");
+        const fileList = data.fileIDs || [];
         tempUrlBatches.push(fileList.slice());
         return {
-          fileList: fileList.map((fileID) => ({
-            fileID,
-            tempFileURL: `${fileID}?temp=1`,
-          })),
+          result: {
+            ok: true,
+            urls: fileList.reduce((urls, fileID) => {
+              urls[fileID] = `${fileID}?temp=1`;
+              return urls;
+            }, {}),
+          },
         };
       },
     },
@@ -147,9 +153,6 @@ function mockCaseLookupData(records) {
             };
           },
         };
-      },
-      async getTempFileURL() {
-        return { fileList: [] };
       },
     },
   };
@@ -226,6 +229,56 @@ await test("caches visible cases and temp URLs until explicitly cleared", async 
 
   assert.equal(getQueryCount(), 3);
   assert.equal(tempUrlBatches.length, 2);
+});
+
+await test("does not expose raw cloud file ids when image URL exchange is unavailable", async () => {
+  global.wx = {
+    cloud: {
+      database() {
+        return {
+          collection() {
+            return buildQuery([
+              {
+                _id: "case_doc_1",
+                caseId: "case_001",
+                title: "case_001",
+                coverImage: "cloud://image_private",
+                isVisible: true,
+                sortOrder: 1,
+              },
+            ]);
+          },
+        };
+      },
+      async callFunction() {
+        return {
+          result: {
+            ok: false,
+            code: "UNKNOWN_ACTION",
+            message: "未知案例管理操作",
+          },
+        };
+      },
+    },
+  };
+
+  const caseData = loadCommonJS(caseDataPath);
+  const { fetchVisibleCases } = loadCommonJS(cloudDataPath, {
+    console: {
+      ...console,
+      warn() {},
+    },
+    wx: global.wx,
+    require(request) {
+      if (request === "./caseData") return caseData;
+      throw new Error(`Unexpected require: ${request}`);
+    },
+  });
+
+  const cases = await fetchVisibleCases();
+
+  assert.equal(cases[0].coverImage, "cloud://image_private");
+  assert.equal(cases[0].coverImageUrl, "");
 });
 
 await test("fetchCaseById uses the caseId index directly for stable case ids", async () => {

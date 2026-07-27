@@ -1,11 +1,14 @@
 const cloud = require("wx-server-sdk");
 const {
+  BANNER_COLLECTION,
   CASE_COLLECTION,
+  IMAGE_URL_BATCH_SIZE,
   SEARCH_FETCH_LIMIT,
   filterCaseItems,
   generateSequentialCaseId,
   getCaseIdNumber,
   isAdminOpenid,
+  normalizeCloudFileIds,
   normalizePage,
   normalizePageSize,
   normalizeVisibilityFilter,
@@ -18,6 +21,7 @@ cloud.init({
 });
 
 const db = cloud.database();
+const _ = db.command;
 
 function ok(data = {}) {
   return {
@@ -93,6 +97,80 @@ async function getCreateCaseDefaults() {
   };
 }
 
+function buildFileIdSet(records = [], field) {
+  return new Set(
+    records
+      .map((item) => trimText(item && item[field]))
+      .filter((fileID) => fileID.indexOf("cloud://") === 0)
+  );
+}
+
+async function fetchCaseCoverFileIdSet(fileIDs = [], where = {}) {
+  const normalizedFileIDs = normalizeCloudFileIds(fileIDs);
+  if (!normalizedFileIDs.length) return new Set();
+  const query = db.collection(CASE_COLLECTION).where({
+    ...where,
+    coverImage: _.in(normalizedFileIDs),
+  });
+  const response = await query
+    .field({ coverImage: true })
+    .limit(IMAGE_URL_BATCH_SIZE)
+    .get();
+  return buildFileIdSet(response.data || [], "coverImage");
+}
+
+async function fetchVisibleBannerFileIdSet(fileIDs = []) {
+  const normalizedFileIDs = normalizeCloudFileIds(fileIDs);
+  if (!normalizedFileIDs.length) return new Set();
+  const response = await db
+    .collection(BANNER_COLLECTION)
+    .where({
+      isVisible: true,
+      image: _.in(normalizedFileIDs),
+    })
+    .field({ image: true })
+    .limit(IMAGE_URL_BATCH_SIZE)
+    .get();
+  return buildFileIdSet(response.data || [], "image");
+}
+
+async function getTempUrlMap(fileIDs = []) {
+  if (!fileIDs.length) return {};
+  const response = await cloud.getTempFileURL({
+    fileList: fileIDs.slice(0, IMAGE_URL_BATCH_SIZE),
+  });
+  return (response.fileList || []).reduce((map, item) => {
+    if (item && item.fileID && item.tempFileURL) {
+      map[item.fileID] = item.tempFileURL;
+    }
+    return map;
+  }, {});
+}
+
+async function getVisibleImageUrls(event) {
+  const fileIDs = normalizeCloudFileIds(event.fileIDs || event.fileIds);
+  if (!fileIDs.length) return ok({ urls: {} });
+
+  const [caseFileIds, bannerFileIds] = await Promise.all([
+    fetchCaseCoverFileIdSet(fileIDs, { isVisible: true }),
+    fetchVisibleBannerFileIdSet(fileIDs),
+  ]);
+  const allowedFileIds = new Set([...caseFileIds, ...bannerFileIds]);
+  const allowedRequestedFileIds = fileIDs.filter((fileID) => allowedFileIds.has(fileID));
+  const urls = await getTempUrlMap(allowedRequestedFileIds);
+  return ok({ urls });
+}
+
+async function getCaseImageUrls(event) {
+  const fileIDs = normalizeCloudFileIds(event.fileIDs || event.fileIds);
+  if (!fileIDs.length) return ok({ urls: {} });
+
+  const caseFileIds = await fetchCaseCoverFileIdSet(fileIDs);
+  const allowedRequestedFileIds = fileIDs.filter((fileID) => caseFileIds.has(fileID));
+  const urls = await getTempUrlMap(allowedRequestedFileIds);
+  return ok({ urls });
+}
+
 async function createCase(event, openid) {
   const input = event.case || event.data || {};
   const defaults = await getCreateCaseDefaults();
@@ -165,6 +243,10 @@ exports.main = async (event = {}) => {
     return ok({ isAdmin: admin });
   }
 
+  if (action === "getVisibleImageUrls") {
+    return getVisibleImageUrls(event);
+  }
+
   if (!admin) {
     return fail("FORBIDDEN", "无权限管理案例");
   }
@@ -172,6 +254,7 @@ exports.main = async (event = {}) => {
   try {
     if (action === "listCases") return listCases(event);
     if (action === "getCase") return getCase(event);
+    if (action === "getCaseImageUrls") return getCaseImageUrls(event);
     if (action === "createCase") return createCase(event, OPENID);
     if (action === "updateCase") return updateCase(event, OPENID);
     if (action === "setCaseVisibility") return setCaseVisibility(event, OPENID);

@@ -23,6 +23,11 @@ function loadHomePage(wxMock = {}, cases = []) {
     require(moduleName) {
       if (moduleName === "../../utils/cloudData") {
         return {
+          attachCaseImageUrls: async (items) =>
+            items.map((item) => ({
+              ...item,
+              coverImageUrl: `${item.coverImage || item.id}?temp=1`,
+            })),
           fetchVisibleCases: async () => cases,
           fetchVisibleBanners: async () => [],
         };

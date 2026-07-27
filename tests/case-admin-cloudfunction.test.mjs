@@ -19,6 +19,7 @@ const {
   getAdminOpenidsFromEnv,
   getCaseIdNumber,
   isAdminOpenid,
+  normalizeCloudFileIds,
   pickAllowedCaseFields,
   sanitizeCasePayload,
 } = logic;
@@ -45,8 +46,18 @@ test("checks admin openid from comma separated env value", () => {
 
 test("declares supported case admin actions", () => {
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("checkAccess"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getCaseImageUrls"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getVisibleImageUrls"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("createCase"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("setCaseVisibility"), true);
+});
+
+test("normalizes cloud file ids for image URL exchange", () => {
+  assert.deepEqual(
+    plain(normalizeCloudFileIds([" cloud://env/a.jpg ", "/tmp/a.jpg", "cloud://env/a.jpg", ""])),
+    ["cloud://env/a.jpg"]
+  );
+  assert.equal(normalizeCloudFileIds(Array.from({ length: 55 }, (_, index) => `cloud://env/${index}`)).length, 50);
 });
 
 test("keeps only writable case fields", () => {
