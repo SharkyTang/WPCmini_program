@@ -1,4 +1,9 @@
-const { DEFAULT_FILTERS, normalizeCaseRecord, normalizeValues } = require("./caseData");
+const {
+  DEFAULT_FILTERS,
+  HOME_SECTION_OPTIONS,
+  normalizeCaseRecord,
+  normalizeValues,
+} = require("./caseData");
 
 const CASE_ADMIN_DEFAULT_SORT_ORDER = 9999;
 const CASE_ADMIN_NOTES_MAX_LENGTH = 800;
@@ -16,6 +21,11 @@ const CASE_ADMIN_FORM_OPTIONS = DEFAULT_FILTERS.reduce((options, filter) => {
   };
   return options;
 }, {});
+CASE_ADMIN_FORM_OPTIONS.homeSections = {
+  title: "首页展示位置",
+  type: "multi",
+  options: HOME_SECTION_OPTIONS,
+};
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -35,6 +45,14 @@ function uniqueValues(values = []) {
 
 function normalizeStringList(value) {
   return uniqueValues(normalizeValues(value));
+}
+
+function optionValue(option) {
+  return typeof option === "object" && option ? option.value : option;
+}
+
+function optionLabel(option) {
+  return typeof option === "object" && option ? option.label || option.value : option;
 }
 
 function isCloudFileId(value) {
@@ -58,6 +76,7 @@ function createEmptyCaseForm() {
     priceLevel: "",
     scenes: [],
     statuses: [],
+    homeSections: [],
     sortOrder: "",
     notes: "",
     isVisible: false,
@@ -74,9 +93,10 @@ function isCaseAdminOptionSelected(form = {}, field, value) {
 function buildCaseAdminOptionViews(form = {}, formOptions = CASE_ADMIN_FORM_OPTIONS) {
   return Object.keys(formOptions).reduce((views, field) => {
     const options = formOptions[field] && formOptions[field].options;
-    views[field] = (options || []).map((value) => ({
-      value,
-      selected: isCaseAdminOptionSelected(form, field, value),
+    views[field] = (options || []).map((option) => ({
+      value: optionValue(option),
+      label: optionLabel(option),
+      selected: isCaseAdminOptionSelected(form, field, optionValue(option)),
     }));
     return views;
   }, {});
@@ -93,6 +113,7 @@ function normalizeCaseAdminForm(form = {}) {
     priceLevel: trimText(form.priceLevel),
     scenes: normalizeStringList(form.scenes),
     statuses: normalizeStringList(form.statuses),
+    homeSections: normalizeStringList(form.homeSections),
     sortOrder: normalizeSortOrder(form.sortOrder),
     notes: trimText(form.notes),
     isVisible: form.isVisible === true,
@@ -156,6 +177,7 @@ function buildCaseAdminPayload(form = {}) {
     priceLevel: normalized.priceLevel,
     scenes: valuesObject(normalized.scenes),
     statuses: valuesObject(normalized.statuses),
+    homeSections: valuesObject(normalized.homeSections),
     sortOrder: normalized.sortOrder,
     notes: normalized.notes,
     isVisible: normalized.isVisible,

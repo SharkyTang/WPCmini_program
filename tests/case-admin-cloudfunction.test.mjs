@@ -65,13 +65,15 @@ test("keeps only writable case fields", () => {
   const picked = pickAllowedCaseFields({
     title: "案例",
     coverImage: "cloud://cloud1/file.jpg",
+    homeSections: ["popular"],
     _openid: "hacker",
     createdAt: "bad",
     updatedByOpenid: "bad",
   });
 
-  assert.deepEqual(plain(Object.keys(picked)), ["title", "coverImage"]);
+  assert.deepEqual(plain(Object.keys(picked)), ["title", "coverImage", "homeSections"]);
   assert.equal(ALLOWED_CASE_FIELDS.includes("_openid"), false);
+  assert.equal(ALLOWED_CASE_FIELDS.includes("homeSections"), true);
 });
 
 test("sanitizes create payload with defaults and preserves visible flag", () => {
@@ -80,6 +82,7 @@ test("sanitizes create payload with defaults and preserves visible flag", () => 
       title: "  新案例  ",
       coverImage: "cloud://cloud1/file.jpg",
       packageTypes: { values: ["礼盒", "礼盒"] },
+      homeSections: ["latest"],
       isVisible: true,
     },
     { isCreate: true, defaultCaseId: "case_091" }
@@ -91,6 +94,7 @@ test("sanitizes create payload with defaults and preserves visible flag", () => 
   assert.equal(result.data.isVisible, true);
   assert.equal(result.data.sortOrder, 91);
   assert.deepEqual(plain(result.data.packageTypes), { values: ["礼盒"] });
+  assert.deepEqual(plain(result.data.homeSections), { values: ["latest"] });
   assert.deepEqual(plain(result.data.keywords.values), ["新案例", "case_091", "白酒", "礼盒"]);
 });
 
@@ -115,6 +119,7 @@ test("new cases stay hidden unless visible flag is explicitly enabled", () => {
 
   assert.equal(omitted.valid, true);
   assert.equal(omitted.data.isVisible, false);
+  assert.deepEqual(plain(omitted.data.homeSections), { values: [] });
   assert.equal(disabled.valid, true);
   assert.equal(disabled.data.isVisible, false);
 });

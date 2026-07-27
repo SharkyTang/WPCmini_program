@@ -65,6 +65,7 @@ Page({
         priceLevel: caseItem.priceLevel || "",
         scenes: caseItem.scenes || [],
         statuses: caseItem.statuses || [],
+        homeSections: caseItem.homeSections || [],
         sortOrder:
           caseItem.sortOrder === undefined || caseItem.sortOrder === null
             ? ""

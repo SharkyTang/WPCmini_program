@@ -7,6 +7,7 @@ const {
   getCaseDataVersion,
   shouldRefreshCaseData,
 } = require("../../utils/caseRefresh");
+const { HOME_SECTION_VALUES } = require("../../utils/caseData");
 
 const PENDING_CATEGORY_SORT_KEY = "pendingCategorySort";
 
@@ -30,13 +31,12 @@ function buildProductCard(caseItem) {
 
 function buildHomeSections(cases) {
   const visibleCases = cases.filter((caseItem) => caseItem.isVisible);
-  const featuredCases = visibleCases.filter(
-    (caseItem) =>
-      (caseItem.statuses || []).includes("热门") ||
-      (caseItem.statuses || []).includes("推荐")
+  const popularSource = visibleCases.filter((caseItem) =>
+    (caseItem.homeSections || []).includes(HOME_SECTION_VALUES.POPULAR)
   );
-  const popularSource = featuredCases.length ? featuredCases : visibleCases;
-  const latestSource = [...visibleCases].sort((a, b) => b.sortOrder - a.sortOrder);
+  const latestSource = visibleCases
+    .filter((caseItem) => (caseItem.homeSections || []).includes(HOME_SECTION_VALUES.LATEST))
+    .sort((a, b) => b.sortOrder - a.sortOrder);
 
   return {
     popularCases: popularSource.slice(0, 4).map(buildProductCard),

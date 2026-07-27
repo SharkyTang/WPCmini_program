@@ -22,6 +22,7 @@ const {
   normalizeCaseRecord,
   filterCases,
   buildFallbackBanners,
+  HOME_SECTION_VALUES,
 } = sandbox.module.exports;
 
 function test(name, fn) {
@@ -61,7 +62,8 @@ test("normalizes CloudBase CMS case records into display-ready fields", () => {
   assert.equal(normalized.priceLevel, "基础款");
   assert.deepEqual(plain(normalized.crafts), []);
   assert.deepEqual(plain(normalized.scenes), []);
-  assert.deepEqual(plain(normalized.statuses), ["推荐"]);
+  assert.deepEqual(plain(normalized.statuses), []);
+  assert.deepEqual(plain(normalized.homeSections), [HOME_SECTION_VALUES.BANNER]);
   assert.equal(normalized.sortOrder, 3);
   assert.equal(normalized.searchText.includes("礼盒"), true);
   assert.equal(normalized.searchText.includes("国风"), true);
@@ -80,7 +82,7 @@ test("filters visible cases by text, single-value fields, and multi-value fields
       packageTypes: { values: ["礼盒"] },
       styles: { values: ["国潮"] },
       scenes: { values: ["送礼"] },
-      statuses: { values: ["推荐"] },
+      statuses: { values: ["热门"] },
       isVisible: true,
     }),
     normalizeCaseRecord({
@@ -104,13 +106,13 @@ test("filters visible cases by text, single-value fields, and multi-value fields
   assert.deepEqual(plain(result.map((item) => item.id)), ["match"]);
 });
 
-test("builds fallback banners from recommended cases when CMS banners are empty", () => {
+test("builds fallback banners from home section cases when CMS banners are empty", () => {
   const cases = [
     normalizeCaseRecord({
       _id: "case_1",
-      title: "推荐案例",
+      title: "轮播案例",
       coverImage: "cloud://recommended",
-      statuses: { values: ["推荐"] },
+      homeSections: { values: [HOME_SECTION_VALUES.BANNER] },
       isVisible: true,
       sortOrder: 2,
     }),
@@ -121,7 +123,7 @@ test("builds fallback banners from recommended cases when CMS banners are empty"
   assert.deepEqual(plain(banners), [
     {
       id: "case_1",
-      title: "推荐案例",
+      title: "轮播案例",
       image: "cloud://recommended",
       caseId: "case_1",
       sortOrder: 2,

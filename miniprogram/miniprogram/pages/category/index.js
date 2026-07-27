@@ -134,7 +134,12 @@ function takePendingCategorySort() {
 
 function isPopularCase(caseItem) {
   const statuses = caseItem.statuses || [];
-  return statuses.includes("热门") || statuses.includes("推荐");
+  return statuses.includes("热门产品");
+}
+
+function isLatestCase(caseItem) {
+  const statuses = caseItem.statuses || [];
+  return statuses.includes("最新产品");
 }
 
 function resolveFocusedValue(filter, focusedFilterValue) {
@@ -313,7 +318,7 @@ Page({
     });
     const sortedCases =
       this.data.selectedSort === "latest"
-        ? [...filteredCases].sort((a, b) => b.sortOrder - a.sortOrder)
+        ? filteredCases.filter(isLatestCase).sort((a, b) => b.sortOrder - a.sortOrder)
         : this.data.selectedSort === "popular"
           ? filteredCases.filter(isPopularCase)
           : filteredCases;

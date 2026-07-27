@@ -18,7 +18,10 @@ const VALUE_MIGRATIONS = {
     "奢华": "珍藏款"
   },
   statuses: {
-    "新上传": "最新"
+    "推荐": "",
+    "热门": "热门产品",
+    "新上传": "最新产品",
+    "最新": "最新产品"
   }
 };
 
@@ -57,7 +60,7 @@ export const CLASSIFICATION_CONFIG = {
     label: "状态",
     type: "multi",
     required: false,
-    options: ["推荐", "热门", "最新"]
+    options: ["热门产品", "最新产品"]
   }
 };
 
@@ -220,7 +223,13 @@ function normalizeFieldValues(field, values) {
 function normalizeFieldValue(field, value) {
   const text = String(value || "").trim();
   if (!text) return "";
-  return VALUE_MIGRATIONS[field]?.[text] || text;
+  if (
+    VALUE_MIGRATIONS[field] &&
+    Object.prototype.hasOwnProperty.call(VALUE_MIGRATIONS[field], text)
+  ) {
+    return VALUE_MIGRATIONS[field][text];
+  }
+  return text;
 }
 
 export function summarizeRecords(records) {

@@ -38,6 +38,15 @@ function loadHomePage(wxMock = {}, cases = []) {
           shouldRefreshCaseData: () => false,
         };
       }
+      if (moduleName === "../../utils/caseData") {
+        return {
+          HOME_SECTION_VALUES: {
+            BANNER: "banner",
+            POPULAR: "popular",
+            LATEST: "latest",
+          },
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     console,
@@ -82,6 +91,7 @@ function buildCase(index, overrides = {}) {
     sortOrder: index,
     packageTypes: ["礼盒"],
     statuses: [],
+    homeSections: [],
     ...overrides,
   };
 }
@@ -97,10 +107,13 @@ await test("home sections expose more links for popular and latest products", ()
   assert.equal(wxml.includes('bindtap="navigateToCategory"'), true);
 });
 
-await test("home page shows four popular cases and six latest cases", async () => {
+await test("home page shows only selected home section cases", async () => {
   const cases = Array.from({ length: 8 }, (_, index) =>
     buildCase(index + 1, {
-      statuses: index < 5 ? ["推荐"] : [],
+      homeSections: [
+        ...(index < 5 ? ["popular"] : []),
+        ...(index < 7 ? ["latest"] : []),
+      ],
     })
   );
   const { page } = loadHomePage({}, cases);
@@ -109,6 +122,20 @@ await test("home page shows four popular cases and six latest cases", async () =
 
   assert.equal(page.data.popularCases.length, 4);
   assert.equal(page.data.latestCases.length, 6);
+  assert.equal(page.data.popularCases.every((item) => item.homeSections.includes("popular")), true);
+  assert.equal(page.data.latestCases.every((item) => item.homeSections.includes("latest")), true);
+});
+
+await test("visible cases without home section selections stay off homepage sections", async () => {
+  const { page } = loadHomePage({}, [
+    buildCase(1, { isVisible: true, homeSections: [] }),
+    buildCase(2, { isVisible: true, homeSections: ["latest"] }),
+  ]);
+
+  await page.loadData();
+
+  assert.deepEqual(page.data.popularCases.map((item) => item.id), []);
+  assert.deepEqual(page.data.latestCases.map((item) => item.id), ["case_2"]);
 });
 
 await test("home more links switch to category tab with selected sort", () => {

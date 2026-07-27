@@ -112,9 +112,9 @@ await test("category sort options use recent and popular labels", () => {
 
 await test("category page initializes latest sort from URL options", async () => {
   const { page } = loadCategoryPage([
-    buildCase("case_1", { sortOrder: 1 }),
-    buildCase("case_3", { sortOrder: 3 }),
-    buildCase("case_2", { sortOrder: 2 }),
+    buildCase("case_1", { sortOrder: 1, statuses: ["最新产品"], homeSections: [] }),
+    buildCase("case_3", { sortOrder: 3, statuses: ["最新产品"], homeSections: [] }),
+    buildCase("case_2", { sortOrder: 2, statuses: [] }),
   ]);
 
   await page.onLoad({ sort: "latest" });
@@ -124,7 +124,6 @@ await test("category page initializes latest sort from URL options", async () =>
   assert.equal(page.data.expandedNavKey, "sort");
   assert.deepEqual(plain(page.data.filteredCases.map((item) => item.id)), [
     "case_3",
-    "case_2",
     "case_1",
   ]);
 });
@@ -132,8 +131,8 @@ await test("category page initializes latest sort from URL options", async () =>
 await test("category page initializes popular sort from URL options", async () => {
   const { page } = loadCategoryPage([
     buildCase("case_1", { statuses: [] }),
-    buildCase("case_2", { statuses: ["推荐"] }),
-    buildCase("case_3", { statuses: ["热门"] }),
+    buildCase("case_2", { statuses: ["最新产品"] }),
+    buildCase("case_3", { statuses: ["热门产品"], homeSections: [] }),
   ]);
 
   await page.onLoad({ sort: "popular" });
@@ -141,7 +140,6 @@ await test("category page initializes popular sort from URL options", async () =
   assert.equal(page.data.selectedSort, "popular");
   assert.equal(page.data.activeNavKey, "sort");
   assert.deepEqual(plain(page.data.filteredCases.map((item) => item.id)), [
-    "case_2",
     "case_3",
   ]);
 });
@@ -160,7 +158,7 @@ await test("category page consumes pending tab sort from app global data", async
   const { app, page } = loadCategoryPage(
     [
       buildCase("case_1", { statuses: [] }),
-      buildCase("case_2", { statuses: ["推荐"] }),
+      buildCase("case_2", { statuses: ["热门产品"], homeSections: [] }),
     ],
     {
       pendingCategorySort: "popular",
@@ -181,7 +179,7 @@ await test("category page applies pending tab sort during first load", async () 
   const { app, page } = loadCategoryPage(
     [
       buildCase("case_1", { statuses: [] }),
-      buildCase("case_2", { statuses: ["推荐"] }),
+      buildCase("case_2", { statuses: ["热门产品"], homeSections: [] }),
     ],
     {
       pendingCategorySort: "popular",
@@ -201,7 +199,7 @@ await test("category page consumes pending tab sort from storage", async () => {
   const { page } = loadCategoryPage(
     [
       buildCase("case_1", { sortOrder: 1 }),
-      buildCase("case_3", { sortOrder: 3 }),
+      buildCase("case_3", { sortOrder: 3, statuses: ["最新产品"], homeSections: [] }),
     ],
     {},
     {
@@ -219,7 +217,6 @@ await test("category page consumes pending tab sort from storage", async () => {
   assert.equal(page.data.selectedSort, "latest");
   assert.deepEqual(plain(page.data.filteredCases.map((item) => item.id)), [
     "case_3",
-    "case_1",
   ]);
   assert.equal(removedKey, "pendingCategorySort");
 });

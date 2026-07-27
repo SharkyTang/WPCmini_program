@@ -53,7 +53,7 @@
           data-value="{{item.value}}"
           bindtap="toggleMulti"
         >
-          {{item.value}}
+          {{item.label || item.value}}
         </view>
       </view>
     </view>
@@ -69,7 +69,7 @@
           data-value="{{item.value}}"
           bindtap="toggleMulti"
         >
-          {{item.value}}
+          {{item.label || item.value}}
         </view>
       </view>
     </view>
@@ -85,7 +85,7 @@
           data-value="{{item.value}}"
           bindtap="selectSingle"
         >
-          {{item.value}}
+          {{item.label || item.value}}
         </view>
       </view>
     </view>
@@ -101,7 +101,7 @@
           data-value="{{item.value}}"
           bindtap="toggleMulti"
         >
-          {{item.value}}
+          {{item.label || item.value}}
         </view>
       </view>
     </view>
@@ -117,7 +117,7 @@
           data-value="{{item.value}}"
           bindtap="toggleMulti"
         >
-          {{item.value}}
+          {{item.label || item.value}}
         </view>
       </view>
     </view>
@@ -138,6 +138,23 @@
         <view class="field-hint">新增默认隐藏，确认图片和标签后再打开。</view>
       </view>
       <switch checked="{{form.isVisible}}" bindchange="onVisibleChange" />
+    </view>
+
+    <view class="field home-section-field">
+      <view class="field-label">首页展示位置</view>
+      <view class="field-hint">打开前台显示后，勾选才会出现在首页对应位置；不勾选仍可在分类页显示。</view>
+      <view class="chip-grid">
+        <view
+          wx:for="{{optionViews.homeSections}}"
+          wx:key="value"
+          class="chip {{item.selected ? 'chip-active' : ''}}"
+          data-field="homeSections"
+          data-value="{{item.value}}"
+          bindtap="toggleMulti"
+        >
+          {{item.label || item.value}}
+        </view>
+      </view>
     </view>
 
     <button

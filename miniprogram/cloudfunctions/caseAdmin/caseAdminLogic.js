@@ -31,6 +31,7 @@ const ALLOWED_CASE_FIELDS = [
   "priceLevel",
   "scenes",
   "statuses",
+  "homeSections",
   "sortOrder",
   "notes",
   "isVisible",
@@ -242,6 +243,11 @@ function sanitizeCasePayload(input = {}, options = {}) {
     data.statuses = valuesObject(picked.statuses);
   } else if (isCreate) {
     data.statuses = { values: [] };
+  }
+  if (Object.prototype.hasOwnProperty.call(picked, "homeSections")) {
+    data.homeSections = valuesObject(picked.homeSections);
+  } else if (isCreate) {
+    data.homeSections = { values: [] };
   }
   if (Object.prototype.hasOwnProperty.call(picked, "sortOrder") || isCreate) {
     data.sortOrder = isCreate

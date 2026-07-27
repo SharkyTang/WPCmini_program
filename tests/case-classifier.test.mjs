@@ -46,7 +46,8 @@ assert.deepEqual(CLASSIFICATION_CONFIG.styles.options, ["轻奢", "国风", "新
 assert.equal(CLASSIFICATION_CONFIG.styles.options.includes("高端"), false);
 assert.equal(CLASSIFICATION_CONFIG.styles.options.includes("国潮"), false);
 assert.equal(Object.hasOwn(CLASSIFICATION_CONFIG, "crafts"), false);
-assert.deepEqual(CLASSIFICATION_CONFIG.statuses.options, ["推荐", "热门", "最新"]);
+assert.deepEqual(CLASSIFICATION_CONFIG.statuses.options, ["热门产品", "最新产品"]);
+assert.equal(CLASSIFICATION_CONFIG.statuses.options.includes("推荐"), false);
 assert.equal(CLASSIFICATION_CONFIG.statuses.options.includes("新上传"), false);
 
 let minimalTagged = toggleMultiValue(record, "packageTypes", "礼盒");
@@ -62,23 +63,23 @@ tagged = toggleMultiValue(tagged, "statuses", "新上传");
 tagged = setSingleValue(tagged, "priceLevel", "低端");
 
 assert.deepEqual(validateRecord(tagged), []);
-assert.deepEqual(buildKeywords({ ...tagged, crafts: ["哑膜"] }), ["白酒", "瓶子", "桶盒", "新中式", "基础款", "商务招待", "最新"]);
+assert.deepEqual(buildKeywords({ ...tagged, crafts: ["哑膜"] }), ["白酒", "瓶子", "桶盒", "新中式", "基础款", "商务招待", "最新产品"]);
 
 const duplicateStyleRecord = { ...tagged, styles: ["年轻化", "时尚"] };
 assert.deepEqual(sanitizeRecord(duplicateStyleRecord).styles, ["时尚"]);
 assert.deepEqual(buildExportRecord(duplicateStyleRecord).styles, ["时尚"]);
-assert.deepEqual(buildKeywords(duplicateStyleRecord), ["白酒", "瓶子", "桶盒", "时尚", "基础款", "商务招待", "最新"]);
+assert.deepEqual(buildKeywords(duplicateStyleRecord), ["白酒", "瓶子", "桶盒", "时尚", "基础款", "商务招待", "最新产品"]);
 
 const oldStyleRecord = { ...tagged, styles: ["传统", "节日", "年轻化", "国潮", "高端"] };
 assert.deepEqual(sanitizeRecord(oldStyleRecord).styles, ["复古", "喜庆", "时尚", "国风", "轻奢"]);
 assert.deepEqual(buildExportRecord(oldStyleRecord).styles, ["复古", "喜庆", "时尚", "国风", "轻奢"]);
 const oldValueRecord = { ...tagged, priceLevel: "奢华", statuses: ["新上传"] };
 assert.equal(sanitizeRecord(oldValueRecord).priceLevel, "珍藏款");
-assert.deepEqual(sanitizeRecord(oldValueRecord).statuses, ["最新"]);
+assert.deepEqual(sanitizeRecord(oldValueRecord).statuses, ["最新产品"]);
 assert.equal(buildExportRecord(oldValueRecord).priceLevel, "珍藏款");
-assert.deepEqual(buildExportRecord(oldValueRecord).statuses, ["最新"]);
+assert.deepEqual(buildExportRecord(oldValueRecord).statuses, ["最新产品"]);
 assert.equal(sanitizeRecord({ ...tagged, priceLevel: "高端" }).priceLevel, "高端款");
-assert.deepEqual(buildKeywords(oldValueRecord), ["白酒", "瓶子", "桶盒", "新中式", "珍藏款", "商务招待", "最新"]);
+assert.deepEqual(buildKeywords(oldValueRecord), ["白酒", "瓶子", "桶盒", "新中式", "珍藏款", "商务招待", "最新产品"]);
 assert.equal(buildKeywords(oldStyleRecord).includes("传统"), false);
 assert.equal(buildKeywords(oldStyleRecord).includes("节日"), false);
 assert.equal(buildKeywords(oldStyleRecord).includes("年轻化"), false);
@@ -93,7 +94,7 @@ assert.equal(exported.title, "");
 assert.equal(exported.aspectRatio, 1.3333);
 assert.equal(exported.needsReview, false);
 assert.equal(exported.priceLevel, "基础款");
-assert.deepEqual(exported.statuses, ["最新"]);
+assert.deepEqual(exported.statuses, ["最新产品"]);
 assert.deepEqual(exported.packageTypes, ["瓶子", "桶盒"]);
 assert.equal(Object.hasOwn(exported, "crafts"), false);
 assert.equal(Object.hasOwn(exported, "priceLevel"), true);

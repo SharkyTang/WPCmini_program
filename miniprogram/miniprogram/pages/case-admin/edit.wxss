@@ -186,6 +186,11 @@ page {
   gap: 24rpx;
 }
 
+.home-section-field {
+  margin-top: -10rpx;
+  padding-bottom: 8rpx;
+}
+
 .save-button {
   height: 84rpx;
   border-radius: 42rpx;
