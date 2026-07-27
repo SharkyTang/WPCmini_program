@@ -105,18 +105,38 @@ await test("configured cloud profile opens the independent edit page", async () 
   assert.equal(cachedIdentity.openid, "openid_1");
 });
 
-await test("profile read failures do not route users into setup", async () => {
-  let toastTitle = "";
-  let navigated = false;
+await test("completed cached profile opens the editor on the first tap during refresh", async () => {
+  let navigatedUrl = "";
+  let resolveProfile;
   const page = loadProfilePage(
-    { navigateTo() { navigated = true; }, showToast(options) { toastTitle = options.title; } },
+    { navigateTo(options) { navigatedUrl = options.url; } },
+    {
+      getLegacyProfile: () => ({
+        nickname: "墨韵 ovo",
+        avatarFileId: "cloud://avatar",
+        avatarUrl: "https://cached-avatar",
+      }),
+      fetchProfile: () => new Promise((resolve) => { resolveProfile = resolve; }),
+    }
+  );
+
+  const refresh = page.loadProfileInfo();
+  page.openProfileEditor();
+  assert.equal(navigatedUrl, "/pages/profile/edit/index?mode=edit");
+  resolveProfile(null);
+  await refresh;
+});
+
+await test("profile read failures still allow users to open the setup page", async () => {
+  let navigatedUrl = "";
+  const page = loadProfilePage(
+    { navigateTo(options) { navigatedUrl = options.url; } },
     { fetchProfile: async () => { throw new Error("offline"); } }
   );
   await page.loadProfileInfo();
   page.openProfileEditor();
   assert.equal(page.data.profileLoadError, true);
-  assert.equal(navigated, false);
-  assert.equal(toastTitle, "资料读取失败，请下拉重试");
+  assert.equal(navigatedUrl, "/pages/profile/edit/index?mode=setup");
 });
 
 await test("profile card removes the legacy editor sheet", () => {
