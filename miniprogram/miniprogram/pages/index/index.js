@@ -22,10 +22,11 @@ function summarizeTags(caseItem) {
     .join(" / ");
 }
 
-function buildProductCard(caseItem) {
+function buildProductCard(caseItem, homeBadge) {
   return {
     ...caseItem,
     tagSummary: summarizeTags(caseItem),
+    homeBadge,
   };
 }
 
@@ -39,8 +40,12 @@ function buildHomeSections(cases) {
     .sort((a, b) => b.sortOrder - a.sortOrder);
 
   return {
-    popularCases: popularSource.slice(0, 4).map(buildProductCard),
-    latestCases: latestSource.slice(0, 6).map(buildProductCard),
+    popularCases: popularSource
+      .slice(0, 4)
+      .map((caseItem) => buildProductCard(caseItem, "近期热门")),
+    latestCases: latestSource
+      .slice(0, 6)
+      .map((caseItem) => buildProductCard(caseItem, "最近上新")),
   };
 }
 

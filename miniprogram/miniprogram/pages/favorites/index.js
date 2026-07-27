@@ -37,6 +37,14 @@ Page({
     selectedCount: 0,
     selectedFavoriteIds: [],
     favoriteCards: [],
+    confirmDialog: {
+      show: false,
+      title: "",
+      content: "",
+      action: "",
+      ids: [],
+      buttons: [{ text: "取消" }, { text: "确认" }],
+    },
   },
 
   onShow() {
@@ -165,7 +173,7 @@ Page({
     this.updateSelectedFavoriteIds(shouldClear ? [] : allIds);
   },
 
-  async cancelSelectedFavorites() {
+  cancelSelectedFavorites() {
     const ids = this.data.selectedFavoriteIds;
     if (!ids.length) {
       wx.showToast({
@@ -175,55 +183,88 @@ Page({
       return;
     }
 
-    wx.showModal({
+    this.openConfirmDialog({
       title: "删除收藏",
       content: `删除选中的 ${ids.length} 个收藏？删除后的收藏将不会恢复。`,
       confirmText: "删除收藏",
-      confirmColor: "#241d16",
-      success: async (response) => {
-        if (!response.confirm) return;
-        await this.removeFavoriteIds(ids);
+      action: "selected",
+      ids,
+    });
+  },
+
+  clearAllFavorites() {
+    if (!this.data.favoriteCards.length) return;
+
+    this.openConfirmDialog({
+      title: "删除全部收藏",
+      content: "删除全部收藏？删除后的收藏将不会恢复。",
+      confirmText: "删除全部",
+      action: "all",
+    });
+  },
+
+  openConfirmDialog(options = {}) {
+    this.setData({
+      confirmDialog: {
+        show: true,
+        title: options.title || "",
+        content: options.content || "",
+        action: options.action || "",
+        ids: (options.ids || []).slice(),
+        buttons: [
+          { text: "取消" },
+          { text: options.confirmText || "确认", extClass: "dialog-button-danger" },
+        ],
       },
     });
   },
 
-  async clearAllFavorites() {
-    if (!this.data.favoriteCards.length) return;
-
-    wx.showModal({
-      title: "删除全部收藏",
-      content: "删除全部收藏？删除后的收藏将不会恢复。",
-      confirmText: "删除全部",
-      confirmColor: "#241d16",
-      success: async (response) => {
-        if (!response.confirm) return;
-
-        wx.showLoading({
-          title: "正在删除",
-        });
-        try {
-          await clearFavorites();
-          wx.hideLoading();
-          wx.showToast({
-            title: "已删除全部收藏",
-            icon: "success",
-          });
-          this.setData({
-            manageMode: false,
-            selectedCount: 0,
-            selectedFavoriteIds: [],
-            favoriteCards: [],
-          });
-        } catch (error) {
-          console.error("删除全部收藏失败", error);
-          wx.hideLoading();
-          wx.showToast({
-            title: "删除失败，请稍后重试",
-            icon: "none",
-          });
-        }
-      },
+  closeConfirmDialog() {
+    this.setData({
+      "confirmDialog.show": false,
     });
+  },
+
+  async handleConfirmDialogTap(event) {
+    const index = event.detail && event.detail.index;
+    const dialog = this.data.confirmDialog;
+    this.closeConfirmDialog();
+    if (index !== 1) return;
+
+    if (dialog.action === "all") {
+      await this.performClearAllFavorites();
+      return;
+    }
+    if (dialog.action === "selected") {
+      await this.removeFavoriteIds(dialog.ids);
+    }
+  },
+
+  async performClearAllFavorites() {
+    wx.showLoading({
+      title: "正在删除",
+    });
+    try {
+      await clearFavorites();
+      wx.hideLoading();
+      wx.showToast({
+        title: "已删除全部收藏",
+        icon: "success",
+      });
+      this.setData({
+        manageMode: false,
+        selectedCount: 0,
+        selectedFavoriteIds: [],
+        favoriteCards: [],
+      });
+    } catch (error) {
+      console.error("删除全部收藏失败", error);
+      wx.hideLoading();
+      wx.showToast({
+        title: "删除失败，请稍后重试",
+        icon: "none",
+      });
+    }
   },
 
   async removeFavoriteIds(ids) {

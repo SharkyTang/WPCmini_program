@@ -1,5 +1,8 @@
 {
   "navigationBarTitleText": "个人资料",
   "navigationBarBackgroundColor": "#F7F3EC",
-  "navigationBarTextStyle": "black"
+  "navigationBarTextStyle": "black",
+  "usingComponents": {
+    "mp-toptips": "weui-miniprogram/toptips/toptips"
+  }
 }

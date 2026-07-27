@@ -37,6 +37,14 @@ Page({
     selectedCount: 0,
     selectedHistoryIds: [],
     historyCards: [],
+    confirmDialog: {
+      show: false,
+      title: "",
+      content: "",
+      action: "",
+      ids: [],
+      buttons: [{ text: "取消" }, { text: "确认" }],
+    },
   },
 
   onShow() {
@@ -162,7 +170,7 @@ Page({
     this.updateSelectedHistoryIds(shouldClear ? [] : allIds);
   },
 
-  async deleteSelectedHistory() {
+  deleteSelectedHistory() {
     const ids = this.data.selectedHistoryIds;
     if (!ids.length) {
       wx.showToast({
@@ -172,55 +180,88 @@ Page({
       return;
     }
 
-    wx.showModal({
+    this.openConfirmDialog({
       title: "删除浏览记录",
       content: `删除选中的 ${ids.length} 条浏览记录？`,
       confirmText: "删除",
-      confirmColor: "#241d16",
-      success: async (response) => {
-        if (!response.confirm) return;
-        await this.removeHistoryIds(ids);
+      action: "selected",
+      ids,
+    });
+  },
+
+  clearAllHistory() {
+    if (!this.data.historyCards.length) return;
+
+    this.openConfirmDialog({
+      title: "清空浏览记录",
+      content: "清空全部浏览记录？清空后的浏览记录将不会恢复。",
+      confirmText: "清空",
+      action: "all",
+    });
+  },
+
+  openConfirmDialog(options = {}) {
+    this.setData({
+      confirmDialog: {
+        show: true,
+        title: options.title || "",
+        content: options.content || "",
+        action: options.action || "",
+        ids: (options.ids || []).slice(),
+        buttons: [
+          { text: "取消" },
+          { text: options.confirmText || "确认", extClass: "dialog-button-danger" },
+        ],
       },
     });
   },
 
-  async clearAllHistory() {
-    if (!this.data.historyCards.length) return;
-
-    wx.showModal({
-      title: "清空浏览记录",
-      content: "清空全部浏览记录？清空后的浏览记录将不会恢复。",
-      confirmText: "清空",
-      confirmColor: "#241d16",
-      success: async (response) => {
-        if (!response.confirm) return;
-
-        wx.showLoading({
-          title: "正在清空",
-        });
-        try {
-          await clearHistory();
-          wx.hideLoading();
-          wx.showToast({
-            title: "已清空",
-            icon: "success",
-          });
-          this.setData({
-            manageMode: false,
-            selectedCount: 0,
-            selectedHistoryIds: [],
-            historyCards: [],
-          });
-        } catch (error) {
-          console.error("清空浏览记录失败", error);
-          wx.hideLoading();
-          wx.showToast({
-            title: "清空失败，请稍后重试",
-            icon: "none",
-          });
-        }
-      },
+  closeConfirmDialog() {
+    this.setData({
+      "confirmDialog.show": false,
     });
+  },
+
+  async handleConfirmDialogTap(event) {
+    const index = event.detail && event.detail.index;
+    const dialog = this.data.confirmDialog;
+    this.closeConfirmDialog();
+    if (index !== 1) return;
+
+    if (dialog.action === "all") {
+      await this.performClearAllHistory();
+      return;
+    }
+    if (dialog.action === "selected") {
+      await this.removeHistoryIds(dialog.ids);
+    }
+  },
+
+  async performClearAllHistory() {
+    wx.showLoading({
+      title: "正在清空",
+    });
+    try {
+      await clearHistory();
+      wx.hideLoading();
+      wx.showToast({
+        title: "已清空",
+        icon: "success",
+      });
+      this.setData({
+        manageMode: false,
+        selectedCount: 0,
+        selectedHistoryIds: [],
+        historyCards: [],
+      });
+    } catch (error) {
+      console.error("清空浏览记录失败", error);
+      wx.hideLoading();
+      wx.showToast({
+        title: "清空失败，请稍后重试",
+        icon: "none",
+      });
+    }
   },
 
   async removeHistoryIds(ids) {

@@ -124,6 +124,16 @@ await test("home page shows only selected home section cases", async () => {
   assert.equal(page.data.latestCases.length, 6);
   assert.equal(page.data.popularCases.every((item) => item.homeSections.includes("popular")), true);
   assert.equal(page.data.latestCases.every((item) => item.homeSections.includes("latest")), true);
+  assert.equal(page.data.popularCases.every((item) => item.homeBadge === "近期热门"), true);
+  assert.equal(page.data.latestCases.every((item) => item.homeBadge === "最近上新"), true);
+});
+
+await test("home page renders display badges without persisting new fields", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+
+  assert.equal(wxml.includes("product-badge"), true);
+  assert.equal(wxml.includes("{{item.homeBadge}}"), true);
+  assert.equal(wxml.includes("story-mark"), true);
 });
 
 await test("visible cases without home section selections stay off homepage sections", async () => {

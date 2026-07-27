@@ -1,7 +1,7 @@
 page {
   min-height: 100%;
-  background: #f7f3ec;
-  color: #241d16;
+  background: var(--brand-bg);
+  color: var(--brand-ink);
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
 }
 
@@ -13,7 +13,33 @@ page {
 
 .profile-header {
   height: 310rpx;
-  background: #f7f3ec;
+  padding: 54rpx 40rpx 0;
+  background:
+    linear-gradient(140deg, rgba(183, 122, 45, 0.16), rgba(40, 95, 66, 0.08)),
+    var(--brand-surface-strong);
+  box-sizing: border-box;
+}
+
+.header-eyebrow {
+  color: var(--brand-gold);
+  font-size: 20rpx;
+  line-height: 1.4;
+  font-weight: 800;
+}
+
+.header-title {
+  margin-top: 8rpx;
+  color: var(--brand-ink);
+  font-size: 42rpx;
+  line-height: 1.25;
+  font-weight: 800;
+}
+
+.header-subtitle {
+  margin-top: 10rpx;
+  color: var(--brand-muted);
+  font-size: 24rpx;
+  line-height: 1.5;
 }
 
 .profile-card-shell {
@@ -36,13 +62,14 @@ page {
 
 .profile-card,
 .state-card {
-  border-radius: 24rpx;
-  background: #fff;
+  border-radius: 8rpx;
+  background: var(--brand-surface);
+  box-shadow: var(--brand-shadow);
   box-sizing: border-box;
 }
 
 .profile-card {
-  min-height: 298rpx;
+  min-height: 350rpx;
   overflow: hidden;
 }
 
@@ -79,6 +106,9 @@ page {
   display: block;
   overflow: hidden;
   flex: 0 0 170rpx;
+  border: 6rpx solid var(--brand-surface);
+  box-shadow: 0 12rpx 28rpx rgba(72, 49, 25, 0.18);
+  box-sizing: border-box;
 }
 
 .avatar-placeholder {
@@ -115,7 +145,7 @@ page {
   padding: 0 10rpx;
   border: 4rpx solid #fff;
   border-radius: 24rpx;
-  background: #241d16;
+  background: var(--brand-green);
   color: #fff;
   font-size: 19rpx;
   font-weight: 700;
@@ -134,7 +164,7 @@ page {
   display: flex;
   align-items: center;
   gap: 22rpx;
-  border-top: 2rpx solid #f1eee9;
+  border-top: 2rpx solid rgba(227, 210, 187, 0.58);
   box-sizing: border-box;
 }
 
@@ -159,6 +189,19 @@ page {
   box-sizing: border-box;
 }
 
+.nickname-field {
+  min-width: 0;
+  flex: 1;
+}
+
+.nickname-count {
+  margin-top: -8rpx;
+  color: #a3978a;
+  font-size: 20rpx;
+  line-height: 1.3;
+  text-align: right;
+}
+
 .nickname-placeholder {
   color: #b3a89b;
   font-weight: 400;
@@ -178,8 +221,8 @@ page {
   bottom: calc(28rpx + env(safe-area-inset-bottom));
   left: 40rpx;
   height: 88rpx;
-  border-radius: 44rpx;
-  background: #241d16;
+  border-radius: 8rpx;
+  background: var(--brand-ink);
   color: #fff;
   font-size: 27rpx;
   box-shadow: 0 8rpx 18rpx rgba(36, 29, 22, 0.18);
@@ -193,6 +236,13 @@ page {
 
 .save-button-disabled {
   background: #8c8176;
+}
+
+.profile-tip {
+  padding: 0 38rpx 30rpx;
+  color: var(--brand-muted);
+  font-size: 21rpx;
+  line-height: 1.55;
 }
 
 .state-card {
@@ -220,7 +270,7 @@ page {
   height: 70rpx;
   margin: 28rpx auto 0;
   border: 2rpx solid #241d16;
-  border-radius: 35rpx;
+  border-radius: 8rpx;
   color: #241d16;
   font-size: 24rpx;
 }

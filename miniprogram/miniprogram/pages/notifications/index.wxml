@@ -33,7 +33,7 @@
         </view>
         <switch
           checked="{{!item.disabled}}"
-          color="#241d16"
+          color="#285f42"
           data-type="{{item.type}}"
           bindchange="toggleSetting"
         />
@@ -41,33 +41,33 @@
     </view>
   </view>
 
-  <view wx:elif="{{loading}}" class="state-card">
-    <view class="state-title">正在读取消息通知...</view>
+  <view wx:elif="{{loading}}" class="state-shell">
+    <mp-msg type="waiting" title="正在读取消息通知" desc="正在同步最新内容" />
   </view>
 
-  <view wx:elif="{{errorMessage}}" class="state-card state-error">
-    <view class="state-title">{{errorMessage}}</view>
+  <view wx:elif="{{errorMessage}}" class="state-shell state-error">
+    <mp-msg type="warn" title="消息读取失败" desc="{{errorMessage}}" />
     <view class="state-button" bindtap="loadNotifications">重新读取</view>
   </view>
 
-  <view wx:elif="{{needCustomerIdentity}}" class="state-card">
-    <view class="state-title">完善个人资料后可查看客服回复</view>
-    <view class="state-copy">资料会用于识别并保护只属于你的客服回复。</view>
+  <view wx:elif="{{needCustomerIdentity}}" class="state-shell">
+    <mp-msg type="info" title="完善个人资料" desc="完善资料后可识别并保护只属于你的客服回复" />
     <view class="state-button" bindtap="loginAndLoadCustomer">去完善资料</view>
   </view>
 
-  <view wx:elif="{{!displayNotifications.length}}" class="state-card">
-    <view class="state-title">
-      {{activeTab === 'customer_reply' ? '暂无客服回复' : '暂无消息通知'}}
-    </view>
-    <view class="state-copy">有新的通知后会出现在这里。</view>
+  <view wx:elif="{{!displayNotifications.length}}" class="state-shell">
+    <mp-msg
+      type="info"
+      title="{{activeTab === 'customer_reply' ? '暂无客服回复' : '暂无消息通知'}}"
+      desc="有新的通知后会出现在这里"
+    />
   </view>
 
   <view wx:else class="notification-list">
     <view
       wx:for="{{displayNotifications}}"
       wx:key="id"
-      class="notification-card"
+      class="notification-card notification-{{item.type}}"
     >
       <view class="notification-meta">
         <view class="notification-type">{{item.typeLabel}}</view>

@@ -1,7 +1,7 @@
 page {
   min-height: 100%;
-  background: #f7f3ec;
-  color: #241d16;
+  background: var(--brand-bg);
+  color: var(--brand-ink);
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
 }
 
@@ -62,9 +62,8 @@ page {
 .search-card,
 .state-card,
 .inquiry-card {
-  border: 2rpx solid #dfcfb7;
   border-radius: 8rpx;
-  background: #fffdf9;
+  background: var(--brand-surface);
   box-sizing: border-box;
 }
 
@@ -137,7 +136,32 @@ page {
 }
 
 .inquiry-card {
-  padding: 22rpx;
+  position: relative;
+  padding: 24rpx 24rpx 24rpx 30rpx;
+  overflow: hidden;
+  box-shadow: var(--brand-shadow);
+}
+
+.inquiry-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 7rpx;
+  background: var(--brand-gold);
+}
+
+.inquiry-card-processing::before {
+  background: var(--brand-green);
+}
+
+.inquiry-card-done::before {
+  background: #8c8176;
+}
+
+.inquiry-card-invalid::before {
+  background: var(--brand-red);
 }
 
 .inquiry-card:active {
@@ -163,12 +187,16 @@ page {
   font-weight: 800;
 }
 
+.status-new {
+  background: var(--brand-gold);
+}
+
 .status-contacted {
-  background: #b97832;
+  background: #9a6125;
 }
 
 .status-processing {
-  background: #3e6952;
+  background: var(--brand-green);
 }
 
 .status-done {
@@ -176,7 +204,7 @@ page {
 }
 
 .status-invalid {
-  background: #9a3d35;
+  background: var(--brand-red);
 }
 
 .created-time {
@@ -185,15 +213,43 @@ page {
   white-space: nowrap;
 }
 
-.contact-line {
-  margin-top: 18rpx;
-  color: #241d16;
-  font-size: 27rpx;
-  line-height: 1.35;
-  font-weight: 800;
+.contact-label {
+  margin-top: 20rpx;
+  color: var(--brand-muted);
+  font-size: 20rpx;
+  line-height: 1.4;
 }
 
-.meta-line,
+.contact-line {
+  margin-top: 4rpx;
+  color: #241d16;
+  font-size: 30rpx;
+  line-height: 1.35;
+  font-weight: 800;
+  word-break: break-all;
+}
+
+.meta-grid {
+  margin-top: 18rpx;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10rpx;
+}
+
+.meta-item {
+  min-width: 0;
+  padding: 10rpx 12rpx;
+  border-radius: 6rpx;
+  background: var(--brand-gold-soft);
+  color: #80531f;
+  font-size: 20rpx;
+  line-height: 1.35;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.source-line,
 .case-line,
 .content-preview {
   margin-top: 10rpx;

@@ -83,9 +83,21 @@ page {
 }
 
 .nav-item-active {
-  border-color: #b77a2d;
-  background: #2a2119;
-  color: #fff;
+  border-color: rgba(183, 122, 45, 0.48);
+  background: #fff8ef;
+  color: #241d16;
+  box-shadow: 0 8rpx 18rpx rgba(72, 49, 25, 0.08);
+}
+
+.nav-item-active::before {
+  content: "";
+  position: absolute;
+  left: -12rpx;
+  top: 16rpx;
+  bottom: 16rpx;
+  width: 7rpx;
+  border-radius: 4rpx;
+  background: #b77a2d;
 }
 
 .nav-title {
@@ -120,8 +132,10 @@ page {
 }
 
 .sub-nav-item {
-  min-height: 44rpx;
-  padding: 8rpx 4rpx;
+  min-height: 48rpx;
+  margin-bottom: 6rpx;
+  padding: 8rpx 6rpx;
+  border-radius: 8rpx;
   color: #7c8292;
   display: flex;
   align-items: center;
@@ -133,9 +147,9 @@ page {
 }
 
 .sub-nav-item-active {
-  color: #8f5d22;
+  background: #2a2119;
+  color: #fff;
   font-weight: 800;
-  background: linear-gradient(to bottom, transparent 54%, #f0d47b 54%, #f0d47b 80%, transparent 80%);
 }
 
 .content {
@@ -209,10 +223,27 @@ page {
 }
 
 .selected-pill {
-  padding: 11rpx 18rpx;
+  padding: 10rpx 12rpx 10rpx 18rpx;
+  background: #fff;
+  border: 2rpx solid rgba(183, 122, 45, 0.58);
+  color: #80531f;
+  font-size: 22rpx;
+  display: inline-flex;
+  align-items: center;
+  gap: 8rpx;
+}
+
+.selected-pill-remove {
+  width: 30rpx;
+  height: 30rpx;
+  border-radius: 50%;
   background: #2a2119;
   color: #fff;
-  font-size: 22rpx;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20rpx;
+  line-height: 1;
 }
 
 .clear-action {
@@ -236,8 +267,9 @@ page {
 
 .option-pill-active {
   border-color: #b77a2d;
-  background: #2a2119;
-  color: #fff;
+  background: #fff2dc;
+  color: #80531f;
+  box-shadow: inset 0 0 0 2rpx rgba(183, 122, 45, 0.16);
 }
 
 .result-count {

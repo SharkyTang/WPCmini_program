@@ -21,7 +21,8 @@
           data-key="{{item.key}}"
           data-value="{{item.value}}"
         >
-          {{item.value}}
+          <text>{{item.value}}</text>
+          <text class="selected-pill-remove">×</text>
         </view>
       </view>
       <view class="clear-action" bindtap="clearFilters">清空</view>

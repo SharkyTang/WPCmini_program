@@ -47,6 +47,11 @@ Page({
     hasUnsavedChanges: false,
     identityGate: false,
     profileSaved: false,
+    topTips: {
+      show: false,
+      message: "",
+      type: "error",
+    },
   },
 
   onLoad(options = {}) {
@@ -143,26 +148,53 @@ Page({
     }
   },
 
+  showTopTips(message, type = "error") {
+    this.setData({
+      topTips: {
+        show: true,
+        message,
+        type,
+      },
+    });
+  },
+
+  hideTopTips() {
+    this.setData({
+      "topTips.show": false,
+    });
+  },
+
   async saveProfileDraft() {
     if (this.data.isSaving) return;
     const draft = this.data.profileDraft;
     const nickname = trimText(draft.nickname);
     if (!nickname) {
-      wx.showToast({ title: "请输入昵称", icon: "none" });
+      this.showTopTips("请输入昵称");
       return;
     }
     if (nickname.length > 14) {
-      wx.showToast({ title: "昵称最多 14 个字符", icon: "none" });
+      this.showTopTips("昵称最多 14 个字符");
       return;
     }
     if (!draft.avatarFileId && !draft.avatarLocalPath) {
-      wx.showToast({ title: "请先选择头像", icon: "none" });
+      this.showTopTips("请先选择头像");
       return;
     }
 
     this.setData({ isSaving: true });
+    let avatarFileId = draft.avatarFileId;
+    if (!avatarFileId) {
+      try {
+        avatarFileId = await uploadProfileAvatar(draft.avatarLocalPath);
+      } catch (error) {
+        console.error("头像上传失败", error);
+        this.setData({ isSaving: false });
+        this.showTopTips("头像上传失败，请重新选择后再试");
+        return;
+      }
+    }
+
     try {
-      const avatarFileId = draft.avatarFileId || await uploadProfileAvatar(draft.avatarLocalPath);
       const savedProfile = await saveProfile({ nickname, avatarFileId });
       cacheProfile(savedProfile);
       try {
@@ -194,10 +226,7 @@ Page({
     } catch (error) {
       console.error("保存个人资料失败", error);
       this.setData({ isSaving: false });
-      wx.showToast({
-        title: error && error.message ? error.message : "保存失败，请重试",
-        icon: "none",
-      });
+      this.showTopTips(error && error.message ? error.message : "保存失败，请重试");
     }
   },
 });

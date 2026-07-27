@@ -1,7 +1,7 @@
 page {
   min-height: 100%;
-  background: #f7f3ec;
-  color: #241d16;
+  background: var(--brand-bg);
+  color: var(--brand-ink);
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
 }
 
@@ -65,16 +65,14 @@ page {
 }
 
 .settings-card,
-.state-card,
 .notification-card {
-  border: 2rpx solid #dfcfb7;
   border-radius: 8rpx;
-  background: #fffdf9;
+  background: var(--brand-surface);
+  box-shadow: var(--brand-shadow);
   box-sizing: border-box;
 }
 
-.settings-card,
-.state-card {
+.settings-card {
   padding: 40rpx 34rpx;
 }
 
@@ -123,17 +121,24 @@ page {
   line-height: 1.35;
 }
 
+.state-shell {
+  padding: 16rpx 24rpx 38rpx;
+  border-radius: 8rpx;
+  background: var(--brand-surface);
+  box-shadow: var(--brand-shadow);
+  text-align: center;
+}
+
 .state-error {
-  border-color: #efc3ba;
-  background: #fff5f2;
+  background: var(--brand-red-soft);
 }
 
 .state-button {
-  margin-top: 30rpx;
+  margin: 4rpx auto 0;
   width: 300rpx;
   height: 68rpx;
-  border-radius: 34rpx;
-  background: #241d16;
+  border-radius: 8rpx;
+  background: var(--brand-ink);
   color: #fff;
   display: flex;
   align-items: center;
@@ -149,7 +154,27 @@ page {
 }
 
 .notification-card {
-  padding: 26rpx 28rpx;
+  position: relative;
+  padding: 28rpx 28rpx 28rpx 34rpx;
+  overflow: hidden;
+}
+
+.notification-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 7rpx;
+  background: var(--brand-gold);
+}
+
+.notification-product_new::before {
+  background: var(--brand-green);
+}
+
+.notification-customer_reply::before {
+  background: var(--brand-red);
 }
 
 .notification-meta {
@@ -164,8 +189,8 @@ page {
   height: 44rpx;
   padding: 0 18rpx;
   border-radius: 22rpx;
-  background: #241d16;
-  color: #fffdf9;
+  background: var(--brand-gold-soft);
+  color: #80531f;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -174,16 +199,26 @@ page {
   box-sizing: border-box;
 }
 
+.notification-product_new .notification-type {
+  background: var(--brand-green-soft);
+  color: var(--brand-green);
+}
+
+.notification-customer_reply .notification-type {
+  background: var(--brand-red-soft);
+  color: var(--brand-red);
+}
+
 .notification-time {
-  color: #9d8d78;
-  font-size: 22rpx;
+  color: #a3978a;
+  font-size: 20rpx;
   line-height: 1.35;
 }
 
 .notification-title {
   margin-top: 18rpx;
   color: #241d16;
-  font-size: 30rpx;
+  font-size: 29rpx;
   line-height: 1.35;
   font-weight: 800;
 }

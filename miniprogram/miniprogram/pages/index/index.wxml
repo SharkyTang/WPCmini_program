@@ -24,9 +24,12 @@
 
   <view class="content">
     <view class="story-card">
-      <view class="story-title">品牌故事</view>
-      <view class="story-text">
-        金亿诚包装科技专注酒类包装设计与定制生产，提供瓶标、酒瓶、酒盒、手提袋、外箱等一体化包装方案。通过真实案例展示，帮助客户快速寻找适合产品定位、价格带和使用场景的包装灵感。
+      <view class="story-mark">JYC PACKAGING</view>
+      <view class="story-body">
+        <view class="story-title">品牌故事</view>
+        <view class="story-text">
+          金亿诚包装科技专注酒类包装设计与定制生产，提供瓶标、酒瓶、酒盒、手提袋、外箱等一体化包装方案。通过真实案例展示，帮助客户快速寻找适合产品定位、价格带和使用场景的包装灵感。
+        </view>
       </view>
     </view>
 
@@ -59,6 +62,7 @@
               lazy-load
             ></image>
             <view wx:else class="product-placeholder">暂无图片</view>
+            <view class="product-badge">{{item.homeBadge}}</view>
             <view class="product-title">{{item.title}}</view>
             <view class="product-meta">{{item.tagSummary}}</view>
           </view>
@@ -92,6 +96,7 @@
               lazy-load
             ></image>
             <view wx:else class="product-placeholder">暂无图片</view>
+            <view class="product-badge product-badge-latest">{{item.homeBadge}}</view>
             <view class="product-title">{{item.title}}</view>
             <view class="product-meta">{{item.tagSummary}}</view>
           </view>

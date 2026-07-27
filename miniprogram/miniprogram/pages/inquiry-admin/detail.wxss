@@ -1,7 +1,7 @@
 page {
   min-height: 100%;
-  background: #f7f3ec;
-  color: #241d16;
+  background: var(--brand-bg);
+  color: var(--brand-ink);
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
 }
 
@@ -30,15 +30,15 @@ page {
 
 .section,
 .state-card {
-  border: 2rpx solid #dfcfb7;
   border-radius: 8rpx;
-  background: #fffdf9;
+  background: var(--brand-surface);
+  box-shadow: var(--brand-shadow);
   box-sizing: border-box;
 }
 
 .section {
   margin-top: 22rpx;
-  padding: 26rpx;
+  padding: 28rpx;
 }
 
 .section-title,
@@ -49,6 +49,17 @@ page {
   font-weight: 800;
 }
 
+.section-kicker {
+  color: var(--brand-gold);
+  font-size: 19rpx;
+  line-height: 1.4;
+  font-weight: 800;
+}
+
+.section-title {
+  margin-top: 4rpx;
+}
+
 .section-head {
   display: flex;
   align-items: center;
@@ -57,6 +68,7 @@ page {
 }
 
 .status-badge {
+  margin-top: 8rpx;
   height: 48rpx;
   padding: 0 18rpx;
   border-radius: 24rpx;
@@ -68,12 +80,16 @@ page {
   font-weight: 800;
 }
 
+.status-new {
+  background: var(--brand-gold);
+}
+
 .status-contacted {
-  background: #b97832;
+  background: #9a6125;
 }
 
 .status-processing {
-  background: #3e6952;
+  background: var(--brand-green);
 }
 
 .status-done {
@@ -81,7 +97,7 @@ page {
 }
 
 .status-invalid {
-  background: #9a3d35;
+  background: var(--brand-red);
 }
 
 .status-picker,
@@ -89,14 +105,44 @@ page {
 .outline-button {
   min-height: 58rpx;
   padding: 0 22rpx;
-  border: 2rpx solid #dfcfb7;
-  border-radius: 29rpx;
-  color: #b97832;
+  border: 2rpx solid var(--brand-line);
+  border-radius: 8rpx;
+  color: var(--brand-gold);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 23rpx;
   font-weight: 800;
+}
+
+.contact-card {
+  margin-top: 26rpx;
+  padding: 24rpx;
+  border-radius: 8rpx;
+  background: var(--brand-green-soft);
+}
+
+.contact-label {
+  color: var(--brand-green);
+  font-size: 21rpx;
+  line-height: 1.4;
+  font-weight: 700;
+}
+
+.contact-value {
+  margin-top: 8rpx;
+  color: var(--brand-ink);
+  font-size: 32rpx;
+  line-height: 1.35;
+  font-weight: 800;
+  word-break: break-all;
+}
+
+.contact-meta {
+  margin-top: 8rpx;
+  color: var(--brand-muted);
+  font-size: 21rpx;
+  line-height: 1.4;
 }
 
 .info-row {
@@ -133,7 +179,7 @@ page {
   margin-top: 22rpx;
   padding: 22rpx;
   border-radius: 8rpx;
-  background: #f7f3ec;
+  background: var(--brand-bg);
   color: #241d16;
   font-size: 24rpx;
   line-height: 1.6;
@@ -145,7 +191,7 @@ page {
   width: 100%;
   min-height: 220rpx;
   padding: 20rpx;
-  border: 2rpx solid #dfcfb7;
+  border: 2rpx solid var(--brand-line);
   border-radius: 8rpx;
   background: #fffdf9;
   color: #241d16;
@@ -154,12 +200,19 @@ page {
   box-sizing: border-box;
 }
 
+.note-count {
+  margin-top: 8rpx;
+  color: #a3978a;
+  font-size: 20rpx;
+  text-align: right;
+}
+
 .save-button,
 .state-button {
   margin-top: 24rpx;
   height: 72rpx;
-  border-radius: 36rpx;
-  background: #241d16;
+  border-radius: 8rpx;
+  background: var(--brand-ink);
   color: #fff;
   display: flex;
   align-items: center;
@@ -189,4 +242,11 @@ page {
   margin-left: auto;
   margin-right: auto;
   width: 180rpx;
+}
+
+.dialog-content {
+  padding: 8rpx 4rpx 18rpx;
+  color: var(--brand-muted);
+  font-size: 25rpx;
+  line-height: 1.55;
 }

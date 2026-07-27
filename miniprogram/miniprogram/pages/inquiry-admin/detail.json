@@ -1,3 +1,7 @@
 {
-  "navigationBarTitleText": "需求详情"
+  "navigationBarTitleText": "需求详情",
+  "usingComponents": {
+    "mp-dialog": "weui-miniprogram/dialog/dialog",
+    "mp-toptips": "weui-miniprogram/toptips/toptips"
+  }
 }

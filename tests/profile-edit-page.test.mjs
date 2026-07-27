@@ -7,6 +7,7 @@ import vm from "node:vm";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const modulePath = resolve(__dirname, "../miniprogram/miniprogram/pages/profile/edit/index.js");
 const wxmlPath = resolve(__dirname, "../miniprogram/miniprogram/pages/profile/edit/index.wxml");
+const jsonPath = resolve(__dirname, "../miniprogram/miniprogram/pages/profile/edit/index.json");
 
 function loadEditPage(wxMock = {}, service = {}) {
   let pageConfig;
@@ -54,6 +55,7 @@ async function test(name, fn) {
 
 await test("setup page exposes the native avatar chooser and nickname input", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
+  const pageJson = JSON.parse(readFileSync(jsonPath, "utf8"));
   assert.equal(wxml.includes("profile-header"), true);
   assert.equal(wxml.includes("profile-card-shell"), true);
   assert.equal(wxml.includes("avatar-floating"), true);
@@ -62,6 +64,9 @@ await test("setup page exposes the native avatar chooser and nickname input", ()
   assert.equal(wxml.includes('bindchooseavatar="onChooseWechatAvatar"'), true);
   assert.equal(wxml.includes('type="nickname"'), true);
   assert.equal(wxml.includes("从相册选择"), false);
+  assert.equal(pageJson.usingComponents["mp-toptips"], "weui-miniprogram/toptips/toptips");
+  assert.equal(wxml.includes("<mp-toptips"), true);
+  assert.equal(wxml.includes("nickname-count"), true);
 });
 
 await test("setup mode uses a legacy nickname as a draft without treating it as completed", async () => {
@@ -111,4 +116,16 @@ await test("saving uploads a selected avatar and persists profile data", async (
   assert.equal(cachedIdentity.profile.avatarFileId, "cloud://uploaded");
   assert.equal(resumed, 1);
   assert.equal(navigatedBack, true);
+});
+
+await test("profile validation uses top tips instead of a toast", async () => {
+  const page = loadEditPage();
+  page.setData({
+    profileDraft: { nickname: "", avatarFileId: "", avatarUrl: "", avatarLocalPath: "" },
+  });
+
+  await page.saveProfileDraft();
+
+  assert.equal(page.data.topTips.show, true);
+  assert.equal(page.data.topTips.message, "请输入昵称");
 });

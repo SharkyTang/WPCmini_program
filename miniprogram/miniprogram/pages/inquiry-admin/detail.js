@@ -19,6 +19,20 @@ Page({
     statusOptions: INQUIRY_STATUS_OPTIONS,
     statusIndex: 0,
     adminNote: "",
+    topTips: {
+      show: false,
+      message: "",
+      type: "error",
+    },
+    confirmDialog: {
+      show: false,
+      title: "",
+      content: "",
+      nextIndex: -1,
+      nextValue: "",
+      nextLabel: "",
+      buttons: [{ text: "取消" }, { text: "确认" }],
+    },
   },
 
   onLoad(options = {}) {
@@ -100,7 +114,7 @@ Page({
     });
   },
 
-  async onStatusChange(event) {
+  onStatusChange(event) {
     const nextIndex = Number(event.detail.value);
     const nextOption = this.data.statusOptions[nextIndex];
     if (!nextOption || !this.data.item || nextOption.value === this.data.item.status) {
@@ -108,29 +122,59 @@ Page({
     }
 
     this.setData({
+      confirmDialog: {
+        show: true,
+        title: "确认修改需求状态？",
+        content: `将状态从“${this.data.item.statusLabel}”改为“${nextOption.label}”。`,
+        nextIndex,
+        nextValue: nextOption.value,
+        nextLabel: nextOption.label,
+        buttons: [
+          { text: "取消" },
+          { text: "确认修改", extClass: "dialog-button-primary" },
+        ],
+      },
+    });
+  },
+
+  closeConfirmDialog() {
+    this.setData({
+      "confirmDialog.show": false,
+    });
+  },
+
+  async handleConfirmDialogTap(event) {
+    const index = event.detail && event.detail.index;
+    const dialog = this.data.confirmDialog;
+    this.closeConfirmDialog();
+    if (index !== 1) return;
+    await this.performStatusUpdate(dialog);
+  },
+
+  async performStatusUpdate(dialog) {
+    if (!dialog.nextValue || !this.data.item) return;
+
+    this.setData({
       savingStatus: true,
     });
 
     try {
-      const status = await updateInquiryStatus(this.data.id, nextOption.value);
+      const status = await updateInquiryStatus(this.data.id, dialog.nextValue);
       const item = {
         ...this.data.item,
         status,
-        statusLabel: nextOption.label,
+        statusLabel: dialog.nextLabel,
       };
       this.setData({
         item,
-        statusIndex: nextIndex,
+        statusIndex: dialog.nextIndex,
       });
       wx.showToast({
         title: "状态已更新",
         icon: "none",
       });
     } catch (error) {
-      wx.showToast({
-        title: error.message || "状态更新失败",
-        icon: "none",
-      });
+      this.showTopTips(error.message || "状态更新失败");
     } finally {
       this.setData({
         savingStatus: false,
@@ -144,13 +188,26 @@ Page({
     });
   },
 
+  showTopTips(message, type = "error") {
+    this.setData({
+      topTips: {
+        show: true,
+        message,
+        type,
+      },
+    });
+  },
+
+  hideTopTips() {
+    this.setData({
+      "topTips.show": false,
+    });
+  },
+
   async saveAdminNote() {
     const validation = validateAdminNote(this.data.adminNote);
     if (!validation.valid) {
-      wx.showToast({
-        title: validation.message,
-        icon: "none",
-      });
+      this.showTopTips(validation.message);
       return;
     }
 
@@ -172,10 +229,7 @@ Page({
         icon: "none",
       });
     } catch (error) {
-      wx.showToast({
-        title: error.message || "备注保存失败",
-        icon: "none",
-      });
+      this.showTopTips(error.message || "备注保存失败");
     } finally {
       this.setData({
         savingNote: false,
