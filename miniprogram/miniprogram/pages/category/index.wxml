@@ -69,7 +69,7 @@
       </view>
     </view>
 
-    <scroll-view class="content" scroll-y enhanced>
+    <scroll-view class="content" scroll-y enhanced lower-threshold="160" bindscrolltolower="loadMore">
       <view class="content-inner">
         <view class="category-head">
           <view class="category-title-row">
@@ -84,8 +84,8 @@
         </view>
 
         <view class="result-count">
-          <text wx:if="{{selectedCount || query}}">已筛选出 {{filteredCases.length}} 个案例</text>
-          <text wx:else>共 {{filteredCases.length}} 个案例</text>
+          <text wx:if="{{selectedCount || query}}">已展示 {{visibleCards.length}} / {{filteredCases.length}} 个案例</text>
+          <text wx:else>已展示 {{visibleCards.length}} / {{filteredCases.length}} 个案例</text>
         </view>
 
         <view wx:if="{{loading}}" class="state-box">正在读取案例...</view>
@@ -93,7 +93,7 @@
         <view wx:elif="{{!filteredCases.length}}" class="state-box">暂无匹配案例，换个条件试试</view>
         <view wx:else class="case-grid">
           <view
-            wx:for="{{filteredCases}}"
+            wx:for="{{visibleCards}}"
             wx:key="id"
             class="case-card"
             bindtap="navigateToCase"
@@ -104,8 +104,11 @@
               class="case-image"
               mode="aspectFill"
               src="{{item.coverImageUrl}}"
+              lazy-load
+              binderror="retryCardImage"
+              data-id="{{item.id}}"
             ></image>
-            <view wx:else class="case-placeholder">暂无图片</view>
+            <view wx:else class="case-placeholder" bindtap="retryCardImage" data-id="{{item.id}}" data-manual="{{true}}">{{item.imageLoadState === 'failed' ? '图片加载失败，点击重试' : '图片加载中'}}</view>
             <view class="case-title">{{item.title}}</view>
             <view class="case-meta">{{item.tagSummary}}</view>
           </view>

@@ -59,6 +59,7 @@ Page({
         title: caseItem.title || "",
         caseId: caseItem.caseId || "",
         coverImage: caseItem.coverImage || "",
+        coverThumbnail: caseItem.coverThumbnail || "",
         wineType: caseItem.wineType || "白酒",
         packageTypes: caseItem.packageTypes || [],
         styles: caseItem.styles || [],
@@ -174,14 +175,26 @@ Page({
         filePath: compressedPath,
         cloudPath,
       });
+      let coverThumbnail = "";
+      try {
+        const thumbnailPath = await this.compressThumbnail(filePath);
+        coverThumbnail = await uploadCaseCoverImage({
+          filePath: thumbnailPath,
+          cloudPath: cloudPath.replace(/(\.[a-zA-Z0-9]+)$/, "-thumb$1"),
+        });
+      } catch (thumbnailError) {
+        console.warn("缩略图上传失败，将继续使用原图", thumbnailError);
+      }
       const form = {
         ...this.data.form,
         coverImage: fileID,
+        coverThumbnail,
       };
       this.setData({
         uploading: false,
         coverImageUrl: compressedPath,
         "form.coverImage": fileID,
+        "form.coverThumbnail": coverThumbnail,
         optionViews: buildCaseAdminOptionViews(form, this.data.formOptions),
       });
       wx.showToast({
@@ -198,6 +211,18 @@ Page({
         icon: "none",
       });
     }
+  },
+
+  async compressThumbnail(filePath) {
+    if (!wx.compressImage) return filePath;
+    return new Promise((resolve) => {
+      wx.compressImage({
+        src: filePath,
+        quality: 35,
+        success: (result) => resolve(result.tempFilePath || filePath),
+        fail: () => resolve(filePath),
+      });
+    });
   },
 
   async saveCase() {

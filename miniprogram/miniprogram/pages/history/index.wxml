@@ -62,6 +62,7 @@
         class="case-image"
         src="{{item.imageUrl}}"
         mode="aspectFill"
+        lazy-load
       ></image>
       <view wx:else class="case-placeholder">暂无图片</view>
       <view class="case-title">{{item.title}}</view>

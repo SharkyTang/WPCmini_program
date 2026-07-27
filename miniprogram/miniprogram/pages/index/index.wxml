@@ -16,7 +16,7 @@
   >
     <swiper-item wx:for="{{banners}}" wx:key="id">
       <view class="banner-card" bindtap="onBannerTap" data-id="{{item.caseId}}">
-        <image class="banner-image" mode="aspectFill" src="{{item.imageUrl}}"></image>
+        <image class="banner-image" mode="aspectFill" src="{{item.imageUrl}}" lazy-load></image>
         <view class="banner-title" wx:if="{{item.title}}">{{item.title}}</view>
       </view>
     </swiper-item>
@@ -56,6 +56,7 @@
               class="product-image"
               mode="aspectFill"
               src="{{item.coverImageUrl}}"
+              lazy-load
             ></image>
             <view wx:else class="product-placeholder">暂无图片</view>
             <view class="product-title">{{item.title}}</view>
@@ -88,6 +89,7 @@
               class="product-image"
               mode="aspectFill"
               src="{{item.coverImageUrl}}"
+              lazy-load
             ></image>
             <view wx:else class="product-placeholder">暂无图片</view>
             <view class="product-title">{{item.title}}</view>

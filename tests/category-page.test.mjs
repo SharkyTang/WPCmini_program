@@ -38,7 +38,15 @@ function loadCategoryPage(cases = [], appGlobalData = {}, wxMock = {}) {
       }
       if (moduleName === "../../utils/cloudData") {
         return {
+          attachCaseImageUrls: async (items) => items.map((item) => ({
+            ...item,
+            imageFileId: item.coverThumbnail || item.coverImage || "",
+            coverImageUrl: item.coverThumbnail || item.coverImage || "",
+            imageRetryCount: 0,
+            imageLoadState: "ready",
+          })),
           fetchVisibleCases: async () => cases,
+          refreshImageUrl: async (fileID) => fileID,
         };
       }
       if (moduleName === "../../utils/caseRefresh") {

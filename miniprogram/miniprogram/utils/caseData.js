@@ -136,6 +136,7 @@ function normalizeCaseRecord(record = {}) {
     caseId: record.caseId || record._id || "",
     title: record.title || record.name || "未命名案例",
     coverImage: firstImage(record.coverImage || record.image || record.images),
+    coverThumbnail: firstImage(record.coverThumbnail),
     wineType: record.wineType || "白酒",
     priceLevel: normalizeDisplayValue("priceLevel", record.priceLevel || ""),
     notes: record.notes || record.description || "",
