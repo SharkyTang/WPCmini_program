@@ -94,6 +94,13 @@ page {
   flex: 1;
 }
 
+.user-arrow {
+  color: #8c8176;
+  font-size: 42rpx;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
 .user-name {
   color: #241d16;
   font-size: 30rpx;
@@ -280,207 +287,9 @@ page {
   flex: 0 0 auto;
 }
 
-.profile-editor-mask {
-  position: fixed;
-  left: 0;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  z-index: 50;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: flex-end;
-}
-
-.profile-editor-sheet {
-  width: calc(100% - 32rpx);
-  margin: 0 auto 18rpx;
-  padding: 0 0 env(safe-area-inset-bottom);
-  border-radius: 22rpx;
-  background: transparent;
-  box-sizing: border-box;
-  overflow: hidden;
-}
-
-.profile-option-list {
-  margin: 0;
-  overflow: hidden;
-  background: #fff;
-  border-radius: 22rpx;
-}
-
-.profile-editor-header {
-  padding: 32rpx 28rpx 22rpx;
-  border-bottom: 2rpx solid #f3f3f3;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14rpx;
-}
-
-.profile-editor-title {
-  color: #241d16;
-  font-size: 30rpx;
-  line-height: 1.35;
-  font-weight: 800;
-}
-
-.profile-field-row {
-  padding: 22rpx 28rpx;
-  border-bottom: 2rpx solid #f3f3f3;
-  background: #fff;
-}
-
-.profile-field-label {
-  color: #766b60;
-  font-size: 22rpx;
-  line-height: 1.4;
-}
-
-.profile-nickname-input {
-  margin-top: 10rpx;
-  height: 72rpx;
-  padding: 0 18rpx;
-  border: 2rpx solid #eadcca;
-  border-radius: 8rpx;
-  color: #241d16;
-  background: #fffdf9;
-  font-size: 26rpx;
-  line-height: 72rpx;
-  box-sizing: border-box;
-}
-
-.profile-input-placeholder {
-  color: #b3a89b;
-}
-
-.profile-option-row {
-  min-height: 86rpx;
-  padding: 14rpx 28rpx;
-  border-bottom: 2rpx solid #f3f3f3;
-  background: #fff;
-  box-sizing: border-box;
-}
-
-.profile-option-row:last-child {
-  border-bottom: 0;
-}
-
-.profile-option-preview {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 116rpx;
-}
-
-.profile-option-title {
-  color: #241d16;
-  font-size: 28rpx;
-  line-height: 1.35;
-  text-align: center;
-}
-
-.profile-option-avatar {
-  width: 42rpx;
-  height: 42rpx;
-  margin-top: 8rpx;
-  border-radius: 6rpx;
-  display: block;
-}
-
-.profile-option-avatar-large {
-  width: 96rpx;
-  height: 96rpx;
-  margin-top: 0;
-  border-radius: 48rpx;
-  border: 2rpx solid #dfd8cf;
-  background: #f2f0eb;
-  position: relative;
-  overflow: hidden;
-}
-
-.profile-option-avatar-image {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-
-.profile-option-avatar-empty {
-  border: 2rpx solid #dfd8cf;
-  background: #f2f0eb;
-  position: relative;
-  box-sizing: border-box;
-}
-
-.profile-option-avatar-empty .avatar-head {
-  left: 16rpx;
-  top: 10rpx;
-  width: 14rpx;
-  height: 14rpx;
-  border-radius: 7rpx;
-}
-
-.profile-option-avatar-empty .avatar-body {
-  left: 12rpx;
-  bottom: 8rpx;
-  width: 22rpx;
-  height: 14rpx;
-  border-radius: 12rpx 12rpx 7rpx 7rpx;
-}
-
-.profile-option-name {
-  margin-top: 4rpx;
-  color: #241d16;
-  font-size: 24rpx;
-  line-height: 1.35;
-  text-align: center;
-}
-
-.profile-option-action {
-  color: #241d16;
-  font-size: 29rpx;
-  line-height: 58rpx;
-  text-align: center;
-}
-
-.profile-wechat-avatar-button {
-  width: 100%;
-  margin: 0;
-  border: 0;
-  border-radius: 0;
-  background: #fff;
-  font-weight: 400;
-}
-
-.profile-wechat-avatar-button::after {
-  border: none;
-}
-
-.profile-option-save {
-  color: #fff;
-  background: #241d16;
-  font-size: 29rpx;
-  font-weight: 800;
-  line-height: 58rpx;
-  text-align: center;
-}
-
-.profile-option-reset {
+.profile-load-tip {
+  margin: 14rpx 4rpx -6rpx;
   color: #9d2b22;
-  font-size: 29rpx;
-  line-height: 58rpx;
-  text-align: center;
-}
-
-.profile-cancel-button {
-  height: 96rpx;
-  margin-top: 12rpx;
-  border-radius: 22rpx;
-  background: #fff;
-  color: #241d16;
-  font-size: 29rpx;
-  font-weight: 700;
-  line-height: 96rpx;
-  text-align: center;
+  font-size: 21rpx;
+  line-height: 1.45;
 }

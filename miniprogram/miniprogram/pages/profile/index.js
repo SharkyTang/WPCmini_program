@@ -1,4 +1,10 @@
-const PROFILE_STORAGE_KEY = "wineProfileInfo";
+const {
+  DEFAULT_NICKNAME,
+  cacheProfile,
+  fetchProfile,
+  getLegacyProfile,
+  hasCompletedProfile,
+} = require("../../utils/profileService");
 const {
   CUSTOMER_SERVICE_SOURCE,
   buildCustomerSessionFrom,
@@ -11,30 +17,28 @@ const {
 } = require("../../utils/caseAdminService");
 
 const DEFAULT_PROFILE_INFO = {
-  nickname: "微信名称",
+  nickname: DEFAULT_NICKNAME,
   avatarUrl: "",
   note: "点击使用微信头像和名称",
 };
 
-function normalizeProfileInfo(profileInfo = {}) {
-  const source = profileInfo || {};
-  const nickname = typeof source.nickname === "string" ? source.nickname.trim() : "";
-  const avatarUrl = typeof source.avatarUrl === "string" ? source.avatarUrl : "";
+function toProfileInfo(profile = {}) {
+  const nickname = typeof profile.nickname === "string" ? profile.nickname.trim() : "";
+  const avatarUrl = typeof profile.avatarUrl === "string" ? profile.avatarUrl : "";
+  const complete = hasCompletedProfile(profile);
   return {
     nickname: nickname || DEFAULT_PROFILE_INFO.nickname,
     avatarUrl,
-    note: nickname || avatarUrl ? "点击修改头像和名称" : DEFAULT_PROFILE_INFO.note,
+    note: complete ? "点击修改头像和名称" : DEFAULT_PROFILE_INFO.note,
   };
 }
 
 Page({
   data: {
     profileInfo: DEFAULT_PROFILE_INFO,
-    profileDraft: {
-      nickname: "",
-      avatarUrl: "",
-    },
-    isProfileEditorVisible: false,
+    hasCompletedProfile: false,
+    isProfileLoading: false,
+    profileLoadError: false,
     hasInquiryAdminAccess: false,
     checkingInquiryAdminAccess: false,
     hasCaseAdminAccess: false,
@@ -64,204 +68,100 @@ Page({
   },
 
   onLoad() {
-    this.loadProfileInfo();
+    // 资料在 onShow 读取，保证从编辑页返回后立即同步最新头像和昵称。
   },
 
   onShow() {
+    this.loadProfileInfo();
     this.refreshInquiryAdminAccess();
     this.refreshCaseAdminAccess();
   },
 
-  loadProfileInfo() {
-    const storedProfile = wx.getStorageSync ? wx.getStorageSync(PROFILE_STORAGE_KEY) : null;
+  onPullDownRefresh() {
+    this.loadProfileInfo({ stopRefresh: true });
+  },
+
+  async loadProfileInfo(options = {}) {
+    const legacyProfile = getLegacyProfile();
     this.setData({
-      profileInfo: normalizeProfileInfo(storedProfile),
+      profileInfo: toProfileInfo(legacyProfile),
+      hasCompletedProfile: false,
+      isProfileLoading: true,
+      profileLoadError: false,
     });
+
+    try {
+      const profile = await fetchProfile();
+      if (profile && hasCompletedProfile(profile)) {
+        cacheProfile(profile);
+        this.setData({
+          profileInfo: toProfileInfo(profile),
+          hasCompletedProfile: true,
+        });
+      }
+    } catch (error) {
+      console.error("读取个人资料失败", error);
+      this.setData({
+        profileLoadError: true,
+      });
+    } finally {
+      this.setData({
+        isProfileLoading: false,
+      });
+      if (options.stopRefresh && wx.stopPullDownRefresh) {
+        wx.stopPullDownRefresh();
+      }
+    }
   },
 
   openProfileEditor() {
-    const { profileInfo } = this.data;
-    this.setData({
-      isProfileEditorVisible: true,
-      profileDraft: {
-        nickname: profileInfo.nickname,
-        avatarUrl: profileInfo.avatarUrl,
-      },
-    });
-  },
-
-  closeProfileEditor() {
-    this.setData({
-      isProfileEditorVisible: false,
-    });
-  },
-
-  noop() {},
-
-  updateProfileDraftAvatar(avatarUrl) {
-    const profileDraft = {
-      ...this.data.profileDraft,
-      avatarUrl,
-    };
-
-    this.setData({
-      profileDraft,
-    });
-  },
-
-  onChooseWechatAvatar(event) {
-    const avatarUrl = event && event.detail && event.detail.avatarUrl;
-    if (!avatarUrl) return;
-    this.updateProfileDraftAvatar(avatarUrl);
-  },
-
-  onNicknameInput(event) {
-    const nickname = event && event.detail ? event.detail.value : "";
-    this.setData({
-      profileDraft: {
-        ...this.data.profileDraft,
-        nickname,
-      },
-    });
-  },
-
-  chooseProfileAvatarFromAlbum() {
-    this.chooseProfileAvatarFromMedia("album");
-  },
-
-  takeProfileAvatarPhoto() {
-    this.chooseProfileAvatarFromMedia("camera");
-  },
-
-  chooseProfileAvatarFromMedia(sourceType) {
-    if (wx.chooseMedia) {
-      wx.chooseMedia({
-        count: 1,
-        mediaType: ["image"],
-        sourceType: [sourceType],
-        sizeType: ["compressed"],
-        success: (result) => {
-          const avatarUrl = result.tempFiles && result.tempFiles[0] && result.tempFiles[0].tempFilePath;
-          if (avatarUrl) {
-            this.updateProfileDraftAvatar(avatarUrl);
-          }
-        },
+    if (this.data.isProfileLoading) {
+      wx.showToast({ title: "正在读取资料", icon: "none" });
+      return;
+    }
+    if (this.data.profileLoadError) {
+      wx.showToast({
+        title: "资料读取失败，请下拉重试",
+        icon: "none",
       });
       return;
     }
 
-    if (wx.chooseImage) {
-      wx.chooseImage({
-        count: 1,
-        sourceType: [sourceType],
-        sizeType: ["compressed"],
-        success: (result) => {
-          const avatarUrl = result.tempFilePaths && result.tempFilePaths[0];
-          if (avatarUrl) {
-            this.updateProfileDraftAvatar(avatarUrl);
-          }
-        },
-      });
-    }
-  },
-
-  saveProfileDraft() {
-    this.persistProfileDraft({
-      close: true,
-      toast: true,
+    const mode = this.data.hasCompletedProfile ? "edit" : "setup";
+    wx.navigateTo({
+      url: `/pages/profile/edit/index?mode=${mode}`,
     });
-  },
-
-  resetProfileInfo() {
-    if (wx.removeStorageSync) {
-      wx.removeStorageSync(PROFILE_STORAGE_KEY);
-    }
-
-    this.setData({
-      profileInfo: DEFAULT_PROFILE_INFO,
-      profileDraft: {
-        nickname: DEFAULT_PROFILE_INFO.nickname,
-        avatarUrl: DEFAULT_PROFILE_INFO.avatarUrl,
-      },
-      isProfileEditorVisible: false,
-    });
-
-    wx.showToast({
-      title: "已恢复默认资料",
-      icon: "none",
-    });
-  },
-
-  persistProfileDraft(options = {}) {
-    const profileDraft = options.profileDraft || this.data.profileDraft;
-    const profileInfo = normalizeProfileInfo(profileDraft);
-    const storedProfile = {
-      nickname: profileInfo.nickname,
-      avatarUrl: profileInfo.avatarUrl,
-    };
-
-    if (wx.setStorageSync) {
-      wx.setStorageSync(PROFILE_STORAGE_KEY, storedProfile);
-    }
-
-    this.setData({
-      profileInfo,
-      isProfileEditorVisible: options.close ? false : this.data.isProfileEditorVisible,
-    });
-
-    if (options.toast) {
-      wx.showToast({
-        title: "已更新",
-        icon: "none",
-      });
-    }
   },
 
   handleQuickAction(event) {
     const key = event.currentTarget.dataset.key;
     if (key === "favorites") {
-      wx.navigateTo({
-        url: "/pages/favorites/index",
-      });
+      wx.navigateTo({ url: "/pages/favorites/index" });
       return;
     }
     if (key === "history") {
-      wx.navigateTo({
-        url: "/pages/history/index",
-      });
+      wx.navigateTo({ url: "/pages/history/index" });
       return;
     }
     if (key === "notice") {
-      wx.navigateTo({
-        url: "/pages/notifications/index",
-      });
+      wx.navigateTo({ url: "/pages/notifications/index" });
       return;
     }
     if (key === "feedback") {
-      wx.navigateTo({
-        url: "/pages/feedback/index?source=profile",
-      });
+      wx.navigateTo({ url: "/pages/feedback/index?source=profile" });
       return;
     }
 
-    wx.showToast({
-      title: "入口后续开放",
-      icon: "none",
-    });
+    wx.showToast({ title: "入口后续开放", icon: "none" });
   },
 
   openInquiryForm() {
-    wx.navigateTo({
-      url: "/pages/inquiry/index?source=profile",
-    });
+    wx.navigateTo({ url: "/pages/inquiry/index?source=profile" });
   },
 
   async refreshInquiryAdminAccess() {
     if (this.data.checkingInquiryAdminAccess) return;
-    this.setData({
-      checkingInquiryAdminAccess: true,
-    });
-
+    this.setData({ checkingInquiryAdminAccess: true });
     const hasInquiryAdminAccess = await checkInquiryAdminAccess();
     this.setData({
       hasInquiryAdminAccess,
@@ -270,17 +170,12 @@ Page({
   },
 
   openInquiryAdmin() {
-    wx.navigateTo({
-      url: "/pages/inquiry-admin/index",
-    });
+    wx.navigateTo({ url: "/pages/inquiry-admin/index" });
   },
 
   async refreshCaseAdminAccess() {
     if (this.data.checkingCaseAdminAccess) return;
-    this.setData({
-      checkingCaseAdminAccess: true,
-    });
-
+    this.setData({ checkingCaseAdminAccess: true });
     const hasCaseAdminAccess = await checkCaseAdminAccess();
     this.setData({
       hasCaseAdminAccess,
@@ -289,9 +184,7 @@ Page({
   },
 
   openCaseAdmin() {
-    wx.navigateTo({
-      url: "/pages/case-admin/index",
-    });
+    wx.navigateTo({ url: "/pages/case-admin/index" });
   },
 
   handleContact(event) {

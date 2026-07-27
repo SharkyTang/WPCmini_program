@@ -1,0 +1,50 @@
+<view class="page">
+  <view class="profile-header"></view>
+
+  <view wx:if="{{isLoading}}" class="state-card">正在读取资料…</view>
+
+  <view wx:elif="{{loadError}}" class="state-card state-card-error">
+    <view class="state-title">读取失败</view>
+    <view class="state-copy">请检查网络后重试</view>
+    <view class="retry-button" bindtap="loadProfile">重新读取</view>
+  </view>
+
+  <view wx:else class="profile-card-shell">
+    <view class="avatar-floating">
+      <button
+        class="avatar-button"
+        open-type="chooseAvatar"
+        bindchooseavatar="onChooseWechatAvatar"
+        disabled="{{isSaving}}"
+      >
+        <image wx:if="{{profileDraft.avatarUrl}}" class="avatar-image" src="{{profileDraft.avatarUrl}}" mode="aspectFill" />
+        <view wx:else class="avatar-placeholder">
+          <view class="avatar-head"></view>
+          <view class="avatar-body"></view>
+        </view>
+        <view class="avatar-edit-badge">更换</view>
+      </button>
+    </view>
+
+    <view class="profile-card">
+      <view class="avatar-space"></view>
+      <view class="profile-row profile-row-nickname">
+        <view class="profile-label">昵称</view>
+        <input
+          class="nickname-input"
+          type="nickname"
+          maxlength="14"
+          value="{{profileDraft.nickname}}"
+          placeholder="请输入或使用微信昵称"
+        placeholder-class="nickname-placeholder"
+        disabled="{{isSaving}}"
+        bindinput="onNicknameInput"
+      />
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{!isLoading && !loadError}}" class="save-button {{isSaving ? 'save-button-disabled' : ''}}" bindtap="saveProfileDraft">
+    {{isSaving ? '正在保存…' : (mode === 'setup' ? '完成资料' : '保存资料')}}
+  </view>
+</view>

@@ -14,6 +14,7 @@ const {
   buildFeedbackRecord,
   buildInquiryRecord,
   normalizeDisabledTypes,
+  validateUserProfileDraft,
   validateFeedbackDraft,
   validateInquiryDraft,
 } = logic;
@@ -87,5 +88,21 @@ test("normalizes notification preference disabled types", () => {
   assert.deepEqual(
     plain(normalizeDisabledTypes(["product_new", "unknown", "product_new", "customer_reply"])),
     ["product_new", "customer_reply"]
+  );
+});
+
+test("validates profile nickname and cloud avatar file id", () => {
+  assert.equal(validateUserProfileDraft({ nickname: "", avatarFileId: "cloud://avatar" }).message, "请输入昵称");
+  assert.equal(
+    validateUserProfileDraft({ nickname: "昵称", avatarFileId: "/tmp/avatar.png" }).message,
+    "请先选择头像"
+  );
+  assert.equal(
+    validateUserProfileDraft({ nickname: "名".repeat(15), avatarFileId: "cloud://avatar" }).message,
+    "昵称最多 14 个字符"
+  );
+  assert.deepEqual(
+    plain(validateUserProfileDraft({ nickname: "  酒友  ", avatarFileId: "cloud://avatar" }).data),
+    { nickname: "酒友", avatarFileId: "cloud://avatar" }
   );
 });

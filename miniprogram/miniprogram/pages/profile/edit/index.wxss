@@ -1,0 +1,226 @@
+page {
+  min-height: 100%;
+  background: #f7f3ec;
+  color: #241d16;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+}
+
+.page {
+  min-height: 100vh;
+  padding-bottom: calc(124rpx + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+.profile-header {
+  height: 310rpx;
+  background: #f7f3ec;
+}
+
+.profile-card-shell {
+  position: relative;
+  margin: -76rpx 40rpx 0;
+  padding-top: 86rpx;
+}
+
+.avatar-floating {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 2;
+  height: 180rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.profile-card,
+.state-card {
+  border-radius: 24rpx;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.profile-card {
+  min-height: 298rpx;
+  overflow: hidden;
+}
+
+.avatar-button {
+  position: relative;
+  width: 180rpx;
+  height: 180rpx;
+  flex: 0 0 180rpx;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.avatar-button::after {
+  border: 0;
+}
+
+.avatar-image,
+.avatar-placeholder {
+  width: 170rpx;
+  height: 170rpx;
+  border-radius: 50%;
+  display: block;
+  overflow: hidden;
+  flex: 0 0 170rpx;
+}
+
+.avatar-placeholder {
+  position: relative;
+  background: #f2f0eb;
+}
+
+.avatar-head {
+  position: absolute;
+  left: 58rpx;
+  top: 37rpx;
+  width: 52rpx;
+  height: 52rpx;
+  border-radius: 26rpx;
+  background: #97938b;
+}
+
+.avatar-body {
+  position: absolute;
+  left: 40rpx;
+  bottom: 30rpx;
+  width: 88rpx;
+  height: 54rpx;
+  border-radius: 44rpx 44rpx 24rpx 24rpx;
+  background: #97938b;
+}
+
+.avatar-edit-badge {
+  position: absolute;
+  right: -12rpx;
+  bottom: -7rpx;
+  min-width: 60rpx;
+  height: 42rpx;
+  padding: 0 10rpx;
+  border: 4rpx solid #fff;
+  border-radius: 24rpx;
+  background: #241d16;
+  color: #fff;
+  font-size: 19rpx;
+  font-weight: 700;
+  line-height: 42rpx;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.avatar-space {
+  height: 94rpx;
+}
+
+.profile-row {
+  min-height: 152rpx;
+  padding: 20rpx 38rpx;
+  display: flex;
+  align-items: center;
+  gap: 22rpx;
+  border-top: 2rpx solid #f1eee9;
+  box-sizing: border-box;
+}
+
+.profile-label {
+  color: #3e3934;
+  font-size: 32rpx;
+  font-weight: 700;
+  flex: 0 0 100rpx;
+}
+
+.nickname-input {
+  height: 80rpx;
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  color: #241d16;
+  background: transparent;
+  font-size: 31rpx;
+  font-weight: 700;
+  line-height: 80rpx;
+  box-sizing: border-box;
+}
+
+.nickname-placeholder {
+  color: #b3a89b;
+  font-weight: 400;
+}
+
+.save-button,
+.retry-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+}
+
+.save-button {
+  position: fixed;
+  right: 40rpx;
+  bottom: calc(28rpx + env(safe-area-inset-bottom));
+  left: 40rpx;
+  height: 88rpx;
+  border-radius: 44rpx;
+  background: #241d16;
+  color: #fff;
+  font-size: 27rpx;
+  box-shadow: 0 8rpx 18rpx rgba(36, 29, 22, 0.18);
+}
+
+.save-button:active,
+.retry-button:active,
+.avatar-button:active {
+  opacity: 0.82;
+}
+
+.save-button-disabled {
+  background: #8c8176;
+}
+
+.state-card {
+  min-height: 220rpx;
+  margin: -42rpx 40rpx 0;
+  padding: 42rpx 32rpx;
+  text-align: center;
+  color: #766b60;
+  font-size: 25rpx;
+  line-height: 1.5;
+}
+
+.state-title {
+  color: #241d16;
+  font-size: 32rpx;
+  font-weight: 800;
+}
+
+.state-copy {
+  margin-top: 12rpx;
+}
+
+.retry-button {
+  width: 220rpx;
+  height: 70rpx;
+  margin: 28rpx auto 0;
+  border: 2rpx solid #241d16;
+  border-radius: 35rpx;
+  color: #241d16;
+  font-size: 24rpx;
+}

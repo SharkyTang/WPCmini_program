@@ -8,9 +8,12 @@ const {
   buildInquiryRecord,
   normalizeDisabledTypes,
   pickPreferenceRecord,
+  validateUserProfileDraft,
   validateFeedbackDraft,
   validateInquiryDraft,
 } = require("./userDataLogic");
+
+const USER_PROFILE_COLLECTION = "user_profiles";
 
 cloud.init({
   env: cloud.DYNAMIC_CURRENT_ENV,
@@ -152,6 +155,59 @@ async function saveNotificationPreferences(event, openid) {
   });
 }
 
+function toProfileResponse(profile) {
+  if (!profile) return null;
+  return {
+    nickname: trimText(profile.nickname),
+    avatarFileId: trimText(profile.avatarFileId),
+  };
+}
+
+async function findUserProfile(openid) {
+  const response = await db
+    .collection(USER_PROFILE_COLLECTION)
+    .where({ openid })
+    .limit(1)
+    .get();
+  return (response.data || [])[0] || null;
+}
+
+async function getUserProfile(openid) {
+  const profile = await findUserProfile(openid);
+  return ok({
+    profile: toProfileResponse(profile),
+  });
+}
+
+async function saveUserProfile(event, openid) {
+  const validation = validateUserProfileDraft(event.profile || event.data || {});
+  if (!validation.valid) return fail(validation.code, validation.message);
+
+  const existing = await findUserProfile(openid);
+  const data = {
+    ...validation.data,
+    openid,
+    updatedAt: db.serverDate(),
+  };
+
+  if (existing && existing._id) {
+    await db.collection(USER_PROFILE_COLLECTION).doc(existing._id).update({ data });
+    return ok({
+      profile: validation.data,
+    });
+  }
+
+  await db.collection(USER_PROFILE_COLLECTION).add({
+    data: {
+      ...data,
+      createdAt: db.serverDate(),
+    },
+  });
+  return ok({
+    profile: validation.data,
+  });
+}
+
 exports.main = async (event = {}) => {
   const { OPENID } = cloud.getWXContext();
   const action = trimText(event.action);
@@ -168,6 +224,8 @@ exports.main = async (event = {}) => {
     if (action === "saveNotificationPreferences") {
       return saveNotificationPreferences(event, OPENID);
     }
+    if (action === "getProfile") return getUserProfile(OPENID);
+    if (action === "saveProfile") return saveUserProfile(event, OPENID);
     return fail("UNKNOWN_ACTION", "未知用户数据操作");
   } catch (error) {
     console.error("userData error", error);
