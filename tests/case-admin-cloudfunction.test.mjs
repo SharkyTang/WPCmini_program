@@ -12,8 +12,10 @@ const logic = require(resolve(
 
 const {
   ALLOWED_CASE_FIELDS,
+  HOME_DISPLAY_LIMITS,
   VALID_CASE_ADMIN_ACTIONS,
   buildCaseSearchText,
+  buildHomepageDisplayItems,
   filterCaseItems,
   generateSequentialCaseId,
   getAdminOpenidsFromEnv,
@@ -48,6 +50,7 @@ test("declares supported case admin actions", () => {
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("checkAccess"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getCaseImageUrls"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getVisibleImageUrls"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listHomepageDisplay"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("createCase"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("setCaseVisibility"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("deleteCase"), true);
@@ -195,4 +198,53 @@ test("filters case items by visibility and keyword", () => {
     plain(filterCaseItems(items, { visibility: "hidden", keyword: "" }).map((item) => item.caseId)),
     ["case_002"]
   );
+});
+
+test("builds the same limited homepage display snapshots as the homepage", () => {
+  const cases = [
+    { _id: "case_1", caseId: "case_001", title: "轮播案例", coverImage: "cloud://env/case-1.jpg", isVisible: true, sortOrder: 1, homeSections: { values: ["banner", "popular", "latest"] } },
+    { _id: "case_2", caseId: "case_002", title: "热门案例", coverImage: "cloud://env/case-2.jpg", isVisible: true, sortOrder: 2, homeSections: { values: ["popular"] } },
+    { _id: "case_banner_2", caseId: "case_banner_002", title: "案例轮播", coverImage: "cloud://env/case-banner.jpg", isVisible: true, sortOrder: 3, homeSections: { values: ["banner"] } },
+    { _id: "case_3", caseId: "case_003", title: "隐藏案例", coverImage: "cloud://env/case-3.jpg", isVisible: false, sortOrder: 0, homeSections: { values: ["banner", "popular", "latest"] } },
+    ...Array.from({ length: 6 }, (_, index) => ({
+      _id: `latest_${index + 1}`,
+      caseId: `case_latest_${index + 1}`,
+      title: `最新案例 ${index + 1}`,
+      coverImage: `cloud://env/latest-${index + 1}.jpg`,
+      isVisible: true,
+      sortOrder: index + 3,
+      homeSections: { values: ["latest"] },
+    })),
+  ];
+  const banners = [
+    { _id: "banner_1", caseId: "case_001", title: "独立重复轮播", image: "cloud://env/banner-1.jpg", isVisible: true, sortOrder: 0 },
+    { _id: "banner_2", title: "独立轮播", image: "cloud://env/banner-2.jpg", isVisible: true, sortOrder: 1 },
+    { _id: "banner_hidden", title: "隐藏轮播", image: "cloud://env/banner-hidden.jpg", isVisible: false, sortOrder: 0 },
+  ];
+
+  const bannerItems = buildHomepageDisplayItems(cases, banners, { slot: "banner" });
+  const popularItems = buildHomepageDisplayItems(cases, banners, { slot: "popular" });
+  const latestItems = buildHomepageDisplayItems(cases, banners, { slot: "latest" });
+
+  assert.equal(bannerItems.length, 3);
+  assert.deepEqual(plain(bannerItems.map((item) => item.source)), ["banner", "banner", "case"]);
+  assert.deepEqual(plain(bannerItems.map((item) => item.title)), ["独立重复轮播", "独立轮播", "案例轮播"]);
+  assert.equal(bannerItems[0].displayOrderLabel, "第 1 张");
+  assert.deepEqual(plain(popularItems.map((item) => item.caseId)), ["case_001", "case_002"]);
+  assert.equal(latestItems.length, HOME_DISPLAY_LIMITS.latest);
+  assert.deepEqual(plain(latestItems.map((item) => item.caseId)), [
+    "case_latest_6",
+    "case_latest_5",
+    "case_latest_4",
+    "case_latest_3",
+    "case_latest_2",
+    "case_latest_1",
+  ]);
+  assert.deepEqual(
+    plain(buildHomepageDisplayItems(cases, banners, { slot: "latest", keyword: "case_001" })),
+    []
+  );
+  const searchedLatest = buildHomepageDisplayItems(cases, banners, { slot: "latest", keyword: "最新案例 3" });
+  assert.equal(searchedLatest.length, 1);
+  assert.equal(searchedLatest[0].displayOrderLabel, "第 4 个");
 });

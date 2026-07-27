@@ -8,6 +8,16 @@ const IMAGE_URL_BATCH_SIZE = 50;
 const CASE_ID_PREFIX = "case_";
 const CASE_ID_PAD_LENGTH = 3;
 const CASE_ID_SEQUENCE_MAX = 999999;
+const HOME_DISPLAY_LIMITS = {
+  banner: 5,
+  popular: 4,
+  latest: 6,
+};
+const HOME_DISPLAY_LABELS = {
+  banner: "首页轮播",
+  popular: "热门产品",
+  latest: "最新产品",
+};
 
 const VALID_CASE_ADMIN_ACTIONS = [
   "checkAccess",
@@ -15,6 +25,7 @@ const VALID_CASE_ADMIN_ACTIONS = [
   "getCase",
   "getCaseImageUrls",
   "getVisibleImageUrls",
+  "listHomepageDisplay",
   "createCase",
   "updateCase",
   "setCaseVisibility",
@@ -120,6 +131,14 @@ function normalizePageSize(value) {
 
 function normalizeVisibilityFilter(value) {
   return ["visible", "hidden"].includes(value) ? value : "all";
+}
+
+function normalizeHomepageDisplaySlot(value) {
+  return Object.prototype.hasOwnProperty.call(HOME_DISPLAY_LIMITS, value) ? value : "";
+}
+
+function getHomepageDisplayLimit(slot) {
+  return HOME_DISPLAY_LIMITS[normalizeHomepageDisplaySlot(slot)] || 0;
 }
 
 function generateCaseId(now = Date.now()) {
@@ -293,19 +312,119 @@ function filterCaseItems(items = [], options = {}) {
   });
 }
 
+function sortBySortOrder(items = [], direction = "asc") {
+  const multiplier = direction === "desc" ? -1 : 1;
+  return items.slice().sort((left, right) => {
+    const difference = normalizeSortOrder(left && left.sortOrder) - normalizeSortOrder(right && right.sortOrder);
+    return difference === 0 ? 0 : difference * multiplier;
+  });
+}
+
+function buildHomepageDisplayItem(item = {}, options = {}) {
+  const slot = normalizeHomepageDisplaySlot(options.slot);
+  const source = options.source === "banner" ? "banner" : "case";
+  const image = source === "banner" ? trimText(item.image) : trimText(item.coverImage);
+  return {
+    id: item._id || item.caseId || image,
+    caseId: trimText(item.caseId),
+    title: trimText(item.title) || (source === "banner" ? "未命名轮播图" : "未命名案例"),
+    coverImage: image,
+    image,
+    sortOrder: normalizeSortOrder(item.sortOrder),
+    isVisible: item.isVisible !== false,
+    source,
+    sourceLabel: source === "banner" ? "独立轮播图" : "案例",
+    displaySlot: slot,
+    displayLabel: HOME_DISPLAY_LABELS[slot] || "首页展示",
+    homeSections: normalizeValues(item.homeSections),
+    packageTypes: normalizeValues(item.packageTypes),
+    styles: normalizeValues(item.styles),
+    priceLevel: trimText(item.priceLevel),
+  };
+}
+
+function buildHomepageDisplaySearchText(item = {}) {
+  return [
+    item.title,
+    item.caseId,
+    item.displayLabel,
+    item.sourceLabel,
+    ...normalizeValues(item.packageTypes),
+    ...normalizeValues(item.styles),
+    item.priceLevel,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function filterHomepageDisplayItems(items = [], keyword = "") {
+  const normalizedKeyword = trimText(keyword).toLowerCase();
+  if (!normalizedKeyword) return items.slice();
+  return items.filter((item) => buildHomepageDisplaySearchText(item).includes(normalizedKeyword));
+}
+
+function buildHomepageDisplayItems(cases = [], banners = [], options = {}) {
+  const slot = normalizeHomepageDisplaySlot(options.slot);
+  const limit = getHomepageDisplayLimit(slot);
+  if (!slot || !limit) return [];
+
+  const visibleCases = cases.filter((item) => item && item.isVisible === true);
+  let items;
+
+  if (slot === "banner") {
+    const visibleBanners = banners
+      .filter((item) => item && item.isVisible === true)
+      .map((item) => buildHomepageDisplayItem(item, { slot, source: "banner" }));
+    const caseBanners = visibleCases
+      .filter((item) => normalizeValues(item.homeSections).includes(slot))
+      .map((item) => buildHomepageDisplayItem(item, { slot, source: "case" }));
+    const seen = new Set();
+    items = sortBySortOrder(visibleBanners).concat(sortBySortOrder(caseBanners)).filter((item) => {
+      const key = item.caseId || item.image || item.id;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  } else {
+    const direction = slot === "latest" ? "desc" : "asc";
+    items = sortBySortOrder(
+      visibleCases
+        .filter((item) => normalizeValues(item.homeSections).includes(slot))
+        .map((item) => buildHomepageDisplayItem(item, { slot, source: "case" })),
+      direction
+    );
+  }
+
+  const displayedItems = items.slice(0, limit).map((item, index) => {
+    const displayOrder = index + 1;
+    return {
+      ...item,
+      displayOrder,
+      displayOrderLabel: `第 ${displayOrder} ${slot === "banner" ? "张" : "个"}`,
+    };
+  });
+  return filterHomepageDisplayItems(displayedItems, options.keyword);
+}
+
 module.exports = {
   ALLOWED_CASE_FIELDS,
   BANNER_COLLECTION,
   CASE_ADMIN_DEFAULT_SORT_ORDER,
   CASE_COLLECTION,
   IMAGE_URL_BATCH_SIZE,
+  HOME_DISPLAY_LABELS,
+  HOME_DISPLAY_LIMITS,
   PAGE_SIZE_DEFAULT,
   PAGE_SIZE_MAX,
   SEARCH_FETCH_LIMIT,
   VALID_CASE_ADMIN_ACTIONS,
   buildCaseKeywords,
   buildCaseSearchText,
+  buildHomepageDisplayItems,
+  buildHomepageDisplaySearchText,
   filterCaseItems,
+  filterHomepageDisplayItems,
   generateCaseId,
   generateSequentialCaseId,
   getAdminOpenidsFromEnv,
@@ -315,6 +434,7 @@ module.exports = {
   normalizeCloudFileIds,
   normalizePage,
   normalizePageSize,
+  normalizeHomepageDisplaySlot,
   normalizeVisibilityFilter,
   pickAllowedCaseFields,
   sanitizeCasePayload,

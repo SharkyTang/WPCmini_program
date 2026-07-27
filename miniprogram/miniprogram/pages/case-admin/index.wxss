@@ -86,11 +86,17 @@ page {
   font-size: 23rpx;
 }
 
-.filter-row {
+.filter-scroll {
   margin-top: 18rpx;
+  width: 100%;
+  white-space: nowrap;
+}
+
+.filter-row {
   display: flex;
   gap: 14rpx;
-  flex-wrap: wrap;
+  width: max-content;
+  padding-right: 4rpx;
 }
 
 .filter-pill {
@@ -104,6 +110,7 @@ page {
   align-items: center;
   font-size: 23rpx;
   font-weight: 700;
+  flex: 0 0 auto;
 }
 
 .filter-pill-active {
@@ -202,12 +209,41 @@ page {
   background: #f6eadc;
 }
 
+.status-banner {
+  color: #765126;
+  background: #f6eadc;
+}
+
 .case-meta,
 .case-tags {
   margin-top: 8rpx;
   color: #8c8176;
   font-size: 22rpx;
   line-height: 1.35;
+}
+
+.home-section-summary,
+.home-display-summary {
+  margin-top: 8rpx;
+  font-size: 21rpx;
+  line-height: 1.35;
+  font-weight: 700;
+}
+
+.home-section-summary {
+  color: #766b60;
+}
+
+.home-display-summary {
+  color: #b57a35;
+}
+
+.case-cover-placeholder {
+  color: #8c8176;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 21rpx;
 }
 
 .case-tags {

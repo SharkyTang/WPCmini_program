@@ -29,17 +29,19 @@
         <view class="search-button" bindtap="searchCases">搜索</view>
       </view>
       <view wx:if="{{keyword}}" class="clear-keyword" bindtap="clearKeyword">清空搜索</view>
+      <scroll-view class="filter-scroll" scroll-x="true" enable-flex="true" show-scrollbar="false">
       <view class="filter-row">
         <view
-          wx:for="{{visibilityOptions}}"
+          wx:for="{{viewOptions}}"
           wx:key="value"
-          class="filter-pill {{activeVisibility === item.value ? 'filter-pill-active' : ''}}"
+          class="filter-pill {{activeView === item.value ? 'filter-pill-active' : ''}}"
           data-value="{{item.value}}"
-          bindtap="selectVisibility"
+          bindtap="selectView"
         >
           {{item.label}}
         </view>
       </view>
+      </scroll-view>
     </view>
 
     <view wx:if="{{loading}}" class="state-card">正在读取案例...</view>
@@ -51,22 +53,26 @@
     </view>
 
     <view wx:elif="{{!cases.length}}" class="state-card">
-      <view class="state-title">暂无案例</view>
-      <view class="state-desc">可以先新增一个隐藏案例，确认后再打开显示。</view>
-      <view class="state-button" bindtap="createCase">新增案例</view>
+      <view class="state-title">{{emptyTitle}}</view>
+      <view class="state-desc">{{emptyDescription}}</view>
+      <view wx:if="{{!isHomeDisplay}}" class="state-button" bindtap="createCase">新增案例</view>
     </view>
 
     <view wx:else class="case-list">
-      <view wx:for="{{cases}}" wx:key="id" class="case-card">
-        <image class="case-cover" src="{{item.coverImageUrl}}" mode="aspectFill" />
+      <view wx:for="{{cases}}" wx:key="displayKey" class="case-card">
+        <image wx:if="{{item.coverImageUrl}}" class="case-cover" src="{{item.coverImageUrl}}" mode="aspectFill" />
+        <view wx:else class="case-cover case-cover-placeholder">暂无图片</view>
         <view class="case-copy">
           <view class="case-head">
             <view class="case-title">{{item.title}}</view>
-            <view class="status-badge {{item.isVisible ? 'status-visible' : 'status-hidden'}}">{{item.visibilityLabel}}</view>
+            <view wx:if="{{item.source === 'banner'}}" class="status-badge status-banner">独立轮播图</view>
+            <view wx:else class="status-badge {{item.isVisible ? 'status-visible' : 'status-hidden'}}">{{item.visibilityLabel}}</view>
           </view>
           <view class="case-meta">{{item.caseId || item.id}}</view>
           <view class="case-tags">{{item.tagSummary || '暂无标签'}}</view>
-          <view class="case-actions">
+          <view wx:if="{{item.homeSectionSummary}}" class="home-section-summary">首页展示：{{item.homeSectionSummary}}</view>
+          <view wx:if="{{item.displayLabel}}" class="home-display-summary">{{item.displayLabel}} · {{item.displayOrderLabel}}</view>
+          <view wx:if="{{item.source !== 'banner'}}" class="case-actions">
             <view class="case-action" data-id="{{item.id}}" bindtap="editCase">编辑</view>
             <view
               class="case-action danger"
@@ -86,8 +92,8 @@
           </view>
         </view>
       </view>
-      <view wx:if="{{loadingMore}}" class="list-foot">继续读取...</view>
-      <view wx:elif="{{!hasMore}}" class="list-foot">已显示全部案例</view>
+      <view wx:if="{{!isHomeDisplay && loadingMore}}" class="list-foot">继续读取...</view>
+      <view wx:elif="{{!isHomeDisplay && !hasMore}}" class="list-foot">已显示全部案例</view>
     </view>
   </block>
 </view>

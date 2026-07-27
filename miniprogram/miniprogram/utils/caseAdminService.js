@@ -1,6 +1,8 @@
 const {
+  CASE_ADMIN_VIEW_OPTIONS,
   CASE_ADMIN_VISIBILITY_OPTIONS,
   normalizeCaseAdminItem,
+  normalizeCaseAdminHomepageDisplayItem,
   normalizeCaseAdminKeyword,
 } = require("./caseAdminData");
 const { clearCloudDataCache } = require("./cloudData");
@@ -88,6 +90,39 @@ async function getTempUrlMap(fileIds) {
   }
 }
 
+async function getVisibleTempUrlMap(fileIds) {
+  const uniqueFileIds = Array.from(new Set(fileIds.filter(isCloudFileId)));
+  if (!uniqueFileIds.length) return {};
+
+  try {
+    const responses = await Promise.all(
+      chunkList(uniqueFileIds, TEMP_FILE_URL_BATCH_SIZE).map((fileList) =>
+        callCaseAdmin("getVisibleImageUrls", { fileIDs: fileList })
+      )
+    );
+    return responses.reduce((map, result) => ({ ...map, ...(result.urls || {}) }), {});
+  } catch (error) {
+    console.warn("首页展示图片临时链接获取失败，将尝试客户端兼容方式", error);
+    if (!wx.cloud.getTempFileURL) return {};
+    try {
+      const responses = await Promise.all(
+        chunkList(uniqueFileIds, TEMP_FILE_URL_BATCH_SIZE).map((fileList) =>
+          wx.cloud.getTempFileURL({ fileList })
+        )
+      );
+      return responses.reduce((map, response) => {
+        (response.fileList || []).forEach((item) => {
+          if (item && item.fileID && item.tempFileURL) map[item.fileID] = item.tempFileURL;
+        });
+        return map;
+      }, {});
+    } catch (fallbackError) {
+      console.warn("首页展示图片客户端兼容方式失败", fallbackError);
+      return {};
+    }
+  }
+}
+
 function resolveCaseCoverUrl(fileID, tempUrlMap = {}) {
   return tempUrlMap[fileID] || (isCloudFileId(fileID) ? "" : fileID);
 }
@@ -98,6 +133,19 @@ async function attachCaseCoverUrls(cases) {
     ...item,
     coverImageUrl: resolveCaseCoverUrl(item.coverImage, tempUrlMap),
   }));
+}
+
+async function attachHomepageDisplayImageUrls(items) {
+  const tempUrlMap = await getVisibleTempUrlMap(
+    items.map((item) => item.coverImage || item.image)
+  );
+  return items.map((item) => {
+    const image = item.coverImage || item.image;
+    return {
+      ...item,
+      coverImageUrl: resolveCaseCoverUrl(image, tempUrlMap),
+    };
+  });
 }
 
 async function checkCaseAdminAccess() {
@@ -124,6 +172,18 @@ async function fetchCaseAdminList(options = {}) {
     page: result.page || 1,
     pageSize: result.pageSize || DEFAULT_PAGE_SIZE,
     hasMore: Boolean(result.hasMore),
+  };
+}
+
+async function fetchCaseAdminHomepageDisplay(options = {}) {
+  const result = await callCaseAdmin("listHomepageDisplay", {
+    slot: options.slot,
+    keyword: normalizeCaseAdminKeyword(options.keyword),
+  });
+  const items = (result.items || []).map(normalizeCaseAdminHomepageDisplayItem);
+  return {
+    items: await attachHomepageDisplayImageUrls(items),
+    slot: result.slot || options.slot || "",
   };
 }
 
@@ -182,12 +242,14 @@ async function uploadCaseCoverImage(input, maybeCloudPath) {
 }
 
 module.exports = {
+  CASE_ADMIN_VIEW_OPTIONS,
   CASE_ADMIN_VISIBILITY_OPTIONS,
   DEFAULT_PAGE_SIZE,
   checkCaseAdminAccess,
   createCaseAdmin,
   deleteCaseAdmin,
   fetchCaseAdminDetail,
+  fetchCaseAdminHomepageDisplay,
   fetchCaseAdminList,
   setCaseVisibility,
   updateCaseAdmin,

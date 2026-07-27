@@ -43,6 +43,7 @@ const {
   createEmptyCaseForm,
   isCloudFileId,
   normalizeCaseAdminForm,
+  normalizeCaseAdminHomepageDisplayItem,
   validateCaseAdminForm,
 } = caseAdminData;
 
@@ -126,6 +127,22 @@ test("builds selected option view models for case admin form chips", () => {
   assert.equal(findOption("statuses", "热门产品").selected, true);
   assert.equal(findOption("homeSections", "popular").selected, true);
   assert.equal(findOption("homeSections", "popular").label, "热门产品显示");
+});
+
+test("keeps the database document id for editable homepage cases", () => {
+  const item = normalizeCaseAdminHomepageDisplayItem({
+    id: "db_document_030",
+    caseId: "case_030",
+    title: "首页轮播案例",
+    coverImage: "cloud://cloud1/case-030.jpg",
+    source: "case",
+    displayLabel: "首页轮播",
+    displayOrder: 1,
+  });
+
+  assert.equal(item.id, "db_document_030");
+  assert.equal(item.caseId, "case_030");
+  assert.equal(item.displayKey, "case:db_document_030");
 });
 
 test("validates required title cover image and package types", () => {

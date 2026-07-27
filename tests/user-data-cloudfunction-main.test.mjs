@@ -146,3 +146,43 @@ await test("submitInquiry stores server openid and sanitized fields", async () =
   assert.equal(added[0].payload.data.status, "new");
   assert.equal(Object.prototype.hasOwnProperty.call(added[0].payload.data, "adminNote"), false);
 });
+
+await test("getProfile only queries the server openid", async () => {
+  const { main, calls } = loadUserDataFunction({
+    openid: "server_openid",
+    records: [{ _id: "profile_1", openid: "server_openid", nickname: "酒友", avatarFileId: "cloud://avatar" }],
+  });
+
+  const result = await main({ action: "getProfile", openid: "spoofed" });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(result.profile)), {
+    nickname: "酒友",
+    avatarFileId: "cloud://avatar",
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), {
+    collectionName: "user_profiles",
+    type: "where",
+    condition: { openid: "server_openid" },
+  });
+});
+
+await test("saveProfile creates a profile with server openid only", async () => {
+  const { main, added } = loadUserDataFunction({ openid: "server_openid" });
+
+  const result = await main({
+    action: "saveProfile",
+    profile: {
+      nickname: "酒友",
+      avatarFileId: "cloud://avatar",
+      openid: "spoofed",
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(added[0].collectionName, "user_profiles");
+  assert.equal(added[0].payload.data.openid, "server_openid");
+  assert.deepEqual(JSON.parse(JSON.stringify(result.profile)), {
+    nickname: "酒友",
+    avatarFileId: "cloud://avatar",
+  });
+});

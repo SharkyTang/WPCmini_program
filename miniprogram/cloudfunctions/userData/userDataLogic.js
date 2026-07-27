@@ -2,6 +2,7 @@ const INQUIRY_COLLECTION = "inquiries";
 const FEEDBACK_COLLECTION = "feedback";
 const CUSTOMER_NOTIFICATION_COLLECTION = "customer_notifications";
 const NOTIFICATION_PREFERENCE_COLLECTION = "notification_preferences";
+const USER_PROFILE_NICKNAME_MAX_LENGTH = 14;
 
 const INQUIRY_CONTENT_MIN_LENGTH = 5;
 const INQUIRY_CONTENT_MAX_LENGTH = 800;
@@ -171,6 +172,34 @@ function normalizeDisabledTypes(disabledTypes = []) {
   );
 }
 
+function normalizeUserProfileDraft(profile = {}) {
+  const source = profile && typeof profile === "object" ? profile : {};
+  return {
+    nickname: trimText(source.nickname),
+    avatarFileId: trimText(source.avatarFileId),
+  };
+}
+
+function validateUserProfileDraft(profile = {}) {
+  const normalized = normalizeUserProfileDraft(profile);
+
+  if (!normalized.nickname) {
+    return { valid: false, code: "INVALID_PROFILE", message: "请输入昵称" };
+  }
+  if (normalized.nickname.length > USER_PROFILE_NICKNAME_MAX_LENGTH) {
+    return {
+      valid: false,
+      code: "INVALID_PROFILE",
+      message: `昵称最多 ${USER_PROFILE_NICKNAME_MAX_LENGTH} 个字符`,
+    };
+  }
+  if (!normalized.avatarFileId || normalized.avatarFileId.indexOf("cloud://") !== 0) {
+    return { valid: false, code: "INVALID_PROFILE", message: "请先选择头像" };
+  }
+
+  return { valid: true, data: normalized };
+}
+
 function pickPreferenceRecord(records = []) {
   return (records || [])[0] || null;
 }
@@ -182,8 +211,11 @@ module.exports = {
   NOTIFICATION_PREFERENCE_COLLECTION,
   buildFeedbackRecord,
   buildInquiryRecord,
+  USER_PROFILE_NICKNAME_MAX_LENGTH,
   normalizeDisabledTypes,
+  normalizeUserProfileDraft,
   pickPreferenceRecord,
+  validateUserProfileDraft,
   validateFeedbackDraft,
   validateInquiryDraft,
 };

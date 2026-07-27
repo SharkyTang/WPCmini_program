@@ -16,31 +16,20 @@
       <view class="user-name">{{profileInfo.nickname}}</view>
       <view class="user-note">{{profileInfo.note}}</view>
     </view>
+    <view class="user-arrow">›</view>
   </view>
+  <view wx:if="{{profileLoadError}}" class="profile-load-tip">资料暂时读取失败，下拉页面后重试</view>
 
   <view class="section quick-section">
     <view class="section-title">常用功能</view>
     <view class="quick-grid">
       <block wx:for="{{quickActions}}" wx:key="key">
-        <view
-          wx:if="{{item.key === 'service'}}"
-          class="quick-item quick-contact-shell"
-        >
+        <view wx:if="{{item.key === 'service'}}" class="quick-item quick-contact-shell">
           <image class="quick-icon-image" src="{{item.iconSrc}}" mode="aspectFit" />
           <view class="quick-title">{{item.title}}</view>
-          <button
-            class="quick-contact-button"
-            open-type="contact"
-            session-from="{{customerServiceSessionFrom}}"
-            bindcontact="handleContact"
-          ></button>
+          <button class="quick-contact-button" open-type="contact" session-from="{{customerServiceSessionFrom}}" bindcontact="handleContact"></button>
         </view>
-        <view
-          wx:else
-          class="quick-item"
-          data-key="{{item.key}}"
-          bindtap="handleQuickAction"
-        >
+        <view wx:else class="quick-item" data-key="{{item.key}}" bindtap="handleQuickAction">
           <image class="quick-icon-image" src="{{item.iconSrc}}" mode="aspectFit" />
           <view class="quick-title">{{item.title}}</view>
         </view>
@@ -60,20 +49,8 @@
       </view>
     </view>
     <view class="inquiry-entry" bindtap="openInquiryForm">提交定制需求</view>
-    <view
-      wx:if="{{hasInquiryAdminAccess}}"
-      class="inquiry-admin-entry"
-      bindtap="openInquiryAdmin"
-    >
-      需求管理
-    </view>
-    <view
-      wx:if="{{hasCaseAdminAccess}}"
-      class="inquiry-admin-entry"
-      bindtap="openCaseAdmin"
-    >
-      案例管理
-    </view>
+    <view wx:if="{{hasInquiryAdminAccess}}" class="inquiry-admin-entry" bindtap="openInquiryAdmin">需求管理</view>
+    <view wx:if="{{hasCaseAdminAccess}}" class="inquiry-admin-entry" bindtap="openCaseAdmin">案例管理</view>
   </view>
 
   <view class="section">
@@ -86,58 +63,6 @@
         </view>
         <view class="faq-arrow">›</view>
       </view>
-    </view>
-  </view>
-
-  <view wx:if="{{isProfileEditorVisible}}" class="profile-editor-mask" catchtap="closeProfileEditor">
-    <view class="profile-editor-sheet" catchtap="noop">
-      <view class="profile-option-list">
-        <view class="profile-editor-header">
-          <view class="profile-option-avatar profile-option-avatar-large">
-            <image wx:if="{{profileDraft.avatarUrl}}" class="profile-option-avatar-image" src="{{profileDraft.avatarUrl}}" mode="aspectFill" />
-            <block wx:else>
-              <view class="avatar-head"></view>
-              <view class="avatar-body"></view>
-            </block>
-          </view>
-          <view class="profile-editor-title">编辑资料</view>
-        </view>
-
-        <view class="profile-field-row">
-          <view class="profile-field-label">昵称</view>
-          <input
-            class="profile-nickname-input"
-            value="{{profileDraft.nickname}}"
-            placeholder="请输入昵称"
-            placeholder-class="profile-input-placeholder"
-            bindinput="onNicknameInput"
-          />
-        </view>
-
-        <button
-          class="profile-option-row profile-option-action profile-wechat-avatar-button"
-          open-type="chooseAvatar"
-          bindchooseavatar="onChooseWechatAvatar"
-        >
-          使用微信头像
-        </button>
-
-        <view class="profile-option-row profile-option-preview">
-          <view class="profile-option-title">当前头像</view>
-          <image wx:if="{{profileDraft.avatarUrl}}" class="profile-option-avatar" src="{{profileDraft.avatarUrl}}" mode="aspectFill" />
-          <view wx:else class="profile-option-avatar profile-option-avatar-empty">
-            <view class="avatar-head"></view>
-            <view class="avatar-body"></view>
-          </view>
-        </view>
-
-        <view class="profile-option-row profile-option-action" bindtap="chooseProfileAvatarFromAlbum">从相册选择</view>
-        <view class="profile-option-row profile-option-action" bindtap="takeProfileAvatarPhoto">拍照</view>
-        <view class="profile-option-row profile-option-save" bindtap="saveProfileDraft">保存资料</view>
-        <view class="profile-option-row profile-option-reset" bindtap="resetProfileInfo">恢复默认资料</view>
-      </view>
-
-      <view class="profile-cancel-button" bindtap="closeProfileEditor">取消</view>
     </view>
   </view>
 </view>

@@ -226,3 +226,24 @@ await test("deleteCase keeps images referenced by a visible banner", async () =>
   assert.deepEqual(clone(result.deletedFileIds), []);
   assert.deepEqual(deletedFiles, []);
 });
+
+await test("homepage display endpoint is admin-only and returns the active homepage slot", async () => {
+  const { main } = loadCaseAdminFunction({
+    cases: [
+      { _id: "case_1", caseId: "case_001", title: "热门案例", coverImage: "cloud://env/case.jpg", isVisible: true, sortOrder: 1, homeSections: { values: ["popular"] } },
+      { _id: "case_2", caseId: "case_002", title: "隐藏案例", coverImage: "cloud://env/hidden.jpg", isVisible: false, sortOrder: 0, homeSections: { values: ["popular"] } },
+    ],
+  });
+
+  const result = await main({ action: "listHomepageDisplay", slot: "popular" });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.slot, "popular");
+  assert.deepEqual(clone(result.items.map((item) => item.caseId)), ["case_001"]);
+  assert.equal(result.items[0].displayOrderLabel, "第 1 个");
+
+  const customer = loadCaseAdminFunction({ openid: "customer_openid" });
+  const forbidden = await customer.main({ action: "listHomepageDisplay", slot: "popular" });
+  assert.equal(forbidden.ok, false);
+  assert.equal(forbidden.code, "FORBIDDEN");
+});
