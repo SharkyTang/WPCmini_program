@@ -50,6 +50,7 @@ test("declares supported case admin actions", () => {
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getVisibleImageUrls"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("createCase"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("setCaseVisibility"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("deleteCase"), true);
 });
 
 test("normalizes cloud file ids for image URL exchange", () => {
@@ -73,7 +74,7 @@ test("keeps only writable case fields", () => {
   assert.equal(ALLOWED_CASE_FIELDS.includes("_openid"), false);
 });
 
-test("sanitizes create payload with defaults", () => {
+test("sanitizes create payload with defaults and preserves visible flag", () => {
   const result = sanitizeCasePayload(
     {
       title: "  新案例  ",
@@ -87,10 +88,35 @@ test("sanitizes create payload with defaults", () => {
   assert.equal(result.valid, true);
   assert.equal(result.data.title, "新案例");
   assert.equal(result.data.caseId, "case_091");
-  assert.equal(result.data.isVisible, false);
+  assert.equal(result.data.isVisible, true);
   assert.equal(result.data.sortOrder, 91);
   assert.deepEqual(plain(result.data.packageTypes), { values: ["礼盒"] });
   assert.deepEqual(plain(result.data.keywords.values), ["新案例", "case_091", "白酒", "礼盒"]);
+});
+
+test("new cases stay hidden unless visible flag is explicitly enabled", () => {
+  const omitted = sanitizeCasePayload(
+    {
+      title: "新案例",
+      coverImage: "cloud://cloud1/file.jpg",
+      packageTypes: ["礼盒"],
+    },
+    { isCreate: true, defaultCaseId: "case_091" }
+  );
+  const disabled = sanitizeCasePayload(
+    {
+      title: "新案例",
+      coverImage: "cloud://cloud1/file.jpg",
+      packageTypes: ["礼盒"],
+      isVisible: false,
+    },
+    { isCreate: true, defaultCaseId: "case_091" }
+  );
+
+  assert.equal(omitted.valid, true);
+  assert.equal(omitted.data.isVisible, false);
+  assert.equal(disabled.valid, true);
+  assert.equal(disabled.data.isVisible, false);
 });
 
 test("keeps manual sort order when creating cases", () => {

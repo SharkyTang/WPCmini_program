@@ -236,6 +236,12 @@ page {
   color: #b04236;
 }
 
+.case-action.delete {
+  border-color: #d9b3ad;
+  color: #9d2b22;
+  background: #fff6f4;
+}
+
 .list-foot {
   padding: 24rpx 0 8rpx;
   color: #8c8176;

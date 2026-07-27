@@ -2,6 +2,7 @@ const {
   CASE_ADMIN_VISIBILITY_OPTIONS,
   DEFAULT_PAGE_SIZE,
   checkCaseAdminAccess,
+  deleteCaseAdmin,
   fetchCaseAdminList,
   setCaseVisibility,
 } = require("../../utils/caseAdminService");
@@ -165,6 +166,35 @@ Page({
           console.warn("更新案例显示状态失败", error);
           wx.showToast({
             title: "操作失败，请稍后重试",
+            icon: "none",
+          });
+        }
+      },
+    });
+  },
+
+  deleteCase(event) {
+    const id = event.currentTarget.dataset.id;
+    if (!id) return;
+
+    wx.showModal({
+      title: "删除这个案例？",
+      content: "删除后将从前台和案例管理中移除，无法恢复。",
+      confirmText: "删除",
+      confirmColor: "#b04236",
+      success: async (result) => {
+        if (!result.confirm) return;
+        try {
+          await deleteCaseAdmin(id);
+          wx.showToast({
+            title: "已删除",
+            icon: "none",
+          });
+          this.loadCases({ reset: true });
+        } catch (error) {
+          console.warn("删除案例失败", error);
+          wx.showToast({
+            title: "删除失败，请稍后重试",
             icon: "none",
           });
         }

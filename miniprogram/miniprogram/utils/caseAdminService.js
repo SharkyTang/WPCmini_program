@@ -157,6 +157,12 @@ async function setCaseVisibility(id, isVisible) {
   return result;
 }
 
+async function deleteCaseAdmin(id) {
+  const result = await callCaseAdmin("deleteCase", { id });
+  markCaseDataChanged();
+  return result;
+}
+
 async function uploadCaseCoverImage(input, maybeCloudPath) {
   const filePath = typeof input === "object" && input ? input.filePath : input;
   const cloudPath = typeof input === "object" && input ? input.cloudPath : maybeCloudPath;
@@ -180,6 +186,7 @@ module.exports = {
   DEFAULT_PAGE_SIZE,
   checkCaseAdminAccess,
   createCaseAdmin,
+  deleteCaseAdmin,
   fetchCaseAdminDetail,
   fetchCaseAdminList,
   setCaseVisibility,

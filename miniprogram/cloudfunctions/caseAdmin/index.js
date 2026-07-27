@@ -84,6 +84,15 @@ async function getCase(event) {
   return ok({ item: response.data || null });
 }
 
+async function getCaseById(id) {
+  try {
+    const response = await db.collection(CASE_COLLECTION).doc(id).get();
+    return response.data || null;
+  } catch (error) {
+    return null;
+  }
+}
+
 async function getCreateCaseDefaults() {
   const response = await db
     .collection(CASE_COLLECTION)
@@ -234,6 +243,61 @@ async function setCaseVisibility(event, openid) {
   });
 }
 
+async function isCaseCoverImageReferenced(fileID) {
+  if (!fileID || fileID.indexOf("cloud://") !== 0) return false;
+
+  const [caseResponse, bannerResponse] = await Promise.all([
+    db
+      .collection(CASE_COLLECTION)
+      .where({ coverImage: fileID })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
+      .collection(BANNER_COLLECTION)
+      .where({ image: fileID })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+  ]);
+
+  return Boolean(
+    (caseResponse.data || []).length ||
+      (bannerResponse.data || []).length
+  );
+}
+
+async function deleteCase(event) {
+  const id = trimText(event.id);
+  if (!id) return fail("INVALID_ID", "缺少案例 ID");
+
+  const item = await getCaseById(id);
+  if (!item) return fail("CASE_NOT_FOUND", "案例不存在或已删除");
+
+  const coverImage = trimText(item.coverImage);
+  await db.collection(CASE_COLLECTION).doc(id).remove();
+
+  const deletedFileIds = [];
+  if (coverImage.indexOf("cloud://") === 0) {
+    const isReferenced = await isCaseCoverImageReferenced(coverImage);
+    if (!isReferenced) {
+      try {
+        await cloud.deleteFile({
+          fileList: [coverImage],
+        });
+        deletedFileIds.push(coverImage);
+      } catch (error) {
+        console.warn("case cover file delete failed", error);
+      }
+    }
+  }
+
+  return ok({
+    id,
+    deletedFileIds,
+  });
+}
+
 exports.main = async (event = {}) => {
   const { OPENID } = cloud.getWXContext();
   const action = trimText(event.action);
@@ -258,6 +322,7 @@ exports.main = async (event = {}) => {
     if (action === "createCase") return createCase(event, OPENID);
     if (action === "updateCase") return updateCase(event, OPENID);
     if (action === "setCaseVisibility") return setCaseVisibility(event, OPENID);
+    if (action === "deleteCase") return deleteCase(event);
     return fail("UNKNOWN_ACTION", "未知案例管理操作");
   } catch (error) {
     console.error("caseAdmin error", error);

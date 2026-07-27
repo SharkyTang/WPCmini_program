@@ -18,6 +18,7 @@ const VALID_CASE_ADMIN_ACTIONS = [
   "createCase",
   "updateCase",
   "setCaseVisibility",
+  "deleteCase",
 ];
 
 const ALLOWED_CASE_FIELDS = [
@@ -251,7 +252,7 @@ function sanitizeCasePayload(input = {}, options = {}) {
     data.notes = trimText(picked.notes);
   }
   if (Object.prototype.hasOwnProperty.call(picked, "isVisible") || isCreate) {
-    data.isVisible = isCreate ? false : picked.isVisible === true;
+    data.isVisible = picked.isVisible === true;
   }
 
   data.keywords = buildCaseKeywords(data);
