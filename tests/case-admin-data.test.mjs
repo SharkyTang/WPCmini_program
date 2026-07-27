@@ -27,6 +27,10 @@ const caseAdminDataPath = resolve(
   __dirname,
   "../miniprogram/miniprogram/utils/caseAdminData.js"
 );
+const caseAdminEditWxmlPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/case-admin/edit.wxml"
+);
 const caseAdminData = loadCommonJsModule(caseAdminDataPath, {
   "./caseData": caseData,
 });
@@ -63,6 +67,8 @@ test("creates hidden empty case form defaults", () => {
   assert.equal(form.isVisible, false);
   assert.equal(form.sortOrder, "");
   assert.deepEqual(plain(form.packageTypes), []);
+  assert.deepEqual(plain(form.statuses), []);
+  assert.deepEqual(plain(form.homeSections), []);
 });
 
 test("exposes case admin form options by field key", () => {
@@ -79,7 +85,24 @@ test("exposes case admin form options by field key", () => {
   assert.ok(CASE_ADMIN_FORM_OPTIONS.styles.options.includes("国风"));
   assert.ok(CASE_ADMIN_FORM_OPTIONS.priceLevel.options.includes("品质款"));
   assert.ok(CASE_ADMIN_FORM_OPTIONS.scenes.options.includes("送礼"));
-  assert.ok(CASE_ADMIN_FORM_OPTIONS.statuses.options.includes("推荐"));
+  assert.deepEqual(plain(CASE_ADMIN_FORM_OPTIONS.statuses.options), ["热门产品", "最新产品"]);
+  assert.equal(CASE_ADMIN_FORM_OPTIONS.statuses.options.includes("推荐"), false);
+  assert.deepEqual(
+    plain(CASE_ADMIN_FORM_OPTIONS.homeSections.options.map((option) => option.label)),
+    ["首页轮播显示", "热门产品显示", "最新产品显示"]
+  );
+});
+
+test("case admin edit form shows home section controls after visibility switch", () => {
+  const wxml = readFileSync(caseAdminEditWxmlPath, "utf8");
+  const visibleIndex = wxml.indexOf("前台显示");
+  const homeSectionIndex = wxml.indexOf("首页展示位置");
+
+  assert.notEqual(homeSectionIndex, -1);
+  assert.equal(wxml.includes("首页轮播显示"), false);
+  assert.ok(homeSectionIndex > visibleIndex);
+  assert.equal(wxml.includes("optionViews.homeSections"), true);
+  assert.equal(wxml.includes("不勾选仍可在分类页显示"), true);
 });
 
 test("builds selected option view models for case admin form chips", () => {
@@ -88,7 +111,8 @@ test("builds selected option view models for case admin form chips", () => {
     styles: ["国风"],
     priceLevel: "品质款",
     scenes: ["送礼"],
-    statuses: ["推荐"],
+    statuses: ["热门产品"],
+    homeSections: ["popular"],
   });
 
   const findOption = (group, value) =>
@@ -99,7 +123,9 @@ test("builds selected option view models for case admin form chips", () => {
   assert.equal(findOption("styles", "国风").selected, true);
   assert.equal(findOption("priceLevel", "品质款").selected, true);
   assert.equal(findOption("scenes", "送礼").selected, true);
-  assert.equal(findOption("statuses", "推荐").selected, true);
+  assert.equal(findOption("statuses", "热门产品").selected, true);
+  assert.equal(findOption("homeSections", "popular").selected, true);
+  assert.equal(findOption("homeSections", "popular").label, "热门产品显示");
 });
 
 test("validates required title cover image and package types", () => {
@@ -142,7 +168,8 @@ test("normalizes case admin form and builds keywords", () => {
     styles: ["国风"],
     priceLevel: "品质款",
     scenes: ["送礼"],
-    statuses: ["推荐"],
+    statuses: ["最新产品"],
+    homeSections: ["latest"],
     sortOrder: "8",
     notes: "  备注  ",
     isVisible: true,
@@ -161,7 +188,7 @@ test("normalizes case admin form and builds keywords", () => {
     "国风",
     "品质款",
     "送礼",
-    "推荐",
+    "最新产品",
   ]);
 });
 
@@ -177,5 +204,6 @@ test("builds database payload with json value fields and leaves blank sort order
   assert.equal(payload.isVisible, false);
   assert.equal(payload.sortOrder, "");
   assert.deepEqual(plain(payload.packageTypes), { values: ["整套包装"] });
+  assert.deepEqual(plain(payload.homeSections), { values: [] });
   assert.deepEqual(plain(payload.keywords.values), ["测试案例", "白酒", "整套包装"]);
 });

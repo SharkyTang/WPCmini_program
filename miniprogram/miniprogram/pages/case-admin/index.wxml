@@ -2,7 +2,7 @@
   <view class="hero">
     <view>
       <view class="page-title">案例管理</view>
-      <view class="page-subtitle">新增、编辑、隐藏酒包装案例</view>
+      <view class="page-subtitle">新增、编辑、隐藏或删除酒包装案例</view>
     </view>
     <view wx:if="{{isAdmin}}" class="primary-action" bindtap="createCase">新增案例</view>
   </view>
@@ -75,6 +75,13 @@
               bindtap="toggleCaseVisibility"
             >
               {{item.isVisible ? '隐藏' : '恢复'}}
+            </view>
+            <view
+              class="case-action delete"
+              data-id="{{item.id}}"
+              bindtap="deleteCase"
+            >
+              删除
             </view>
           </view>
         </view>

@@ -3,7 +3,7 @@ const DEFAULT_FILTERS = [
     key: "statuses",
     title: "状态",
     type: "multi",
-    options: ["推荐", "热门", "新上传"],
+    options: ["热门产品", "最新产品"],
   },
   {
     key: "wineType",
@@ -37,7 +37,19 @@ const DEFAULT_FILTERS = [
   },
 ];
 
-const MULTI_FIELDS = ["packageTypes", "styles", "scenes", "statuses"];
+const HOME_SECTION_VALUES = {
+  BANNER: "banner",
+  POPULAR: "popular",
+  LATEST: "latest",
+};
+
+const HOME_SECTION_OPTIONS = [
+  { value: HOME_SECTION_VALUES.BANNER, label: "首页轮播显示" },
+  { value: HOME_SECTION_VALUES.POPULAR, label: "热门产品显示" },
+  { value: HOME_SECTION_VALUES.LATEST, label: "最新产品显示" },
+];
+
+const MULTI_FIELDS = ["packageTypes", "styles", "scenes", "statuses", "homeSections"];
 
 const VALUE_ALIASES = {
   styles: {
@@ -49,6 +61,19 @@ const VALUE_ALIASES = {
     中端: "品质款",
     高端: "高端款",
     奢华: "珍藏款",
+  },
+  statuses: {
+    推荐: "",
+    热门: "热门产品",
+    新上传: "最新产品",
+    最新: "最新产品",
+  },
+  homeSections: {
+    首页轮播: HOME_SECTION_VALUES.BANNER,
+    首页轮播显示: HOME_SECTION_VALUES.BANNER,
+    推荐: HOME_SECTION_VALUES.BANNER,
+    热门产品显示: HOME_SECTION_VALUES.POPULAR,
+    最新产品显示: HOME_SECTION_VALUES.LATEST,
   },
 };
 
@@ -62,11 +87,30 @@ function normalizeValues(value) {
 
 function normalizeDisplayValue(field, value) {
   if (!value) return value;
-  return (VALUE_ALIASES[field] && VALUE_ALIASES[field][value]) || value;
+  if (
+    VALUE_ALIASES[field] &&
+    Object.prototype.hasOwnProperty.call(VALUE_ALIASES[field], value)
+  ) {
+    return VALUE_ALIASES[field][value];
+  }
+  return value;
 }
 
 function normalizeDisplayValues(field, value) {
-  return normalizeValues(value).map((item) => normalizeDisplayValue(field, item));
+  const seen = new Set();
+  return normalizeValues(value)
+    .map((item) => normalizeDisplayValue(field, item))
+    .filter(Boolean)
+    .filter((item) => {
+      if (seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+}
+
+function inferLegacyHomeSections(record = {}) {
+  const legacyStatuses = normalizeValues(record.statuses);
+  return legacyStatuses.includes("推荐") ? [HOME_SECTION_VALUES.BANNER] : [];
 }
 
 function firstImage(value) {
@@ -103,6 +147,9 @@ function normalizeCaseRecord(record = {}) {
   MULTI_FIELDS.forEach((field) => {
     normalized[field] = normalizeDisplayValues(field, record[field]);
   });
+  normalized.homeSections = [
+    ...new Set([...normalized.homeSections, ...inferLegacyHomeSections(record)]),
+  ];
 
   normalized.tags = [
     ...normalized.packageTypes,
@@ -170,12 +217,9 @@ function buildFallbackBanners(banners = [], cases = []) {
     .filter((banner) => banner.image)
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
-  if (normalizedBanners.length) return normalizedBanners;
-
-  return cases
+  const caseBanners = cases
     .filter((caseItem) => caseItem.coverImage)
-    .filter((caseItem) => caseItem.statuses.includes("推荐"))
-    .slice(0, 5)
+    .filter((caseItem) => (caseItem.homeSections || []).includes(HOME_SECTION_VALUES.BANNER))
     .map((caseItem) => ({
       id: caseItem.id,
       title: caseItem.title,
@@ -183,6 +227,16 @@ function buildFallbackBanners(banners = [], cases = []) {
       caseId: caseItem.caseId || caseItem.id,
       sortOrder: caseItem.sortOrder,
     }));
+  const seen = new Set();
+
+  return [...normalizedBanners, ...caseBanners]
+    .filter((banner) => {
+      const key = banner.caseId || banner.image || banner.id;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 5);
 }
 
 function formatJoined(values, fallback = "未选择") {
@@ -193,6 +247,8 @@ function formatJoined(values, fallback = "未选择") {
 
 module.exports = {
   DEFAULT_FILTERS,
+  HOME_SECTION_OPTIONS,
+  HOME_SECTION_VALUES,
   MULTI_FIELDS,
   normalizeValues,
   normalizeDisplayValue,

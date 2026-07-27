@@ -309,6 +309,51 @@ page {
   border-radius: 22rpx;
 }
 
+.profile-editor-header {
+  padding: 32rpx 28rpx 22rpx;
+  border-bottom: 2rpx solid #f3f3f3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14rpx;
+}
+
+.profile-editor-title {
+  color: #241d16;
+  font-size: 30rpx;
+  line-height: 1.35;
+  font-weight: 800;
+}
+
+.profile-field-row {
+  padding: 22rpx 28rpx;
+  border-bottom: 2rpx solid #f3f3f3;
+  background: #fff;
+}
+
+.profile-field-label {
+  color: #766b60;
+  font-size: 22rpx;
+  line-height: 1.4;
+}
+
+.profile-nickname-input {
+  margin-top: 10rpx;
+  height: 72rpx;
+  padding: 0 18rpx;
+  border: 2rpx solid #eadcca;
+  border-radius: 8rpx;
+  color: #241d16;
+  background: #fffdf9;
+  font-size: 26rpx;
+  line-height: 72rpx;
+  box-sizing: border-box;
+}
+
+.profile-input-placeholder {
+  color: #b3a89b;
+}
+
 .profile-option-row {
   min-height: 86rpx;
   padding: 14rpx 28rpx;
@@ -341,6 +386,23 @@ page {
   height: 42rpx;
   margin-top: 8rpx;
   border-radius: 6rpx;
+  display: block;
+}
+
+.profile-option-avatar-large {
+  width: 96rpx;
+  height: 96rpx;
+  margin-top: 0;
+  border-radius: 48rpx;
+  border: 2rpx solid #dfd8cf;
+  background: #f2f0eb;
+  position: relative;
+  overflow: hidden;
+}
+
+.profile-option-avatar-image {
+  width: 100%;
+  height: 100%;
   display: block;
 }
 
@@ -377,6 +439,35 @@ page {
 
 .profile-option-action {
   color: #241d16;
+  font-size: 29rpx;
+  line-height: 58rpx;
+  text-align: center;
+}
+
+.profile-wechat-avatar-button {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  font-weight: 400;
+}
+
+.profile-wechat-avatar-button::after {
+  border: none;
+}
+
+.profile-option-save {
+  color: #fff;
+  background: #241d16;
+  font-size: 29rpx;
+  font-weight: 800;
+  line-height: 58rpx;
+  text-align: center;
+}
+
+.profile-option-reset {
+  color: #9d2b22;
   font-size: 29rpx;
   line-height: 58rpx;
   text-align: center;

@@ -64,6 +64,12 @@ function loadHistoryService(recordsByCondition = {}) {
                 where(condition) {
                   whereCalls.push(condition);
                   return {
+                    orderBy() {
+                      return this;
+                    },
+                    skip() {
+                      return this;
+                    },
                     limit() {
                       return this;
                     },
@@ -129,7 +135,7 @@ function plain(value) {
 
 await test("recordCaseView uses simple indexed lookups before updating history", async () => {
   const { service, updates, whereCalls } = loadHistoryService({
-    [JSON.stringify({ caseId: "case_001" })]: [
+    [JSON.stringify({ _openid: "openid_1", caseId: "case_001" })]: [
       { _id: "history_1", viewCount: 2 },
     ],
   });
@@ -139,9 +145,9 @@ await test("recordCaseView uses simple indexed lookups before updating history",
     caseId: "case_001",
   });
 
-  assert.deepEqual(plain(whereCalls), [
-    { caseDocId: "doc_001" },
-    { caseId: "case_001" },
+  assert.deepEqual(plain(whereCalls.slice(0, 2)), [
+    { _openid: "openid_1", caseDocId: "doc_001" },
+    { _openid: "openid_1", caseId: "case_001" },
   ]);
   assert.equal(updates.length, 1);
   assert.equal(history._id, "history_1");

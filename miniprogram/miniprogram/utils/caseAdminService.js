@@ -54,26 +54,49 @@ async function getTempUrlMap(fileIds) {
   try {
     const responses = await Promise.all(
       chunkList(uniqueFileIds, TEMP_FILE_URL_BATCH_SIZE).map((fileList) =>
-        wx.cloud.getTempFileURL({ fileList })
+        callCaseAdmin("getCaseImageUrls", { fileIDs: fileList })
       )
     );
-    return responses.reduce((map, response) => {
-      (response.fileList || []).forEach((item) => {
-        map[item.fileID] = item.tempFileURL || item.fileID;
+    return responses.reduce((map, result) => {
+      const urls = result.urls || {};
+      Object.keys(urls).forEach((fileID) => {
+        map[fileID] = urls[fileID];
       });
       return map;
     }, {});
   } catch (error) {
-    console.warn("案例管理图片临时链接获取失败，将尝试直接使用 cloudID", error);
-    return {};
+    console.warn("案例管理图片临时链接云函数获取失败，将尝试客户端兼容方式", error);
+    if (!wx.cloud.getTempFileURL) return {};
+    try {
+      const responses = await Promise.all(
+        chunkList(uniqueFileIds, TEMP_FILE_URL_BATCH_SIZE).map((fileList) =>
+          wx.cloud.getTempFileURL({ fileList })
+        )
+      );
+      return responses.reduce((map, response) => {
+        (response.fileList || []).forEach((item) => {
+          if (item && item.fileID && item.tempFileURL) {
+            map[item.fileID] = item.tempFileURL;
+          }
+        });
+        return map;
+      }, {});
+    } catch (fallbackError) {
+      console.warn("案例管理图片临时链接客户端兼容方式失败，请确认 caseAdmin 云函数已部署", fallbackError);
+      return {};
+    }
   }
+}
+
+function resolveCaseCoverUrl(fileID, tempUrlMap = {}) {
+  return tempUrlMap[fileID] || (isCloudFileId(fileID) ? "" : fileID);
 }
 
 async function attachCaseCoverUrls(cases) {
   const tempUrlMap = await getTempUrlMap(cases.map((item) => item.coverImage));
   return cases.map((item) => ({
     ...item,
-    coverImageUrl: tempUrlMap[item.coverImage] || item.coverImage,
+    coverImageUrl: resolveCaseCoverUrl(item.coverImage, tempUrlMap),
   }));
 }
 
@@ -134,6 +157,12 @@ async function setCaseVisibility(id, isVisible) {
   return result;
 }
 
+async function deleteCaseAdmin(id) {
+  const result = await callCaseAdmin("deleteCase", { id });
+  markCaseDataChanged();
+  return result;
+}
+
 async function uploadCaseCoverImage(input, maybeCloudPath) {
   const filePath = typeof input === "object" && input ? input.filePath : input;
   const cloudPath = typeof input === "object" && input ? input.cloudPath : maybeCloudPath;
@@ -157,6 +186,7 @@ module.exports = {
   DEFAULT_PAGE_SIZE,
   checkCaseAdminAccess,
   createCaseAdmin,
+  deleteCaseAdmin,
   fetchCaseAdminDetail,
   fetchCaseAdminList,
   setCaseVisibility,

@@ -107,8 +107,22 @@ Page({
     this.setData({
       profileDraft,
     });
+  },
 
-    this.persistProfileDraft({ profileDraft });
+  onChooseWechatAvatar(event) {
+    const avatarUrl = event && event.detail && event.detail.avatarUrl;
+    if (!avatarUrl) return;
+    this.updateProfileDraftAvatar(avatarUrl);
+  },
+
+  onNicknameInput(event) {
+    const nickname = event && event.detail ? event.detail.value : "";
+    this.setData({
+      profileDraft: {
+        ...this.data.profileDraft,
+        nickname,
+      },
+    });
   },
 
   chooseProfileAvatarFromAlbum() {
@@ -149,6 +163,33 @@ Page({
         },
       });
     }
+  },
+
+  saveProfileDraft() {
+    this.persistProfileDraft({
+      close: true,
+      toast: true,
+    });
+  },
+
+  resetProfileInfo() {
+    if (wx.removeStorageSync) {
+      wx.removeStorageSync(PROFILE_STORAGE_KEY);
+    }
+
+    this.setData({
+      profileInfo: DEFAULT_PROFILE_INFO,
+      profileDraft: {
+        nickname: DEFAULT_PROFILE_INFO.nickname,
+        avatarUrl: DEFAULT_PROFILE_INFO.avatarUrl,
+      },
+      isProfileEditorVisible: false,
+    });
+
+    wx.showToast({
+      title: "已恢复默认资料",
+      icon: "none",
+    });
   },
 
   persistProfileDraft(options = {}) {

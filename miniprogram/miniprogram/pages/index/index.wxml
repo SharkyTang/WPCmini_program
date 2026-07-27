@@ -26,7 +26,7 @@
     <view class="story-card">
       <view class="story-title">品牌故事</view>
       <view class="story-text">
-        专注白酒包装设计与定制生产，把瓶标、酒盒、手提袋与外箱整合成完整品牌呈现。这里先沉淀企业介绍、服务优势和案例方向。
+        金亿诚包装科技专注酒类包装设计与定制生产，提供瓶标、酒瓶、酒盒、手提袋、外箱等一体化包装方案。通过真实案例展示，帮助客户快速寻找适合产品定位、价格带和使用场景的包装灵感。
       </view>
     </view>
 
@@ -35,8 +35,13 @@
     <block wx:else>
       <view class="section">
         <view class="section-head">
-          <view class="section-title">热门产品</view>
-          <view class="section-tip">精选案例</view>
+          <view class="section-title-group">
+            <view class="section-title">热门产品</view>
+            <view class="section-tip">精选案例</view>
+          </view>
+          <view class="section-more" bindtap="navigateToCategory" data-sort="popular">
+            查看更多 >
+          </view>
         </view>
         <view wx:if="{{popularCases.length}}" class="product-grid">
           <view
@@ -62,8 +67,13 @@
 
       <view class="section">
         <view class="section-head">
-          <view class="section-title">最新产品</view>
-          <view class="section-tip">近期更新</view>
+          <view class="section-title-group">
+            <view class="section-title">最新产品</view>
+            <view class="section-tip">近期更新</view>
+          </view>
+          <view class="section-more" bindtap="navigateToCategory" data-sort="latest">
+            查看更多 >
+          </view>
         </view>
         <view wx:if="{{latestCases.length}}" class="product-grid">
           <view

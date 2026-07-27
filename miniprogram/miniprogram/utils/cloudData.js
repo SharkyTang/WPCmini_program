@@ -6,6 +6,7 @@ const {
 
 const CASE_COLLECTION = "wine_packaging";
 const BANNER_COLLECTION = "home_banners";
+const IMAGE_URL_FUNCTION = "caseAdmin";
 const PAGE_SIZE = 20;
 const TEMP_FILE_URL_BATCH_SIZE = 50;
 
@@ -73,6 +74,45 @@ function chunkList(items, size) {
   return chunks;
 }
 
+async function callImageUrlFunction(action, fileIDs) {
+  if (!wx.cloud || !fileIDs.length) return {};
+
+  const response = await wx.cloud.callFunction({
+    name: IMAGE_URL_FUNCTION,
+    data: {
+      action,
+      fileIDs,
+    },
+  });
+  const result = (response && response.result) || {};
+  if (result.ok === false) {
+    throw new Error(result.message || "图片链接获取失败");
+  }
+  return result.urls || {};
+}
+
+async function getDirectTempUrlMap(fileIDs) {
+  if (!wx.cloud || !wx.cloud.getTempFileURL || !fileIDs.length) return {};
+
+  const responses = await Promise.all(
+    chunkList(fileIDs, TEMP_FILE_URL_BATCH_SIZE).map((fileList) =>
+      wx.cloud.getTempFileURL({ fileList })
+    )
+  );
+  return responses.reduce((map, response) => {
+    (response.fileList || []).forEach((item) => {
+      if (item && item.fileID && item.tempFileURL) {
+        map[item.fileID] = item.tempFileURL;
+      }
+    });
+    return map;
+  }, {});
+}
+
+function resolveImageUrl(fileID, tempUrlMap = {}) {
+  return tempUrlMap[fileID] || (isCloudFileId(fileID) ? "" : fileID);
+}
+
 function isStableCaseId(id) {
   return typeof id === "string" && id.indexOf("case_") === 0;
 }
@@ -96,19 +136,28 @@ async function getTempUrlMap(fileIds) {
   try {
     const responses = await Promise.all(
       chunkList(missingFileIds, TEMP_FILE_URL_BATCH_SIZE).map((fileList) =>
-        wx.cloud.getTempFileURL({ fileList })
+        callImageUrlFunction("getVisibleImageUrls", fileList)
       )
     );
-    return responses.reduce((map, response) => {
-      (response.fileList || []).forEach((item) => {
-        const url = item.tempFileURL || item.fileID;
-        tempFileUrlCache.set(item.fileID, url);
-        map[item.fileID] = url;
+    return responses.reduce((map, urlMap) => {
+      Object.keys(urlMap).forEach((fileID) => {
+        const url = urlMap[fileID];
+        tempFileUrlCache.set(fileID, url);
+        map[fileID] = url;
       });
       return map;
     }, tempUrlMap);
   } catch (error) {
-    console.warn("图片临时链接获取失败，将尝试直接使用 cloudID", error);
+    console.warn("图片临时链接云函数获取失败，将尝试客户端兼容方式", error);
+    try {
+      const fallbackMap = await getDirectTempUrlMap(missingFileIds);
+      Object.keys(fallbackMap).forEach((fileID) => {
+        tempFileUrlCache.set(fileID, fallbackMap[fileID]);
+        tempUrlMap[fileID] = fallbackMap[fileID];
+      });
+    } catch (fallbackError) {
+      console.warn("图片临时链接客户端兼容方式失败，请确认 caseAdmin 云函数已部署", fallbackError);
+    }
     return tempUrlMap;
   }
 }
@@ -117,7 +166,7 @@ async function attachCaseImageUrls(cases) {
   const tempUrlMap = await getTempUrlMap(cases.map((item) => item.coverImage));
   return cases.map((item) => ({
     ...item,
-    coverImageUrl: tempUrlMap[item.coverImage] || item.coverImage,
+    coverImageUrl: resolveImageUrl(item.coverImage, tempUrlMap),
   }));
 }
 
@@ -125,21 +174,24 @@ async function attachBannerImageUrls(banners) {
   const tempUrlMap = await getTempUrlMap(banners.map((item) => item.image));
   return banners.map((item) => ({
     ...item,
-    imageUrl: tempUrlMap[item.image] || item.image,
+    imageUrl: resolveImageUrl(item.image, tempUrlMap),
   }));
 }
 
 async function fetchVisibleCases(options = {}) {
+  const includeImageUrls = options.includeImageUrls !== false;
+
   if (!shouldForceRefresh(options) && visibleCasesCache) {
-    return copyList(visibleCasesCache);
+    const cachedCases = copyList(visibleCasesCache);
+    return includeImageUrls ? attachCaseImageUrls(cachedCases) : cachedCases;
   }
   const records = await fetchAll(CASE_COLLECTION, {
     where: { isVisible: true },
     orderField: "sortOrder",
   });
   const cases = records.map(normalizeCaseRecord);
-  visibleCasesCache = await attachCaseImageUrls(cases);
-  return copyList(visibleCasesCache);
+  visibleCasesCache = copyList(cases);
+  return includeImageUrls ? attachCaseImageUrls(cases) : copyList(cases);
 }
 
 async function fetchVisibleBanners(cases, options = {}) {
@@ -191,6 +243,7 @@ async function fetchCaseById(id) {
 module.exports = {
   CASE_COLLECTION,
   BANNER_COLLECTION,
+  attachCaseImageUrls,
   fetchVisibleCases,
   fetchVisibleBanners,
   fetchCaseById,

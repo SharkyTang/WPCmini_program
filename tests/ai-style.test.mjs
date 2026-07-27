@@ -53,7 +53,7 @@ await test("accepting AI suggestion only changes styles and AI review fields", (
     priceLevel: "基础款",
     crafts: ["烫金"],
     scenes: ["送礼"],
-    statuses: ["推荐"]
+    statuses: ["热门产品"]
   };
   const nextRecord = applyAiStyleSuggestion(record, {
     styles: ["国潮"],
@@ -68,7 +68,7 @@ await test("accepting AI suggestion only changes styles and AI review fields", (
   assert.equal(nextRecord.priceLevel, "基础款");
   assert.equal(Object.hasOwn(nextRecord, "crafts"), false);
   assert.deepEqual(nextRecord.scenes, ["送礼"]);
-  assert.deepEqual(nextRecord.statuses, ["推荐"]);
+  assert.deepEqual(nextRecord.statuses, ["热门产品"]);
   assert.equal(nextRecord.aiStyleReviewed, true);
 });
 

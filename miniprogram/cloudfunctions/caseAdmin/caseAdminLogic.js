@@ -1,8 +1,10 @@
 const CASE_COLLECTION = "wine_packaging";
+const BANNER_COLLECTION = "home_banners";
 const CASE_ADMIN_DEFAULT_SORT_ORDER = 9999;
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 50;
 const SEARCH_FETCH_LIMIT = 300;
+const IMAGE_URL_BATCH_SIZE = 50;
 const CASE_ID_PREFIX = "case_";
 const CASE_ID_PAD_LENGTH = 3;
 const CASE_ID_SEQUENCE_MAX = 999999;
@@ -11,9 +13,12 @@ const VALID_CASE_ADMIN_ACTIONS = [
   "checkAccess",
   "listCases",
   "getCase",
+  "getCaseImageUrls",
+  "getVisibleImageUrls",
   "createCase",
   "updateCase",
   "setCaseVisibility",
+  "deleteCase",
 ];
 
 const ALLOWED_CASE_FIELDS = [
@@ -26,6 +31,7 @@ const ALLOWED_CASE_FIELDS = [
   "priceLevel",
   "scenes",
   "statuses",
+  "homeSections",
   "sortOrder",
   "notes",
   "isVisible",
@@ -74,6 +80,20 @@ function valuesObject(value) {
 
 function isCloudFileId(value) {
   return trimText(value).startsWith("cloud://");
+}
+
+function normalizeCloudFileIds(value = [], limit = IMAGE_URL_BATCH_SIZE) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value
+    .map(trimText)
+    .filter(isCloudFileId)
+    .filter((fileID) => {
+      if (seen.has(fileID)) return false;
+      seen.add(fileID);
+      return true;
+    })
+    .slice(0, limit);
 }
 
 function normalizeSortOrder(value) {
@@ -224,6 +244,11 @@ function sanitizeCasePayload(input = {}, options = {}) {
   } else if (isCreate) {
     data.statuses = { values: [] };
   }
+  if (Object.prototype.hasOwnProperty.call(picked, "homeSections")) {
+    data.homeSections = valuesObject(picked.homeSections);
+  } else if (isCreate) {
+    data.homeSections = { values: [] };
+  }
   if (Object.prototype.hasOwnProperty.call(picked, "sortOrder") || isCreate) {
     data.sortOrder = isCreate
       ? getCreateSortOrder(picked.sortOrder, data.caseId, options)
@@ -233,7 +258,7 @@ function sanitizeCasePayload(input = {}, options = {}) {
     data.notes = trimText(picked.notes);
   }
   if (Object.prototype.hasOwnProperty.call(picked, "isVisible") || isCreate) {
-    data.isVisible = isCreate ? false : picked.isVisible === true;
+    data.isVisible = picked.isVisible === true;
   }
 
   data.keywords = buildCaseKeywords(data);
@@ -270,8 +295,10 @@ function filterCaseItems(items = [], options = {}) {
 
 module.exports = {
   ALLOWED_CASE_FIELDS,
+  BANNER_COLLECTION,
   CASE_ADMIN_DEFAULT_SORT_ORDER,
   CASE_COLLECTION,
+  IMAGE_URL_BATCH_SIZE,
   PAGE_SIZE_DEFAULT,
   PAGE_SIZE_MAX,
   SEARCH_FETCH_LIMIT,
@@ -285,6 +312,7 @@ module.exports = {
   getCaseIdNumber,
   isAdminOpenid,
   isCloudFileId,
+  normalizeCloudFileIds,
   normalizePage,
   normalizePageSize,
   normalizeVisibilityFilter,

@@ -1,11 +1,14 @@
 const cloud = require("wx-server-sdk");
 const {
+  BANNER_COLLECTION,
   CASE_COLLECTION,
+  IMAGE_URL_BATCH_SIZE,
   SEARCH_FETCH_LIMIT,
   filterCaseItems,
   generateSequentialCaseId,
   getCaseIdNumber,
   isAdminOpenid,
+  normalizeCloudFileIds,
   normalizePage,
   normalizePageSize,
   normalizeVisibilityFilter,
@@ -18,6 +21,7 @@ cloud.init({
 });
 
 const db = cloud.database();
+const _ = db.command;
 
 function ok(data = {}) {
   return {
@@ -80,6 +84,15 @@ async function getCase(event) {
   return ok({ item: response.data || null });
 }
 
+async function getCaseById(id) {
+  try {
+    const response = await db.collection(CASE_COLLECTION).doc(id).get();
+    return response.data || null;
+  } catch (error) {
+    return null;
+  }
+}
+
 async function getCreateCaseDefaults() {
   const response = await db
     .collection(CASE_COLLECTION)
@@ -91,6 +104,80 @@ async function getCreateCaseDefaults() {
     defaultCaseId,
     defaultSortOrder: getCaseIdNumber(defaultCaseId),
   };
+}
+
+function buildFileIdSet(records = [], field) {
+  return new Set(
+    records
+      .map((item) => trimText(item && item[field]))
+      .filter((fileID) => fileID.indexOf("cloud://") === 0)
+  );
+}
+
+async function fetchCaseCoverFileIdSet(fileIDs = [], where = {}) {
+  const normalizedFileIDs = normalizeCloudFileIds(fileIDs);
+  if (!normalizedFileIDs.length) return new Set();
+  const query = db.collection(CASE_COLLECTION).where({
+    ...where,
+    coverImage: _.in(normalizedFileIDs),
+  });
+  const response = await query
+    .field({ coverImage: true })
+    .limit(IMAGE_URL_BATCH_SIZE)
+    .get();
+  return buildFileIdSet(response.data || [], "coverImage");
+}
+
+async function fetchVisibleBannerFileIdSet(fileIDs = []) {
+  const normalizedFileIDs = normalizeCloudFileIds(fileIDs);
+  if (!normalizedFileIDs.length) return new Set();
+  const response = await db
+    .collection(BANNER_COLLECTION)
+    .where({
+      isVisible: true,
+      image: _.in(normalizedFileIDs),
+    })
+    .field({ image: true })
+    .limit(IMAGE_URL_BATCH_SIZE)
+    .get();
+  return buildFileIdSet(response.data || [], "image");
+}
+
+async function getTempUrlMap(fileIDs = []) {
+  if (!fileIDs.length) return {};
+  const response = await cloud.getTempFileURL({
+    fileList: fileIDs.slice(0, IMAGE_URL_BATCH_SIZE),
+  });
+  return (response.fileList || []).reduce((map, item) => {
+    if (item && item.fileID && item.tempFileURL) {
+      map[item.fileID] = item.tempFileURL;
+    }
+    return map;
+  }, {});
+}
+
+async function getVisibleImageUrls(event) {
+  const fileIDs = normalizeCloudFileIds(event.fileIDs || event.fileIds);
+  if (!fileIDs.length) return ok({ urls: {} });
+
+  const [caseFileIds, bannerFileIds] = await Promise.all([
+    fetchCaseCoverFileIdSet(fileIDs, { isVisible: true }),
+    fetchVisibleBannerFileIdSet(fileIDs),
+  ]);
+  const allowedFileIds = new Set([...caseFileIds, ...bannerFileIds]);
+  const allowedRequestedFileIds = fileIDs.filter((fileID) => allowedFileIds.has(fileID));
+  const urls = await getTempUrlMap(allowedRequestedFileIds);
+  return ok({ urls });
+}
+
+async function getCaseImageUrls(event) {
+  const fileIDs = normalizeCloudFileIds(event.fileIDs || event.fileIds);
+  if (!fileIDs.length) return ok({ urls: {} });
+
+  const caseFileIds = await fetchCaseCoverFileIdSet(fileIDs);
+  const allowedRequestedFileIds = fileIDs.filter((fileID) => caseFileIds.has(fileID));
+  const urls = await getTempUrlMap(allowedRequestedFileIds);
+  return ok({ urls });
 }
 
 async function createCase(event, openid) {
@@ -156,6 +243,61 @@ async function setCaseVisibility(event, openid) {
   });
 }
 
+async function isCaseCoverImageReferenced(fileID) {
+  if (!fileID || fileID.indexOf("cloud://") !== 0) return false;
+
+  const [caseResponse, bannerResponse] = await Promise.all([
+    db
+      .collection(CASE_COLLECTION)
+      .where({ coverImage: fileID })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
+      .collection(BANNER_COLLECTION)
+      .where({ image: fileID })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+  ]);
+
+  return Boolean(
+    (caseResponse.data || []).length ||
+      (bannerResponse.data || []).length
+  );
+}
+
+async function deleteCase(event) {
+  const id = trimText(event.id);
+  if (!id) return fail("INVALID_ID", "缺少案例 ID");
+
+  const item = await getCaseById(id);
+  if (!item) return fail("CASE_NOT_FOUND", "案例不存在或已删除");
+
+  const coverImage = trimText(item.coverImage);
+  await db.collection(CASE_COLLECTION).doc(id).remove();
+
+  const deletedFileIds = [];
+  if (coverImage.indexOf("cloud://") === 0) {
+    const isReferenced = await isCaseCoverImageReferenced(coverImage);
+    if (!isReferenced) {
+      try {
+        await cloud.deleteFile({
+          fileList: [coverImage],
+        });
+        deletedFileIds.push(coverImage);
+      } catch (error) {
+        console.warn("case cover file delete failed", error);
+      }
+    }
+  }
+
+  return ok({
+    id,
+    deletedFileIds,
+  });
+}
+
 exports.main = async (event = {}) => {
   const { OPENID } = cloud.getWXContext();
   const action = trimText(event.action);
@@ -165,6 +307,10 @@ exports.main = async (event = {}) => {
     return ok({ isAdmin: admin });
   }
 
+  if (action === "getVisibleImageUrls") {
+    return getVisibleImageUrls(event);
+  }
+
   if (!admin) {
     return fail("FORBIDDEN", "无权限管理案例");
   }
@@ -172,9 +318,11 @@ exports.main = async (event = {}) => {
   try {
     if (action === "listCases") return listCases(event);
     if (action === "getCase") return getCase(event);
+    if (action === "getCaseImageUrls") return getCaseImageUrls(event);
     if (action === "createCase") return createCase(event, OPENID);
     if (action === "updateCase") return updateCase(event, OPENID);
     if (action === "setCaseVisibility") return setCaseVisibility(event, OPENID);
+    if (action === "deleteCase") return deleteCase(event);
     return fail("UNKNOWN_ACTION", "未知案例管理操作");
   } catch (error) {
     console.error("caseAdmin error", error);

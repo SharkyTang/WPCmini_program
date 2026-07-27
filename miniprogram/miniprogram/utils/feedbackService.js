@@ -1,14 +1,7 @@
 const { buildFeedbackRecord, validateFeedbackDraft } = require("./feedbackData");
-const { getCachedOpenId } = require("./userService");
+const { callUserData } = require("./userDataService");
 
 const FEEDBACK_COLLECTION = "feedback";
-
-function getDb() {
-  if (!wx.cloud) {
-    throw new Error("当前基础库不支持云开发");
-  }
-  return wx.cloud.database();
-}
 
 function safeCall(fn, fallback) {
   try {
@@ -45,24 +38,23 @@ async function submitFeedback(draft = {}, context = {}) {
     throw new Error(validation.message);
   }
 
-  const db = getDb();
   const record = buildFeedbackRecord(validation.data, {
     sourcePage: context.sourcePage || "",
     route: context.route || getCurrentRoute(),
-    openid: getCachedOpenId() || "",
     appVersion: context.appVersion || "v2.6",
     systemInfo: context.systemInfo || getSystemInfo(),
   });
 
-  const response = await db.collection(FEEDBACK_COLLECTION).add({
-    data: {
-      ...record,
-      createdAt: db.serverDate(),
-    },
+  const response = await callUserData("submitFeedback", {
+    feedback: validation.data,
+    sourcePage: record.sourcePage,
+    route: record.route,
+    appVersion: record.appVersion,
+    systemInfo: record.systemInfo,
   });
 
   return {
-    id: response._id || "",
+    id: response.id || "",
     record,
   };
 }

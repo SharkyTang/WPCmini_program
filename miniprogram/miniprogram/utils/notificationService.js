@@ -5,6 +5,7 @@ const {
   toggleDisabledType,
 } = require("./notificationData");
 const { ensureWxIdentity, getCachedOpenId } = require("./userService");
+const { callUserData } = require("./userDataService");
 
 const APP_NOTIFICATION_COLLECTION = "app_notifications";
 const CUSTOMER_NOTIFICATION_COLLECTION = "customer_notifications";
@@ -56,15 +57,8 @@ async function fetchCustomerNotifications(options = {}) {
   if (!openid) return [];
 
   try {
-    const response = await getCollection(CUSTOMER_NOTIFICATION_COLLECTION)
-      .where({
-        targetOpenId: openid,
-        isVisible: true,
-      })
-      .orderBy("createdAt", "desc")
-      .limit(100)
-      .get();
-    return normalizeNotifications(response.data || [], "customer_reply");
+    const result = await callUserData("fetchCustomerNotifications");
+    return normalizeNotifications(result.items || [], "customer_reply");
   } catch (error) {
     if (shouldIgnoreMissingCollection(error)) {
       console.warn("客服回复通知集合未创建", error);
@@ -92,13 +86,10 @@ async function fetchNotificationPreferences(options = {}) {
   }
 
   try {
-    const response = await getCollection(NOTIFICATION_PREFERENCE_COLLECTION)
-      .limit(1)
-      .get();
-    const preference = (response.data || [])[0] || {};
+    const preference = await callUserData("fetchNotificationPreferences");
     return {
       hasIdentity: true,
-      preferenceId: preference._id || preference.id || "",
+      preferenceId: preference.preferenceId || "",
       disabledTypes: normalizeDisabledTypes(preference.disabledTypes || []),
     };
   } catch (error) {
@@ -115,25 +106,10 @@ async function fetchNotificationPreferences(options = {}) {
 }
 
 async function saveNotificationPreferences(preferenceId, disabledTypes) {
-  const db = getDb();
-  const data = {
+  const result = await callUserData("saveNotificationPreferences", {
     disabledTypes: normalizeDisabledTypes(disabledTypes),
-    updatedAt: db.serverDate(),
-  };
-
-  if (preferenceId) {
-    await getCollection(NOTIFICATION_PREFERENCE_COLLECTION)
-      .doc(preferenceId)
-      .update({
-        data,
-      });
-    return preferenceId;
-  }
-
-  const response = await getCollection(NOTIFICATION_PREFERENCE_COLLECTION).add({
-    data,
   });
-  return response._id || "";
+  return result.preferenceId || preferenceId || "";
 }
 
 async function toggleNotificationPreference(type) {

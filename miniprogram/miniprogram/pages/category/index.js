@@ -18,8 +18,10 @@ const FILTER_TITLE_OVERRIDES = {
 const FILTER_KEYS = ["wineType", "packageTypes", "styles", "priceLevel", "scenes"];
 const SORT_OPTIONS = [
   { key: "default", title: "默认排序" },
-  { key: "latest", title: "最新优先" },
+  { key: "latest", title: "最近上新" },
+  { key: "popular", title: "热门产品" },
 ];
+const PENDING_CATEGORY_SORT_KEY = "pendingCategorySort";
 const PANEL_SUBTITLES = {
   sort: "选择案例排序方式",
   wineType: "按酒类查看产品与案例",
@@ -102,6 +104,42 @@ function buildCaseCards(cases) {
     ...caseItem,
     tagSummary: summarizeTags(caseItem),
   }));
+}
+
+function isValidSortKey(sortKey) {
+  return SORT_OPTIONS.some((option) => option.key === sortKey);
+}
+
+function normalizeInitialSort(sortKey) {
+  return isValidSortKey(sortKey) ? sortKey : "default";
+}
+
+function takePendingCategorySort() {
+  let sortKey = "";
+  if (typeof getApp === "function") {
+    const app = getApp();
+    if (app && app.globalData && app.globalData[PENDING_CATEGORY_SORT_KEY]) {
+      sortKey = app.globalData[PENDING_CATEGORY_SORT_KEY];
+      app.globalData[PENDING_CATEGORY_SORT_KEY] = "";
+    }
+  }
+  if (!sortKey && wx.getStorageSync) {
+    sortKey = wx.getStorageSync(PENDING_CATEGORY_SORT_KEY) || "";
+  }
+  if (wx.removeStorageSync) {
+    wx.removeStorageSync(PENDING_CATEGORY_SORT_KEY);
+  }
+  return sortKey;
+}
+
+function isPopularCase(caseItem) {
+  const statuses = caseItem.statuses || [];
+  return statuses.includes("热门产品");
+}
+
+function isLatestCase(caseItem) {
+  const statuses = caseItem.statuses || [];
+  return statuses.includes("最新产品");
 }
 
 function resolveFocusedValue(filter, focusedFilterValue) {
@@ -192,12 +230,23 @@ Page({
     caseDataVersion: 0,
   },
 
-  onLoad() {
+  onLoad(options = {}) {
+    const initialSort = normalizeInitialSort(options.sort || takePendingCategorySort());
+    this.applySortFromEntry(initialSort);
     this.refreshPanels();
-    this.loadData();
+    return this.loadData();
   },
 
   onShow() {
+    const pendingSort = normalizeInitialSort(takePendingCategorySort());
+    if (pendingSort !== "default") {
+      this.applySortFromEntry(pendingSort);
+      if (this.data.allCases.length) {
+        this.applyFilters();
+      } else {
+        this.refreshPanels();
+      }
+    }
     if (!this.data.loading && shouldRefreshCaseData(this.data.caseDataVersion)) {
       this.loadData({ silent: true });
     }
@@ -252,6 +301,15 @@ Page({
     });
   },
 
+  applySortFromEntry(sortKey) {
+    if (sortKey === "default") return;
+    this.setData({
+      selectedSort: sortKey,
+      activeNavKey: "sort",
+      expandedNavKey: "sort",
+    });
+  },
+
   applyFilters() {
     const selectedFilters = buildSelectedFilters(this.data.filters);
     const filteredCases = filterCases(this.data.allCases, {
@@ -259,7 +317,11 @@ Page({
       selectedFilters,
     });
     const sortedCases =
-      this.data.selectedSort === "latest" ? [...filteredCases].reverse() : filteredCases;
+      this.data.selectedSort === "latest"
+        ? filteredCases.filter(isLatestCase).sort((a, b) => b.sortOrder - a.sortOrder)
+        : this.data.selectedSort === "popular"
+          ? filteredCases.filter(isPopularCase)
+          : filteredCases;
 
     this.setData({
       filteredCases: buildCaseCards(sortedCases),

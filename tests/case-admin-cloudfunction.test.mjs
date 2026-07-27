@@ -19,6 +19,7 @@ const {
   getAdminOpenidsFromEnv,
   getCaseIdNumber,
   isAdminOpenid,
+  normalizeCloudFileIds,
   pickAllowedCaseFields,
   sanitizeCasePayload,
 } = logic;
@@ -45,29 +46,43 @@ test("checks admin openid from comma separated env value", () => {
 
 test("declares supported case admin actions", () => {
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("checkAccess"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getCaseImageUrls"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getVisibleImageUrls"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("createCase"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("setCaseVisibility"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("deleteCase"), true);
+});
+
+test("normalizes cloud file ids for image URL exchange", () => {
+  assert.deepEqual(
+    plain(normalizeCloudFileIds([" cloud://env/a.jpg ", "/tmp/a.jpg", "cloud://env/a.jpg", ""])),
+    ["cloud://env/a.jpg"]
+  );
+  assert.equal(normalizeCloudFileIds(Array.from({ length: 55 }, (_, index) => `cloud://env/${index}`)).length, 50);
 });
 
 test("keeps only writable case fields", () => {
   const picked = pickAllowedCaseFields({
     title: "案例",
     coverImage: "cloud://cloud1/file.jpg",
+    homeSections: ["popular"],
     _openid: "hacker",
     createdAt: "bad",
     updatedByOpenid: "bad",
   });
 
-  assert.deepEqual(plain(Object.keys(picked)), ["title", "coverImage"]);
+  assert.deepEqual(plain(Object.keys(picked)), ["title", "coverImage", "homeSections"]);
   assert.equal(ALLOWED_CASE_FIELDS.includes("_openid"), false);
+  assert.equal(ALLOWED_CASE_FIELDS.includes("homeSections"), true);
 });
 
-test("sanitizes create payload with defaults", () => {
+test("sanitizes create payload with defaults and preserves visible flag", () => {
   const result = sanitizeCasePayload(
     {
       title: "  新案例  ",
       coverImage: "cloud://cloud1/file.jpg",
       packageTypes: { values: ["礼盒", "礼盒"] },
+      homeSections: ["latest"],
       isVisible: true,
     },
     { isCreate: true, defaultCaseId: "case_091" }
@@ -76,10 +91,37 @@ test("sanitizes create payload with defaults", () => {
   assert.equal(result.valid, true);
   assert.equal(result.data.title, "新案例");
   assert.equal(result.data.caseId, "case_091");
-  assert.equal(result.data.isVisible, false);
+  assert.equal(result.data.isVisible, true);
   assert.equal(result.data.sortOrder, 91);
   assert.deepEqual(plain(result.data.packageTypes), { values: ["礼盒"] });
+  assert.deepEqual(plain(result.data.homeSections), { values: ["latest"] });
   assert.deepEqual(plain(result.data.keywords.values), ["新案例", "case_091", "白酒", "礼盒"]);
+});
+
+test("new cases stay hidden unless visible flag is explicitly enabled", () => {
+  const omitted = sanitizeCasePayload(
+    {
+      title: "新案例",
+      coverImage: "cloud://cloud1/file.jpg",
+      packageTypes: ["礼盒"],
+    },
+    { isCreate: true, defaultCaseId: "case_091" }
+  );
+  const disabled = sanitizeCasePayload(
+    {
+      title: "新案例",
+      coverImage: "cloud://cloud1/file.jpg",
+      packageTypes: ["礼盒"],
+      isVisible: false,
+    },
+    { isCreate: true, defaultCaseId: "case_091" }
+  );
+
+  assert.equal(omitted.valid, true);
+  assert.equal(omitted.data.isVisible, false);
+  assert.deepEqual(plain(omitted.data.homeSections), { values: [] });
+  assert.equal(disabled.valid, true);
+  assert.equal(disabled.data.isVisible, false);
 });
 
 test("keeps manual sort order when creating cases", () => {

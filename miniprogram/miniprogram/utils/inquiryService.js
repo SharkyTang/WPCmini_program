@@ -3,14 +3,7 @@ const {
   buildInquiryRecord,
   validateInquiryDraft,
 } = require("./inquiryData");
-const { getCachedOpenId } = require("./userService");
-
-function getDb() {
-  if (!wx.cloud || !wx.cloud.database) {
-    throw new Error("CloudBase 数据库不可用");
-  }
-  return wx.cloud.database();
-}
+const { callUserData } = require("./userDataService");
 
 function safeCall(fn, fallback) {
   try {
@@ -47,25 +40,25 @@ async function submitInquiry(draft, context = {}) {
     throw error;
   }
 
-  const db = getDb();
   const record = buildInquiryRecord(validation.data, {
     source: context.source,
     sourcePage: context.sourcePage,
     route: context.route || getCurrentRoute(),
-    openid: context.openid || getCachedOpenId() || "",
     appVersion: context.appVersion || "v2.8",
     systemInfo: context.systemInfo || getSystemInfo(),
   });
 
-  const response = await db.collection(INQUIRY_COLLECTION).add({
-    data: {
-      ...record,
-      createdAt: db.serverDate(),
-    },
+  const response = await callUserData("submitInquiry", {
+    inquiry: validation.data,
+    source: record.source,
+    sourcePage: record.sourcePage,
+    route: record.route,
+    appVersion: record.appVersion,
+    systemInfo: record.systemInfo,
   });
 
   return {
-    id: response && (response._id || response.id),
+    id: response.id || "",
     record,
   };
 }

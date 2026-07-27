@@ -118,7 +118,7 @@ function plain(value) {
 
 await test("fetchFavoriteForCase uses simple indexed lookups instead of an OR query", async () => {
   const { service, whereCalls } = loadFavoriteService({
-    [JSON.stringify({ caseId: "case_001" })]: [{ _id: "fav_1" }],
+    [JSON.stringify({ _openid: "openid_1", caseId: "case_001" })]: [{ _id: "fav_1" }],
   });
 
   const favorite = await service.fetchFavoriteForCase({
@@ -127,8 +127,8 @@ await test("fetchFavoriteForCase uses simple indexed lookups instead of an OR qu
   });
 
   assert.deepEqual(plain(whereCalls), [
-    { caseDocId: "doc_001" },
-    { caseId: "case_001" },
+    { _openid: "openid_1", caseDocId: "doc_001" },
+    { _openid: "openid_1", caseId: "case_001" },
   ]);
   assert.deepEqual(plain(favorite), { _id: "fav_1" });
 });

@@ -1,4 +1,5 @@
 const {
+  attachCaseImageUrls,
   fetchVisibleCases,
   fetchVisibleBanners,
 } = require("../../utils/cloudData");
@@ -6,6 +7,9 @@ const {
   getCaseDataVersion,
   shouldRefreshCaseData,
 } = require("../../utils/caseRefresh");
+const { HOME_SECTION_VALUES } = require("../../utils/caseData");
+
+const PENDING_CATEGORY_SORT_KEY = "pendingCategorySort";
 
 function summarizeTags(caseItem) {
   return [
@@ -27,17 +31,36 @@ function buildProductCard(caseItem) {
 
 function buildHomeSections(cases) {
   const visibleCases = cases.filter((caseItem) => caseItem.isVisible);
-  const featuredCases = visibleCases.filter(
-    (caseItem) =>
-      (caseItem.statuses || []).includes("热门") ||
-      (caseItem.statuses || []).includes("推荐")
+  const popularSource = visibleCases.filter((caseItem) =>
+    (caseItem.homeSections || []).includes(HOME_SECTION_VALUES.POPULAR)
   );
-  const popularSource = featuredCases.length ? featuredCases : visibleCases;
-  const latestSource = [...visibleCases].sort((a, b) => b.sortOrder - a.sortOrder);
+  const latestSource = visibleCases
+    .filter((caseItem) => (caseItem.homeSections || []).includes(HOME_SECTION_VALUES.LATEST))
+    .sort((a, b) => b.sortOrder - a.sortOrder);
 
   return {
     popularCases: popularSource.slice(0, 4).map(buildProductCard),
-    latestCases: latestSource.slice(0, 4).map(buildProductCard),
+    latestCases: latestSource.slice(0, 6).map(buildProductCard),
+  };
+}
+
+async function attachHomeSectionImages(sections) {
+  const cards = [...sections.popularCases, ...sections.latestCases];
+  const cardsWithImages = await attachCaseImageUrls(cards);
+  const imageById = cardsWithImages.reduce((map, card) => {
+    map[card.id] = card.coverImageUrl;
+    return map;
+  }, {});
+
+  return {
+    popularCases: sections.popularCases.map((card) => ({
+      ...card,
+      coverImageUrl: imageById[card.id] || "",
+    })),
+    latestCases: sections.latestCases.map((card) => ({
+      ...card,
+      coverImageUrl: imageById[card.id] || "",
+    })),
   };
 }
 
@@ -79,9 +102,11 @@ Page({
     }
 
     try {
-      const cases = await fetchVisibleCases();
+      const cases = await fetchVisibleCases({ includeImageUrls: false });
       const banners = await fetchVisibleBanners(cases);
-      const { popularCases, latestCases } = buildHomeSections(cases);
+      const { popularCases, latestCases } = await attachHomeSectionImages(
+        buildHomeSections(cases)
+      );
 
       this.setData({
         allCases: cases,
@@ -105,6 +130,18 @@ Page({
     if (!id) return;
     wx.navigateTo({
       url: `/pages/detail/index?id=${encodeURIComponent(id)}`,
+    });
+  },
+
+  navigateToCategory(event) {
+    const sort = event.currentTarget.dataset.sort;
+    const app = typeof getApp === "function" ? getApp() : null;
+    if (app && app.globalData) {
+      app.globalData[PENDING_CATEGORY_SORT_KEY] = sort || "";
+    }
+    wx.setStorageSync(PENDING_CATEGORY_SORT_KEY, sort || "");
+    wx.switchTab({
+      url: "/pages/category/index",
     });
   },
 

@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 const DEFAULT_ENV_ID = "cloud1-d3gznsms746425a42";
 const DEFAULT_COLLECTION = "wine_packaging";
 const DEFAULT_STORAGE_PREFIX = "wine-packaging/cases";
-const MULTI_FIELDS = ["packageTypes", "styles", "scenes", "statuses", "keywords"];
+const MULTI_FIELDS = ["packageTypes", "styles", "scenes", "statuses", "homeSections", "keywords"];
 
 function toArray(value) {
   if (!value) return [];
