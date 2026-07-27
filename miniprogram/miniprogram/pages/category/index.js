@@ -3,7 +3,7 @@ const {
   filterCases,
   selectedFilterCount,
 } = require("../../utils/caseData");
-const { fetchVisibleCases } = require("../../utils/cloudData");
+const { attachCaseImageUrls, fetchVisibleCases, refreshImageUrl } = require("../../utils/cloudData");
 const {
   getCaseDataVersion,
   shouldRefreshCaseData,
@@ -22,6 +22,7 @@ const SORT_OPTIONS = [
   { key: "popular", title: "热门产品" },
 ];
 const PENDING_CATEGORY_SORT_KEY = "pendingCategorySort";
+const CARD_PAGE_SIZE = 24;
 const PANEL_SUBTITLES = {
   sort: "选择案例排序方式",
   wineType: "按酒类查看产品与案例",
@@ -221,6 +222,10 @@ Page({
     expandedNavKey: "packageTypes",
     allCases: [],
     filteredCases: [],
+    visibleCards: [],
+    displayLimit: CARD_PAGE_SIZE,
+    isLoadingMore: false,
+    imageRequestVersion: 0,
     filters: createFilters(),
     navItems: [],
     activePanel: null,
@@ -269,7 +274,7 @@ Page({
     }
 
     try {
-      const cases = await fetchVisibleCases();
+      const cases = await fetchVisibleCases({ includeImageUrls: false });
       this.setData({
         allCases: cases,
         caseDataVersion: getCaseDataVersion(),
@@ -325,10 +330,59 @@ Page({
 
     this.setData({
       filteredCases: buildCaseCards(sortedCases),
+      displayLimit: CARD_PAGE_SIZE,
       selectedPills: buildSelectedPills(this.data.filters),
       selectedCount: selectedFilterCount(selectedFilters),
     });
     this.refreshPanels();
+    this.refreshVisibleCards();
+  },
+
+  async refreshVisibleCards() {
+    const requestVersion = this.data.imageRequestVersion + 1;
+    const sourceCards = this.data.filteredCases.slice(0, this.data.displayLimit);
+    this.setData({ imageRequestVersion: requestVersion, isLoadingMore: true });
+    try {
+      const visibleCards = await attachCaseImageUrls(sourceCards, { preferThumbnail: true });
+      if (this.data.imageRequestVersion !== requestVersion) return;
+      this.setData({ visibleCards, isLoadingMore: false });
+    } catch (error) {
+      console.warn("分类图片链接读取失败", error);
+      if (this.data.imageRequestVersion === requestVersion) {
+        this.setData({
+          visibleCards: sourceCards.map((item) => ({ ...item, coverImageUrl: "", imageLoadState: "failed" })),
+          isLoadingMore: false,
+        });
+      }
+    }
+  },
+
+  loadMore() {
+    if (this.data.isLoadingMore || this.data.visibleCards.length >= this.data.filteredCases.length) return;
+    this.setData({ displayLimit: this.data.displayLimit + CARD_PAGE_SIZE });
+    this.refreshVisibleCards();
+  },
+
+  async retryCardImage(event) {
+    const id = event.currentTarget.dataset.id;
+    const card = this.data.visibleCards.find((item) => item.id === id);
+    if (!card || !card.imageFileId) return;
+    const retryCount = Number(card.imageRetryCount || 0);
+    const manualRetry = event.currentTarget.dataset.manual === true;
+    if (retryCount >= 1 && !manualRetry) return;
+    console.warn("案例图片加载失败", { caseId: card.id, fileId: card.imageFileId, error: event.detail && event.detail.errMsg });
+    try {
+      const coverImageUrl = await refreshImageUrl(card.imageFileId);
+      const visibleCards = this.data.visibleCards.map((item) => item.id === id
+        ? { ...item, coverImageUrl, imageRetryCount: manualRetry ? 0 : retryCount + 1, imageLoadState: coverImageUrl ? "retrying" : "failed" }
+        : item);
+      this.setData({ visibleCards });
+    } catch (error) {
+      const visibleCards = this.data.visibleCards.map((item) => item.id === id
+        ? { ...item, coverImageUrl: "", imageRetryCount: retryCount + 1, imageLoadState: "failed" }
+        : item);
+      this.setData({ visibleCards });
+    }
   },
 
   onSearchInput(event) {

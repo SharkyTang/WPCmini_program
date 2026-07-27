@@ -13,10 +13,10 @@
     </view>
   </view>
 
-  <view wx:if="{{needIdentity}}" class="state-card">
-    <view class="state-title">使用微信身份查看收藏</view>
-    <view class="state-copy">收藏会保存到你的微信身份下，换设备后也能继续查看。</view>
-    <view class="state-button" bindtap="loginAndLoad">使用微信身份</view>
+  <view wx:if="{{profileBlocked}}" class="state-card">
+    <view class="state-title">完善个人资料后可查看收藏</view>
+    <view class="state-copy">资料会用于保存你的收藏，并在换设备后继续查看。</view>
+    <view class="state-button" bindtap="ensureProfileAndLoad">去完善资料</view>
   </view>
 
   <view wx:elif="{{loading}}" class="state-card">
@@ -62,6 +62,7 @@
           class="case-image"
           src="{{item.imageUrl}}"
           mode="aspectFill"
+          lazy-load
         ></image>
         <view wx:else class="case-placeholder">暂无图片</view>
         <view class="case-title">{{item.title}}</view>

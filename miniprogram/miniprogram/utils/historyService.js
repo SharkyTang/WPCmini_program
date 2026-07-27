@@ -5,7 +5,7 @@ const {
   mergeHistoryWithCases,
   normalizeSelectedIds,
 } = require("./historyData");
-const { ensureWxIdentity, getCachedOpenId } = require("./userService");
+const { ensureProfileIdentity, getCachedOpenId } = require("./userService");
 
 const HISTORY_COLLECTION = "browse_history";
 const HISTORY_LIMIT = 50;
@@ -38,11 +38,28 @@ function buildHistoryLookupConditions(caseItem, openid) {
   return conditions;
 }
 
+function isCaseNotFoundError(error) {
+  return Boolean(error && error.code === "CASE_NOT_FOUND");
+}
+
+async function ensureIdentityForHistory() {
+  try {
+    const identity = await ensureProfileIdentity({
+      redirectToSetup: false,
+      showError: false,
+    });
+    return identity.ready ? identity.openid : "";
+  } catch (error) {
+    console.warn("浏览记录身份恢复失败", error);
+    return "";
+  }
+}
+
 async function removeHistoryRecords(historyIds) {
   const ids = normalizeSelectedIds(historyIds);
   if (!ids.length) return 0;
 
-  const openid = getCachedOpenId() || await ensureWxIdentity({ silent: true });
+  const openid = await ensureIdentityForHistory();
   if (!openid) return 0;
 
   const results = await Promise.all(ids.map(async (id) => {
@@ -89,14 +106,12 @@ function trimHistoryInBackground(openid) {
 async function recordCaseView(caseItem) {
   if (!caseItem) return null;
 
-  let openid = getCachedOpenId();
-  if (!openid) {
-    try {
-      openid = await ensureWxIdentity({ silent: true });
-    } catch (error) {
-      console.warn("静默记录浏览失败：未获取微信身份", error);
-      return null;
-    }
+  let openid = "";
+  try {
+    openid = await ensureIdentityForHistory();
+  } catch (error) {
+    console.warn("静默记录浏览失败：未获取微信身份", error);
+    return null;
   }
   if (!openid) return null;
 
@@ -149,7 +164,7 @@ async function recordCaseView(caseItem) {
 }
 
 async function clearHistory() {
-  const openid = getCachedOpenId() || await ensureWxIdentity({ silent: true });
+  const openid = await ensureIdentityForHistory();
   if (!openid) return 0;
 
   let removedCount = 0;
@@ -170,7 +185,7 @@ async function clearHistory() {
 }
 
 async function fetchHistoryCases() {
-  const openid = getCachedOpenId() || await ensureWxIdentity({ silent: true });
+  const openid = await ensureIdentityForHistory();
   if (!openid) return [];
 
   const response = await getHistoryCollection()
@@ -179,18 +194,39 @@ async function fetchHistoryCases() {
     .limit(HISTORY_LIMIT)
     .get();
   const historyRecords = response.data || [];
-  const cases = await Promise.all(
+  const resolvedHistory = await Promise.all(
     historyRecords.map(async (record) => {
       try {
-        return await fetchCaseById(record.caseDocId || record.caseId);
+        return {
+          record,
+          caseItem: await fetchCaseById(record.caseDocId || record.caseId),
+        };
       } catch (error) {
+        if (isCaseNotFoundError(error)) {
+          return { record, caseItem: null, isStale: true };
+        }
         console.warn("浏览记录案例读取失败", record, error);
-        return null;
+        return { record, caseItem: null };
       }
     })
   );
 
-  return mergeHistoryWithCases(historyRecords, cases.filter(Boolean));
+  const staleIds = resolvedHistory
+    .filter((item) => item.isStale)
+    .map((item) => item.record._id || item.record.id)
+    .filter(Boolean);
+  if (staleIds.length) {
+    try {
+      await removeHistoryRecords(staleIds);
+    } catch (error) {
+      console.warn("失效浏览记录清理失败", error);
+    }
+  }
+
+  return mergeHistoryWithCases(
+    historyRecords.filter((record) => !staleIds.includes(record._id || record.id)),
+    resolvedHistory.map((item) => item.caseItem).filter(Boolean)
+  );
 }
 
 module.exports = {

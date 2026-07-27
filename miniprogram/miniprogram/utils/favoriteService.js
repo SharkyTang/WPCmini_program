@@ -5,7 +5,7 @@ const {
   mergeFavoritesWithCases,
   normalizeSelectedFavoriteIds,
 } = require("./favoriteData");
-const { ensureWxIdentity, getCachedOpenId } = require("./userService");
+const { ensureProfileIdentity } = require("./userService");
 
 const FAVORITE_COLLECTION = "favorites";
 const FAVORITE_LIMIT = 100;
@@ -38,14 +38,17 @@ function buildFavoriteLookupConditions(caseItem, openid) {
   return conditions;
 }
 
-async function ensureIdentityForRead(options = {}) {
-  const cachedOpenId = getCachedOpenId();
-  if (cachedOpenId) return cachedOpenId;
-  if (!options.silentIdentity) return "";
+function isCaseNotFoundError(error) {
+  return Boolean(error && error.code === "CASE_NOT_FOUND");
+}
 
+async function ensureIdentityForRead(options = {}) {
   try {
-    const openid = await ensureWxIdentity({ silent: true });
-    return openid || "";
+    const identity = await ensureProfileIdentity({
+      redirectToSetup: false,
+      showError: false,
+    });
+    return identity.ready ? identity.openid : "";
   } catch (error) {
     console.warn("静默读取微信身份失败", error);
     return "";
@@ -66,7 +69,11 @@ async function fetchFavoriteForCase(caseItem, options = {}) {
 }
 
 async function addFavorite(caseItem) {
-  const openid = await ensureWxIdentity();
+  const identity = await ensureProfileIdentity({
+    redirectToSetup: false,
+    showError: false,
+  });
+  const openid = identity.ready ? identity.openid : "";
   if (!openid) return null;
 
   const existing = await fetchFavoriteForCase(caseItem);
@@ -96,7 +103,7 @@ async function addFavorite(caseItem) {
 
 async function removeFavorite(favoriteId) {
   if (!favoriteId) return false;
-  const openid = getCachedOpenId() || await ensureWxIdentity({ silent: true });
+  const openid = await ensureIdentityForRead({ silentIdentity: true });
   if (!openid) return false;
 
   const response = await getFavoritesCollection()
@@ -119,7 +126,7 @@ async function removeFavoriteRecords(favoriteIds) {
 }
 
 async function clearFavorites() {
-  const openid = getCachedOpenId() || await ensureWxIdentity({ silent: true });
+  const openid = await ensureIdentityForRead({ silentIdentity: true });
   if (!openid) return 0;
 
   let removedCount = 0;
@@ -185,18 +192,39 @@ async function fetchFavoriteCases() {
     .limit(FAVORITE_LIMIT)
     .get();
   const favorites = response.data || [];
-  const cases = await Promise.all(
+  const resolvedFavorites = await Promise.all(
     favorites.map(async (favorite) => {
       try {
-        return await fetchCaseById(favorite.caseDocId || favorite.caseId);
+        return {
+          favorite,
+          caseItem: await fetchCaseById(favorite.caseDocId || favorite.caseId),
+        };
       } catch (error) {
+        if (isCaseNotFoundError(error)) {
+          return { favorite, caseItem: null, isStale: true };
+        }
         console.warn("收藏案例读取失败", favorite, error);
-        return null;
+        return { favorite, caseItem: null };
       }
     })
   );
 
-  return mergeFavoritesWithCases(favorites, cases.filter(Boolean));
+  const staleIds = resolvedFavorites
+    .filter((item) => item.isStale)
+    .map((item) => item.favorite._id || item.favorite.id)
+    .filter(Boolean);
+  if (staleIds.length) {
+    try {
+      await removeFavoriteRecords(staleIds);
+    } catch (error) {
+      console.warn("失效收藏清理失败", error);
+    }
+  }
+
+  return mergeFavoritesWithCases(
+    favorites.filter((favorite) => !staleIds.includes(favorite._id || favorite.id)),
+    resolvedFavorites.map((item) => item.caseItem).filter(Boolean)
+  );
 }
 
 module.exports = {

@@ -6,6 +6,10 @@ const {
   hasCompletedProfile,
 } = require("../../utils/profileService");
 const {
+  cacheCompletedProfileIdentity,
+  fetchOpenId,
+} = require("../../utils/userService");
+const {
   CUSTOMER_SERVICE_SOURCE,
   buildCustomerSessionFrom,
 } = require("../../utils/customerServiceData");
@@ -85,7 +89,9 @@ Page({
     const legacyProfile = getLegacyProfile();
     this.setData({
       profileInfo: toProfileInfo(legacyProfile),
-      hasCompletedProfile: false,
+      // 本机缓存只用于首屏和导航判断；云端请求仍会在完成后覆盖它。
+      // 这样已完成资料的用户无需等请求结束，第一次点击即可进入编辑页。
+      hasCompletedProfile: hasCompletedProfile(legacyProfile),
       isProfileLoading: true,
       profileLoadError: false,
     });
@@ -94,6 +100,12 @@ Page({
       const profile = await fetchProfile();
       if (profile && hasCompletedProfile(profile)) {
         cacheProfile(profile);
+        try {
+          const openid = await fetchOpenId();
+          cacheCompletedProfileIdentity(openid, profile);
+        } catch (identityError) {
+          console.warn("个人资料已读取，但身份缓存恢复失败", identityError);
+        }
         this.setData({
           profileInfo: toProfileInfo(profile),
           hasCompletedProfile: true,
@@ -115,18 +127,6 @@ Page({
   },
 
   openProfileEditor() {
-    if (this.data.isProfileLoading) {
-      wx.showToast({ title: "正在读取资料", icon: "none" });
-      return;
-    }
-    if (this.data.profileLoadError) {
-      wx.showToast({
-        title: "资料读取失败，请下拉重试",
-        icon: "none",
-      });
-      return;
-    }
-
     const mode = this.data.hasCompletedProfile ? "edit" : "setup";
     wx.navigateTo({
       url: `/pages/profile/edit/index?mode=${mode}`,

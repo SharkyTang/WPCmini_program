@@ -34,6 +34,12 @@ function loadProfilePage(wxMock = {}, options = {}) {
         };
       }
       if (moduleName === "../../utils/customerServiceData") return customerServiceModule.exports;
+      if (moduleName === "../../utils/userService") {
+        return {
+          cacheCompletedProfileIdentity: options.cacheCompletedProfileIdentity || (() => {}),
+          fetchOpenId: options.fetchOpenId || (async () => "openid_1"),
+        };
+      }
       if (moduleName === "../../utils/inquiryAdminService") {
         return { checkInquiryAdminAccess: options.checkInquiryAdminAccess || (async () => false) };
       }
@@ -81,11 +87,14 @@ await test("unconfigured profile card opens the setup page", async () => {
 await test("configured cloud profile opens the independent edit page", async () => {
   let navigatedUrl = "";
   let cachedProfile = null;
+  let cachedIdentity = null;
   const page = loadProfilePage(
     { navigateTo(options) { navigatedUrl = options.url; } },
     {
       fetchProfile: async () => ({ nickname: "墨韵 ovo", avatarFileId: "cloud://avatar", avatarUrl: "https://avatar" }),
       cacheProfile(profile) { cachedProfile = profile; },
+      fetchOpenId: async () => "openid_1",
+      cacheCompletedProfileIdentity(openid, profile) { cachedIdentity = { openid, profile }; },
     }
   );
   await page.loadProfileInfo();
@@ -93,20 +102,41 @@ await test("configured cloud profile opens the independent edit page", async () 
   assert.equal(navigatedUrl, "/pages/profile/edit/index?mode=edit");
   assert.equal(page.data.profileInfo.nickname, "墨韵 ovo");
   assert.equal(cachedProfile.avatarFileId, "cloud://avatar");
+  assert.equal(cachedIdentity.openid, "openid_1");
 });
 
-await test("profile read failures do not route users into setup", async () => {
-  let toastTitle = "";
-  let navigated = false;
+await test("completed cached profile opens the editor on the first tap during refresh", async () => {
+  let navigatedUrl = "";
+  let resolveProfile;
   const page = loadProfilePage(
-    { navigateTo() { navigated = true; }, showToast(options) { toastTitle = options.title; } },
+    { navigateTo(options) { navigatedUrl = options.url; } },
+    {
+      getLegacyProfile: () => ({
+        nickname: "墨韵 ovo",
+        avatarFileId: "cloud://avatar",
+        avatarUrl: "https://cached-avatar",
+      }),
+      fetchProfile: () => new Promise((resolve) => { resolveProfile = resolve; }),
+    }
+  );
+
+  const refresh = page.loadProfileInfo();
+  page.openProfileEditor();
+  assert.equal(navigatedUrl, "/pages/profile/edit/index?mode=edit");
+  resolveProfile(null);
+  await refresh;
+});
+
+await test("profile read failures still allow users to open the setup page", async () => {
+  let navigatedUrl = "";
+  const page = loadProfilePage(
+    { navigateTo(options) { navigatedUrl = options.url; } },
     { fetchProfile: async () => { throw new Error("offline"); } }
   );
   await page.loadProfileInfo();
   page.openProfileEditor();
   assert.equal(page.data.profileLoadError, true);
-  assert.equal(navigated, false);
-  assert.equal(toastTitle, "资料读取失败，请下拉重试");
+  assert.equal(navigatedUrl, "/pages/profile/edit/index?mode=setup");
 });
 
 await test("profile card removes the legacy editor sheet", () => {

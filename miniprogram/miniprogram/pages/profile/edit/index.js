@@ -6,6 +6,12 @@ const {
   saveProfile,
   uploadProfileAvatar,
 } = require("../../../utils/profileService");
+const {
+  cacheCompletedProfileIdentity,
+  clearPendingProfileAction,
+  fetchOpenId,
+  resumePendingProfileAction,
+} = require("../../../utils/userService");
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -39,6 +45,8 @@ Page({
     loadError: false,
     isSaving: false,
     hasUnsavedChanges: false,
+    identityGate: false,
+    profileSaved: false,
   },
 
   onLoad(options = {}) {
@@ -48,6 +56,8 @@ Page({
       mode,
       pageTitle,
       pageSubtitle: mode === "setup" ? "使用微信头像和名称，方便记录你的收藏" : "修改你的头像和名称",
+      identityGate: options.identityGate === "1",
+      profileSaved: false,
     });
     if (wx.setNavigationBarTitle) wx.setNavigationBarTitle({ title: pageTitle });
     this.loadProfile();
@@ -55,6 +65,9 @@ Page({
 
   onUnload() {
     if (wx.disableAlertBeforeUnload) wx.disableAlertBeforeUnload();
+    if (this.data.identityGate && !this.data.profileSaved) {
+      clearPendingProfileAction({ dismissed: true });
+    }
   },
 
   async loadProfile() {
@@ -152,16 +165,32 @@ Page({
       const avatarFileId = draft.avatarFileId || await uploadProfileAvatar(draft.avatarLocalPath);
       const savedProfile = await saveProfile({ nickname, avatarFileId });
       cacheProfile(savedProfile);
+      try {
+        const openid = await fetchOpenId();
+        cacheCompletedProfileIdentity(openid, savedProfile);
+      } catch (identityError) {
+        console.warn("资料已保存，但本次身份缓存恢复失败", identityError);
+      }
       const profileDraft = createDraft(savedProfile);
       this.setData({
         profileDraft,
         initialDraft: createDraft(profileDraft),
         hasUnsavedChanges: false,
         isSaving: false,
+        profileSaved: true,
       });
       if (wx.disableAlertBeforeUnload) wx.disableAlertBeforeUnload();
       wx.showToast({ title: "已保存", icon: "success" });
-      setTimeout(() => wx.navigateBack(), 500);
+      setTimeout(() => {
+        let resumed = false;
+        const finish = () => {
+          if (resumed) return;
+          resumed = true;
+          resumePendingProfileAction();
+        };
+        wx.navigateBack({ complete: finish });
+        setTimeout(finish, 0);
+      }, 500);
     } catch (error) {
       console.error("保存个人资料失败", error);
       this.setData({ isSaving: false });

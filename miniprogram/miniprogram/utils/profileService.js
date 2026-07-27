@@ -55,10 +55,15 @@ async function hydrateProfile(profile = {}) {
   };
 }
 
-async function fetchProfile() {
+async function fetchProfileRecord() {
   const result = await callUserData("getProfile");
-  if (!result.profile) return null;
-  return hydrateProfile(result.profile);
+  return result.profile ? normalizeStoredProfile(result.profile) : null;
+}
+
+async function fetchProfile() {
+  const profile = await fetchProfileRecord();
+  if (!profile) return null;
+  return hydrateProfile(profile);
 }
 
 async function uploadProfileAvatar(filePath) {
@@ -100,6 +105,7 @@ module.exports = {
   PROFILE_STORAGE_KEY,
   cacheProfile,
   fetchProfile,
+  fetchProfileRecord,
   getLegacyProfile,
   getTemporaryAvatarUrl,
   hasCompletedProfile,

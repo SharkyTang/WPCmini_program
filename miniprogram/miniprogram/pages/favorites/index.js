@@ -3,7 +3,7 @@ const {
   fetchFavoriteCases,
   removeFavoriteRecords,
 } = require("../../utils/favoriteService");
-const { ensureWxIdentity, getCachedOpenId } = require("../../utils/userService");
+const { ensureProfileIdentity, getCachedOpenId } = require("../../utils/userService");
 
 function buildFavoriteCards(items, selectedIds = []) {
   const selectedMap = selectedIds.reduce((map, id) => {
@@ -32,7 +32,7 @@ Page({
   data: {
     loading: false,
     errorMessage: "",
-    needIdentity: true,
+    profileBlocked: false,
     manageMode: false,
     selectedCount: 0,
     selectedFavoriteIds: [],
@@ -40,25 +40,27 @@ Page({
   },
 
   onShow() {
-    if (getCachedOpenId()) {
-      this.loadFavorites();
-      return;
-    }
-
-    this.setData({
-      loading: false,
-      errorMessage: "",
-      needIdentity: true,
-      manageMode: false,
-      selectedCount: 0,
-      selectedFavoriteIds: [],
-      favoriteCards: [],
-    });
+    this.ensureProfileAndLoad();
   },
 
-  async loginAndLoad() {
-    const openid = await ensureWxIdentity();
-    if (!openid) return;
+  async ensureProfileAndLoad() {
+    this.setData({
+      loading: true,
+      errorMessage: "",
+      profileBlocked: false,
+    });
+    const identity = await ensureProfileIdentity();
+    if (!identity.ready) {
+      this.setData({
+        loading: false,
+        profileBlocked: !identity.error,
+        manageMode: false,
+        selectedCount: 0,
+        selectedFavoriteIds: [],
+        favoriteCards: [],
+      });
+      return;
+    }
     this.loadFavorites();
   },
 
@@ -66,7 +68,7 @@ Page({
     if (!getCachedOpenId()) {
       this.setData({
         loading: false,
-        needIdentity: true,
+        profileBlocked: true,
         manageMode: false,
         selectedCount: 0,
         selectedFavoriteIds: [],
@@ -78,7 +80,7 @@ Page({
     this.setData({
       loading: true,
       errorMessage: "",
-      needIdentity: false,
+      profileBlocked: false,
     });
 
     try {

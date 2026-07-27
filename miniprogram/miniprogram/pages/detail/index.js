@@ -9,6 +9,7 @@ const {
   toggleFavorite,
 } = require("../../utils/favoriteService");
 const { recordCaseView } = require("../../utils/historyService");
+const { ensureProfileIdentity } = require("../../utils/userService");
 
 function buildInfoRows(caseItem) {
   return [
@@ -137,6 +138,14 @@ Page({
     });
 
     try {
+      const identity = await ensureProfileIdentity({
+        resume: () => this.toggleFavorite(),
+      });
+      if (!identity.ready) {
+        this.setData({ favoriteLoading: false });
+        return;
+      }
+
       const result = await toggleFavorite(this.data.caseItem, this.data.favorite);
       this.setData({
         favoriteLoading: false,

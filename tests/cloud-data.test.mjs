@@ -173,7 +173,7 @@ function mockCaseLookupData(records) {
   };
 }
 
-await test("fetches image temp URLs in batches of at most 50 cloud IDs", async () => {
+await test("fetches image temp URLs in controlled batches of 20 cloud IDs", async () => {
   const records = Array.from({ length: 55 }, (_, index) => ({
     _id: `case_${index + 1}`,
     caseId: `case_${index + 1}`,
@@ -189,7 +189,7 @@ await test("fetches image temp URLs in batches of at most 50 cloud IDs", async (
   assert.equal(cases.length, 55);
   assert.deepEqual(
     tempUrlBatches.map((batch) => batch.length),
-    [50, 5]
+    [20, 20, 15]
   );
   assert.equal(cases[0].coverImageUrl, "cloud://image_1?temp=1");
 });

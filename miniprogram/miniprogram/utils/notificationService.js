@@ -4,7 +4,7 @@ const {
   normalizeNotifications,
   toggleDisabledType,
 } = require("./notificationData");
-const { ensureWxIdentity, getCachedOpenId } = require("./userService");
+const { ensureProfileIdentity } = require("./userService");
 const { callUserData } = require("./userDataService");
 
 const APP_NOTIFICATION_COLLECTION = "app_notifications";
@@ -46,15 +46,12 @@ async function fetchPublicNotifications() {
   }
 }
 
-async function fetchCustomerNotifications(options = {}) {
-  let openid = getCachedOpenId();
-  if (!openid && options.requireIdentity) {
-    openid = await ensureWxIdentity({
-      content: "客服回复需要识别你的微信身份，用来查看发给你的消息。",
-      confirmText: "查看回复",
-    });
-  }
-  if (!openid) return [];
+async function fetchCustomerNotifications() {
+  const identity = await ensureProfileIdentity({
+    redirectToSetup: false,
+    showError: false,
+  });
+  if (!identity.ready) return [];
 
   try {
     const result = await callUserData("fetchCustomerNotifications");
@@ -68,16 +65,12 @@ async function fetchCustomerNotifications(options = {}) {
   }
 }
 
-async function fetchNotificationPreferences(options = {}) {
-  let openid = getCachedOpenId();
-  if (!openid && options.requireIdentity) {
-    openid = await ensureWxIdentity({
-      content: "通知设置需要识别你的微信身份，用来保存你的提醒偏好。",
-      confirmText: "保存设置",
-    });
-  }
-
-  if (!openid) {
+async function fetchNotificationPreferences() {
+  const identity = await ensureProfileIdentity({
+    redirectToSetup: false,
+    showError: false,
+  });
+  if (!identity.ready) {
     return {
       hasIdentity: false,
       preferenceId: "",

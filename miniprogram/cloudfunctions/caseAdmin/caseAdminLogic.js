@@ -36,6 +36,7 @@ const ALLOWED_CASE_FIELDS = [
   "title",
   "caseId",
   "coverImage",
+  "coverThumbnail",
   "wineType",
   "packageTypes",
   "styles",
@@ -220,6 +221,12 @@ function sanitizeCasePayload(input = {}, options = {}) {
     if (!data.coverImage) return { valid: false, code: "INVALID_IMAGE", message: "请上传封面图片" };
     if (!isCloudFileId(data.coverImage)) {
       return { valid: false, code: "INVALID_IMAGE", message: "封面图片需要先上传到云存储" };
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(picked, "coverThumbnail")) {
+    data.coverThumbnail = trimText(picked.coverThumbnail);
+    if (data.coverThumbnail && !isCloudFileId(data.coverThumbnail)) {
+      return { valid: false, code: "INVALID_THUMBNAIL", message: "缩略图需要先上传到云存储" };
     }
   }
 

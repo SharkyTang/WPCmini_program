@@ -1,3 +1,18 @@
+const {
+  fetchProfileRecord,
+  hasCompletedProfile,
+} = require("./profileService");
+
+let profileVerificationPromise = null;
+let profileSetupNavigationInProgress = false;
+let skipNextProfileSetupRedirect = false;
+let pendingProfileAction = null;
+let verifiedProfileIdentity = null;
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function getAppInstance() {
   return typeof getApp === "function" ? getApp() : null;
 }
@@ -8,27 +23,11 @@ function getCachedOpenId() {
 }
 
 function cacheOpenId(openid) {
+  if (!openid) return;
   const app = getAppInstance();
   if (!app) return;
   app.globalData = app.globalData || {};
   app.globalData.openid = openid;
-}
-
-function confirmWxIdentity(options = {}) {
-  return new Promise((resolve) => {
-    wx.showModal({
-      title: options.title || "使用微信身份",
-      content: options.content || "收藏案例需要识别你的微信身份，用来保存和查看自己的收藏。",
-      confirmText: options.confirmText || "继续收藏",
-      cancelText: "暂不登录",
-      success(response) {
-        resolve(Boolean(response.confirm));
-      },
-      fail() {
-        resolve(false);
-      },
-    });
-  });
 }
 
 async function fetchOpenId() {
@@ -46,36 +45,145 @@ async function fetchOpenId() {
   return openid;
 }
 
-async function ensureWxIdentity(options = {}) {
-  const cachedOpenId = getCachedOpenId();
-  if (cachedOpenId) return cachedOpenId;
+async function ensureWxIdentity() {
+  return getCachedOpenId() || fetchOpenId();
+}
 
-  if (options.silent) {
-    return fetchOpenId();
-  }
+function getProfileSetupUrl() {
+  return "/pages/profile/edit/index?mode=setup&identityGate=1";
+}
 
-  const confirmed = await confirmWxIdentity(options);
-  if (!confirmed) {
-    wx.showToast({
-      title: "登录后可收藏案例",
-      icon: "none",
-    });
-    return "";
-  }
+function setPendingProfileAction(action) {
+  pendingProfileAction = typeof action === "function" ? action : null;
+}
+
+function clearPendingProfileAction(options = {}) {
+  pendingProfileAction = null;
+  profileSetupNavigationInProgress = false;
+  if (options.dismissed) skipNextProfileSetupRedirect = true;
+}
+
+function resumePendingProfileAction() {
+  const action = pendingProfileAction;
+  pendingProfileAction = null;
+  profileSetupNavigationInProgress = false;
+  skipNextProfileSetupRedirect = false;
+  if (!action) return Promise.resolve();
 
   try {
-    return await fetchOpenId();
-  } catch (error) {
-    console.error("微信身份获取失败", error);
-    wx.showToast({
-      title: "微信身份获取失败",
-      icon: "none",
+    return Promise.resolve(action()).catch((error) => {
+      console.error("恢复个人资料后的操作失败", error);
     });
-    return "";
+  } catch (error) {
+    console.error("恢复个人资料后的操作失败", error);
+    return Promise.resolve();
   }
 }
 
+async function verifyProfileIdentity() {
+  const cachedOpenId = getCachedOpenId();
+  if (cachedOpenId && verifiedProfileIdentity && verifiedProfileIdentity.openid === cachedOpenId) {
+    return verifiedProfileIdentity;
+  }
+
+  if (!profileVerificationPromise) {
+    profileVerificationPromise = (async () => {
+      const openid = getCachedOpenId() || await fetchOpenId();
+      let profile;
+      try {
+        profile = await fetchProfileRecord();
+      } catch (firstError) {
+        await wait(250);
+        profile = await fetchProfileRecord();
+      }
+      const identity = {
+        openid,
+        profile,
+        ready: hasCompletedProfile(profile),
+      };
+      if (identity.ready) verifiedProfileIdentity = identity;
+      return identity;
+    })();
+  }
+
+  try {
+    return await profileVerificationPromise;
+  } finally {
+    profileVerificationPromise = null;
+  }
+}
+
+function cacheCompletedProfileIdentity(openid, profile) {
+  if (!openid || !hasCompletedProfile(profile)) return;
+  verifiedProfileIdentity = {
+    openid,
+    profile,
+    ready: true,
+  };
+}
+
+function showProfileCheckError() {
+  if (!wx.showToast) return;
+  wx.showToast({
+    title: "暂时无法验证资料，请重试",
+    icon: "none",
+  });
+}
+
+function navigateToProfileSetup() {
+  if (profileSetupNavigationInProgress || !wx.navigateTo) return;
+  profileSetupNavigationInProgress = true;
+  wx.navigateTo({
+    url: getProfileSetupUrl(),
+    fail(error) {
+      console.error("跳转完善资料页失败", error);
+      profileSetupNavigationInProgress = false;
+      showProfileCheckError();
+    },
+  });
+}
+
+async function ensureProfileIdentity(options = {}) {
+  const redirectToSetup = options.redirectToSetup !== false;
+
+  let identity;
+  try {
+    identity = await verifyProfileIdentity();
+  } catch (error) {
+    console.error("个人资料身份验证失败", error);
+    if (options.showError !== false) showProfileCheckError();
+    return {
+      ready: false,
+      error,
+      openid: "",
+      profile: null,
+    };
+  }
+
+  if (identity.ready) return identity;
+
+  if (!redirectToSetup) return identity;
+
+  if (skipNextProfileSetupRedirect) {
+    skipNextProfileSetupRedirect = false;
+    return {
+      ...identity,
+      dismissed: true,
+    };
+  }
+
+  setPendingProfileAction(options.resume);
+  navigateToProfileSetup();
+  return identity;
+}
+
 module.exports = {
+  cacheCompletedProfileIdentity,
+  cacheOpenId,
+  clearPendingProfileAction,
+  ensureProfileIdentity,
   ensureWxIdentity,
+  fetchOpenId,
   getCachedOpenId,
+  resumePendingProfileAction,
 };
