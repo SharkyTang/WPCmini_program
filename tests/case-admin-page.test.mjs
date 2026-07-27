@@ -30,6 +30,7 @@ function loadCaseAdminPage(options = {}) {
             { value: "banner", label: "首页轮播" },
             { value: "popular", label: "热门产品" },
             { value: "latest", label: "最新产品" },
+            { value: "pinned", label: "置顶" },
           ],
           CASE_ADMIN_VISIBILITY_OPTIONS: [
             { value: "all", label: "全部" },
@@ -128,6 +129,15 @@ await test("homepage view replaces visibility filtering and does not paginate", 
   assert.equal(page.data.hasMore, false);
   page.onReachBottom();
   assert.equal(calls.homepageFetches.length, 1);
+});
+
+await test("pinned view uses the normal editable list endpoint", async () => {
+  const { page, calls } = loadCaseAdminPage();
+  page.selectView({ currentTarget: { dataset: { value: "pinned" } } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(page.data.isHomeDisplay, false);
+  assert.equal(calls.fetches[0].visibility, "pinned");
 });
 
 await test("canceling delete does not call delete service", async () => {

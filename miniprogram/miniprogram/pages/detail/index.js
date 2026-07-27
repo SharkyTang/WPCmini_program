@@ -49,6 +49,19 @@ function buildDetailSubtitle(caseItem) {
   );
 }
 
+function buildGalleryItems(caseItem = {}) {
+  const gallery = Array.isArray(caseItem.gallery) && caseItem.gallery.length
+    ? caseItem.gallery
+    : [{ fileID: caseItem.coverImage, url: caseItem.coverImageUrl }];
+  return gallery
+    .filter((item) => item && item.url)
+    .map((item, index) => ({
+      ...item,
+      index,
+      positionLabel: `第 ${index + 1} 张`,
+    }));
+}
+
 Page({
   data: {
     loading: true,
@@ -62,6 +75,9 @@ Page({
     isFavorited: false,
     favoriteLoading: false,
     imagePreviewVisible: false,
+    galleryItems: [],
+    currentImageIndex: 0,
+    currentImageUrl: "",
     customerServiceSessionFrom: buildCustomerSessionFrom({
       source: CUSTOMER_SERVICE_SOURCE.DETAIL,
     }),
@@ -87,6 +103,7 @@ Page({
 
     try {
       const caseItem = await fetchCaseById(decodeURIComponent(id));
+      const galleryItems = buildGalleryItems(caseItem);
       this.setData({
         loading: false,
         caseItem,
@@ -94,6 +111,9 @@ Page({
         displayTags: caseItem.tags,
         detailHeading: buildDetailHeading(caseItem),
         detailSubtitle: buildDetailSubtitle(caseItem),
+        galleryItems,
+        currentImageIndex: 0,
+        currentImageUrl: galleryItems[0] ? galleryItems[0].url : "",
         customerServiceSessionFrom: buildCustomerSessionFrom({
           source: CUSTOMER_SERVICE_SOURCE.DETAIL,
           caseItem,
@@ -180,7 +200,7 @@ Page({
   },
 
   previewImage() {
-    const imageUrl = this.data.caseItem && this.data.caseItem.coverImageUrl;
+    const imageUrl = this.data.currentImageUrl;
     if (!imageUrl) {
       wx.showToast({
         title: "暂无图片",
@@ -200,10 +220,28 @@ Page({
     });
   },
 
+  onGalleryChange(event) {
+    const currentImageIndex = Number(event.detail && event.detail.current) || 0;
+    const current = this.data.galleryItems[currentImageIndex];
+    this.setData({
+      currentImageIndex,
+      currentImageUrl: current ? current.url : "",
+    });
+  },
+
+  selectGalleryImage(event) {
+    const currentImageIndex = Number(event.currentTarget.dataset.index) || 0;
+    const current = this.data.galleryItems[currentImageIndex];
+    this.setData({
+      currentImageIndex,
+      currentImageUrl: current ? current.url : "",
+    });
+  },
+
   noop() {},
 
   downloadImage() {
-    const imageUrl = this.data.caseItem && this.data.caseItem.coverImageUrl;
+    const imageUrl = this.data.currentImageUrl;
     if (!imageUrl) {
       wx.showToast({
         title: "暂无图片可下载",

@@ -39,6 +39,38 @@ page {
   display: block;
 }
 
+.hero-gallery {
+  width: 100%;
+  height: 100%;
+}
+
+.gallery-thumbnails {
+  display: flex;
+  gap: 14rpx;
+  margin: 20rpx 0 0;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.gallery-thumbnail {
+  width: 104rpx;
+  height: 104rpx;
+  flex: 0 0 104rpx;
+  overflow: hidden;
+  border: 3rpx solid transparent;
+  border-radius: 8rpx;
+  box-sizing: border-box;
+}
+
+.gallery-thumbnail-active {
+  border-color: #241d16;
+}
+
+.gallery-thumbnail-image {
+  width: 100%;
+  height: 100%;
+}
+
 .hero-placeholder {
   display: flex;
   align-items: center;

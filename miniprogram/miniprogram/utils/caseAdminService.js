@@ -135,6 +135,27 @@ async function attachCaseCoverUrls(cases) {
   }));
 }
 
+async function attachCaseGalleryUrls(cases) {
+  const imageFileIds = cases.flatMap((item) => (
+    Array.isArray(item.galleryImages) && item.galleryImages.length
+      ? item.galleryImages
+      : [item.coverImage]
+  ));
+  const tempUrlMap = await getTempUrlMap(imageFileIds);
+  return cases.map((item) => {
+    const galleryImages = Array.isArray(item.galleryImages) && item.galleryImages.length
+      ? item.galleryImages
+      : [item.coverImage].filter(Boolean);
+    const galleryImageUrls = galleryImages.map((fileID) => resolveCaseCoverUrl(fileID, tempUrlMap));
+    return {
+      ...item,
+      galleryImages,
+      galleryImageUrls,
+      coverImageUrl: galleryImageUrls[0] || item.coverImageUrl || "",
+    };
+  });
+}
+
 async function attachHomepageDisplayImageUrls(items) {
   const tempUrlMap = await getVisibleTempUrlMap(
     items.map((item) => item.coverImage || item.image)
@@ -190,7 +211,7 @@ async function fetchCaseAdminHomepageDisplay(options = {}) {
 async function fetchCaseAdminDetail(id) {
   const result = await callCaseAdmin("getCase", { id });
   const item = normalizeCaseAdminItem(result.item);
-  const items = await attachCaseCoverUrls(item ? [item] : []);
+  const items = await attachCaseGalleryUrls(item ? [item] : []);
   return items[0] || null;
 }
 
@@ -251,6 +272,7 @@ module.exports = {
   fetchCaseAdminDetail,
   fetchCaseAdminHomepageDisplay,
   fetchCaseAdminList,
+  attachCaseGalleryUrls,
   setCaseVisibility,
   updateCaseAdmin,
   uploadCaseCoverImage,

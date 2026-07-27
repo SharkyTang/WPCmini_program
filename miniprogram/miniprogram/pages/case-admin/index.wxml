@@ -71,6 +71,7 @@
           <view class="case-meta">{{item.caseId || item.id}}</view>
           <view class="case-tags">{{item.tagSummary || '暂无标签'}}</view>
           <view wx:if="{{item.homeSectionSummary}}" class="home-section-summary">首页展示：{{item.homeSectionSummary}}</view>
+          <view wx:if="{{item.pinnedLabel}}" class="home-display-summary">{{item.pinnedLabel}}</view>
           <view wx:if="{{item.displayLabel}}" class="home-display-summary">{{item.displayLabel}} · {{item.displayOrderLabel}}</view>
           <view wx:if="{{item.source !== 'banner'}}" class="case-actions">
             <view class="case-action" data-id="{{item.id}}" bindtap="editCase">编辑</view>

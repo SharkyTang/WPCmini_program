@@ -24,7 +24,10 @@ function matchesCondition(record, condition = {}) {
   return Object.keys(condition).every((field) => {
     const expected = condition[field];
     if (expected && expected.__op === "in") {
-      return expected.values.includes(record[field]);
+      const actual = record[field];
+      return Array.isArray(actual)
+        ? actual.some((value) => expected.values.includes(value))
+        : expected.values.includes(actual);
     }
     return record[field] === expected;
   });
@@ -225,6 +228,42 @@ await test("deleteCase keeps images referenced by a visible banner", async () =>
   assert.equal(result.ok, true);
   assert.deepEqual(clone(result.deletedFileIds), []);
   assert.deepEqual(deletedFiles, []);
+});
+
+await test("deleteCase keeps gallery images referenced by another case", async () => {
+  const { main, deletedFiles } = loadCaseAdminFunction({
+    cases: [
+      { _id: "case_doc_1", coverImage: "cloud://env/cover.jpg", galleryImages: ["cloud://env/cover.jpg", "cloud://env/shared-detail.jpg"] },
+      { _id: "case_doc_2", coverImage: "cloud://env/other.jpg", galleryImages: ["cloud://env/other.jpg", "cloud://env/shared-detail.jpg"] },
+    ],
+  });
+
+  const result = await main({ action: "deleteCase", id: "case_doc_1" });
+
+  assert.equal(result.ok, true);
+  assert.equal(deletedFiles.includes("cloud://env/shared-detail.jpg"), false);
+  assert.equal(deletedFiles.includes("cloud://env/cover.jpg"), true);
+});
+
+await test("createCase rejects the twenty-first configured pinned case", async () => {
+  const cases = Array.from({ length: 20 }, (_, index) => ({
+    _id: `pinned_${index}`,
+    isPinned: true,
+  }));
+  const { main } = loadCaseAdminFunction({ cases });
+
+  const result = await main({
+    action: "createCase",
+    case: {
+      title: "超出置顶上限",
+      galleryImages: ["cloud://env/new.jpg"],
+      packageTypes: ["礼盒"],
+      isPinned: true,
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "PINNED_LIMIT_REACHED");
 });
 
 await test("homepage display endpoint is admin-only and returns the active homepage slot", async () => {

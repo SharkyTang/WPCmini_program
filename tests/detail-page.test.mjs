@@ -42,3 +42,12 @@ test("detail page keeps customer service and adds inquiry action", () => {
   assert.equal(wxml.includes("提交定制需求"), true);
   assert.equal(wxml.includes('bindtap="openInquiryForm"'), true);
 });
+
+test("detail page supports a gallery and downloads the selected image", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+  const source = readFileSync(resolve(__dirname, "../miniprogram/miniprogram/pages/detail/index.js"), "utf8");
+
+  assert.equal(wxml.includes('bindchange="onGalleryChange"'), true);
+  assert.equal(wxml.includes('bindtap="selectGalleryImage"'), true);
+  assert.equal(source.includes("currentImageUrl"), true);
+});

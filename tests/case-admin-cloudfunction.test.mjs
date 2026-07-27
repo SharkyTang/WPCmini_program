@@ -68,15 +68,31 @@ test("keeps only writable case fields", () => {
   const picked = pickAllowedCaseFields({
     title: "案例",
     coverImage: "cloud://cloud1/file.jpg",
+    galleryImages: ["cloud://cloud1/file.jpg", "cloud://cloud1/detail.jpg"],
+    isPinned: true,
     homeSections: ["popular"],
     _openid: "hacker",
     createdAt: "bad",
     updatedByOpenid: "bad",
   });
 
-  assert.deepEqual(plain(Object.keys(picked)), ["title", "coverImage", "homeSections"]);
+  assert.deepEqual(plain(Object.keys(picked)), ["title", "coverImage", "galleryImages", "homeSections", "isPinned"]);
   assert.equal(ALLOWED_CASE_FIELDS.includes("_openid"), false);
   assert.equal(ALLOWED_CASE_FIELDS.includes("homeSections"), true);
+});
+
+test("uses the first gallery image as the server-side cover", () => {
+  const result = sanitizeCasePayload({
+    title: "多图案例",
+    galleryImages: ["cloud://cloud1/cover.jpg", "cloud://cloud1/detail.jpg"],
+    packageTypes: ["礼盒"],
+    isPinned: true,
+  }, { isCreate: true, defaultCaseId: "case_092" });
+
+  assert.equal(result.valid, true);
+  assert.equal(result.data.coverImage, "cloud://cloud1/cover.jpg");
+  assert.deepEqual(plain(result.data.galleryImages), ["cloud://cloud1/cover.jpg", "cloud://cloud1/detail.jpg"]);
+  assert.equal(result.data.isPinned, true);
 });
 
 test("sanitizes create payload with defaults and preserves visible flag", () => {

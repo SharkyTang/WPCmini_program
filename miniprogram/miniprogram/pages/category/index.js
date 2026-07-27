@@ -320,6 +320,7 @@ Page({
     const filteredCases = filterCases(this.data.allCases, {
       query: this.data.query,
       selectedFilters,
+      pinnedFirst: this.data.selectedSort === "default",
     });
     const sortedCases =
       this.data.selectedSort === "latest"

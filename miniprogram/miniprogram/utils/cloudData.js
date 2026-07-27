@@ -173,6 +173,13 @@ function getCaseDisplayImage(item, options = {}) {
   return options.preferThumbnail !== false ? item.coverThumbnail || item.coverImage : item.coverImage;
 }
 
+function getCaseGalleryImages(item = {}) {
+  const images = Array.isArray(item.galleryImages) && item.galleryImages.length
+    ? item.galleryImages
+    : [item.coverImage];
+  return Array.from(new Set(images.filter(Boolean)));
+}
+
 async function attachCaseImageUrls(cases, options = {}) {
   const imageFileIds = cases.map((item) => getCaseDisplayImage(item, options));
   const tempUrlMap = await getTempUrlMap(imageFileIds, options);
@@ -183,6 +190,25 @@ async function attachCaseImageUrls(cases, options = {}) {
     imageLoadState: "ready",
     imageRetryCount: 0,
   }));
+}
+
+async function attachCaseDetailImageUrls(cases) {
+  const imageFileIds = cases.flatMap((item) => getCaseGalleryImages(item));
+  const tempUrlMap = await getTempUrlMap(imageFileIds);
+  return cases.map((item) => {
+    const galleryImages = getCaseGalleryImages(item);
+    const gallery = galleryImages.map((fileID) => ({
+      fileID,
+      url: resolveImageUrl(fileID, tempUrlMap),
+    }));
+    return {
+      ...item,
+      galleryImages,
+      gallery,
+      coverImage: galleryImages[0] || item.coverImage,
+      coverImageUrl: gallery[0] ? gallery[0].url : "",
+    };
+  });
 }
 
 async function refreshImageUrl(fileID) {
@@ -245,13 +271,13 @@ async function fetchCaseById(id) {
     if (!record) {
       throw createCaseNotFoundError(id);
     }
-    const cases = await attachCaseImageUrls([normalizeCaseRecord(record)], { preferThumbnail: false });
+    const cases = await attachCaseDetailImageUrls([normalizeCaseRecord(record)]);
     return cases[0];
   }
 
   try {
     const response = await db.collection(CASE_COLLECTION).doc(id).get();
-    const cases = await attachCaseImageUrls([normalizeCaseRecord(response.data)], { preferThumbnail: false });
+    const cases = await attachCaseDetailImageUrls([normalizeCaseRecord(response.data)]);
     return cases[0];
   } catch (error) {
     const response = await db
@@ -261,7 +287,7 @@ async function fetchCaseById(id) {
       .get();
     const record = (response.data || [])[0];
     if (!record) throw createCaseNotFoundError(id);
-    const cases = await attachCaseImageUrls([normalizeCaseRecord(record)], { preferThumbnail: false });
+    const cases = await attachCaseDetailImageUrls([normalizeCaseRecord(record)]);
     return cases[0];
   }
 }
@@ -270,6 +296,7 @@ module.exports = {
   CASE_COLLECTION,
   BANNER_COLLECTION,
   attachCaseImageUrls,
+  attachCaseDetailImageUrls,
   fetchVisibleCases,
   fetchVisibleBanners,
   fetchCaseById,

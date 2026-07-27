@@ -14,6 +14,7 @@ function getEmptyState(view) {
   if (view === "banner") return { title: "暂无首页轮播", description: "当前首页没有正在展示的轮播图。" };
   if (view === "popular") return { title: "暂无热门产品", description: "当前首页没有正在展示的热门产品。" };
   if (view === "latest") return { title: "暂无最新产品", description: "当前首页没有正在展示的最新产品。" };
+  if (view === "pinned") return { title: "暂无置顶案例", description: "可在案例编辑页开启默认排序置顶，最多 20 个。" };
   return { title: "暂无案例", description: "可以先新增一个隐藏案例，确认后再打开显示。" };
 }
 

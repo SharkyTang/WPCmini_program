@@ -1,9 +1,11 @@
 const cloud = require("wx-server-sdk");
 const {
   BANNER_COLLECTION,
+  CASE_GALLERY_MAX,
   CASE_COLLECTION,
   IMAGE_URL_BATCH_SIZE,
   SEARCH_FETCH_LIMIT,
+  PINNED_CASE_LIMIT,
   buildHomepageDisplayItems,
   filterCaseItems,
   generateSequentialCaseId,
@@ -138,23 +140,30 @@ async function getCreateCaseDefaults() {
 function buildFileIdSet(records = [], field) {
   return new Set(
     records
-      .map((item) => trimText(item && item[field]))
+      .flatMap((item) => {
+        const value = item && item[field];
+        return Array.isArray(value) ? value : [value];
+      })
+      .map(trimText)
       .filter((fileID) => fileID.indexOf("cloud://") === 0)
   );
 }
 
-async function fetchCaseCoverFileIdSet(fileIDs = [], where = {}) {
+async function fetchCaseImageFileIdSet(fileIDs = [], where = {}) {
   const normalizedFileIDs = normalizeCloudFileIds(fileIDs);
   if (!normalizedFileIDs.length) return new Set();
-  const [coverResponse, thumbnailResponse] = await Promise.all([
+  const [coverResponse, thumbnailResponse, galleryResponse] = await Promise.all([
     db.collection(CASE_COLLECTION).where({ ...where, coverImage: _.in(normalizedFileIDs) })
       .field({ coverImage: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
     db.collection(CASE_COLLECTION).where({ ...where, coverThumbnail: _.in(normalizedFileIDs) })
       .field({ coverThumbnail: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
+    db.collection(CASE_COLLECTION).where({ ...where, galleryImages: _.in(normalizedFileIDs) })
+      .field({ galleryImages: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
   ]);
   return new Set([
     ...buildFileIdSet(coverResponse.data || [], "coverImage"),
     ...buildFileIdSet(thumbnailResponse.data || [], "coverThumbnail"),
+    ...buildFileIdSet(galleryResponse.data || [], "galleryImages"),
   ]);
 }
 
@@ -191,7 +200,7 @@ async function getVisibleImageUrls(event) {
   if (!fileIDs.length) return ok({ urls: {} });
 
   const [caseFileIds, bannerFileIds] = await Promise.all([
-    fetchCaseCoverFileIdSet(fileIDs, { isVisible: true }),
+    fetchCaseImageFileIdSet(fileIDs, { isVisible: true }),
     fetchVisibleBannerFileIdSet(fileIDs),
   ]);
   const allowedFileIds = new Set([...caseFileIds, ...bannerFileIds]);
@@ -204,7 +213,7 @@ async function getCaseImageUrls(event) {
   const fileIDs = normalizeCloudFileIds(event.fileIDs || event.fileIds);
   if (!fileIDs.length) return ok({ urls: {} });
 
-  const caseFileIds = await fetchCaseCoverFileIdSet(fileIDs);
+  const caseFileIds = await fetchCaseImageFileIdSet(fileIDs);
   const allowedRequestedFileIds = fileIDs.filter((fileID) => caseFileIds.has(fileID));
   const urls = await getTempUrlMap(allowedRequestedFileIds);
   return ok({ urls });
@@ -219,6 +228,8 @@ async function createCase(event, openid) {
     ...defaults,
   });
   if (!result.valid) return fail(result.code, result.message);
+  const pinnedError = await validatePinnedCapacity(result.data.isPinned);
+  if (pinnedError) return pinnedError;
 
   const response = await db.collection(CASE_COLLECTION).add({
     data: {
@@ -240,9 +251,16 @@ async function updateCase(event, openid) {
   const id = trimText(event.id);
   if (!id) return fail("INVALID_ID", "缺少案例 ID");
 
+  const existing = await getCaseById(id);
+  if (!existing) return fail("CASE_NOT_FOUND", "案例不存在或已删除");
   const input = event.case || event.data || {};
   const result = sanitizeCasePayload(input, { isCreate: false });
   if (!result.valid) return fail(result.code, result.message);
+  const nextPinned = Object.prototype.hasOwnProperty.call(result.data, "isPinned")
+    ? result.data.isPinned
+    : existing.isPinned === true;
+  const pinnedError = await validatePinnedCapacity(nextPinned, id);
+  if (pinnedError) return pinnedError;
 
   await db.collection(CASE_COLLECTION).doc(id).update({
     data: {
@@ -251,6 +269,9 @@ async function updateCase(event, openid) {
       updatedByOpenid: openid,
     },
   });
+  const nextFileIds = new Set(getCaseImageFileIds({ ...existing, ...result.data }));
+  const removedFileIds = getCaseImageFileIds(existing).filter((fileID) => !nextFileIds.has(fileID));
+  await deleteUnreferencedCaseFiles(removedFileIds);
 
   return ok({ id });
 }
@@ -273,10 +294,18 @@ async function setCaseVisibility(event, openid) {
   });
 }
 
-async function isCaseCoverImageReferenced(fileID) {
+function getCaseImageFileIds(item = {}) {
+  return Array.from(new Set([
+    trimText(item.coverImage),
+    trimText(item.coverThumbnail),
+    ...normalizeCloudFileIds(item.galleryImages || [], CASE_GALLERY_MAX),
+  ].filter((fileID) => fileID.indexOf("cloud://") === 0)));
+}
+
+async function isCaseImageReferenced(fileID) {
   if (!fileID || fileID.indexOf("cloud://") !== 0) return false;
 
-  const [coverResponse, thumbnailResponse, bannerResponse] = await Promise.all([
+  const [coverResponse, thumbnailResponse, galleryResponse, bannerResponse] = await Promise.all([
     db
       .collection(CASE_COLLECTION)
       .where({ coverImage: fileID })
@@ -290,6 +319,12 @@ async function isCaseCoverImageReferenced(fileID) {
       .limit(1)
       .get(),
     db
+      .collection(CASE_COLLECTION)
+      .where({ galleryImages: _.in([fileID]) })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
       .collection(BANNER_COLLECTION)
       .where({ image: fileID })
       .field({ _id: true })
@@ -298,10 +333,38 @@ async function isCaseCoverImageReferenced(fileID) {
   ]);
 
   return Boolean(
-    (coverResponse.data || []).length ||
+      (coverResponse.data || []).length ||
       (thumbnailResponse.data || []).length ||
+      (galleryResponse.data || []).length ||
       (bannerResponse.data || []).length
   );
+}
+
+async function deleteUnreferencedCaseFiles(fileIDs = []) {
+  const deletedFileIds = [];
+  for (const fileID of Array.from(new Set(fileIDs.filter((value) => value.indexOf("cloud://") === 0)))) {
+    if (await isCaseImageReferenced(fileID)) continue;
+    try {
+      await cloud.deleteFile({ fileList: [fileID] });
+      deletedFileIds.push(fileID);
+    } catch (error) {
+      console.warn("case image file delete failed", error);
+    }
+  }
+  return deletedFileIds;
+}
+
+async function validatePinnedCapacity(isPinned, excludedId = "") {
+  if (!isPinned) return null;
+  const response = await db.collection(CASE_COLLECTION)
+    .where({ isPinned: true })
+    .field({ _id: true })
+    .limit(PINNED_CASE_LIMIT + 1)
+    .get();
+  const count = (response.data || []).filter((item) => item._id !== excludedId).length;
+  return count >= PINNED_CASE_LIMIT
+    ? fail("PINNED_LIMIT_REACHED", `置顶案例最多 ${PINNED_CASE_LIMIT} 个，请先取消其他案例的置顶`)
+    : null;
 }
 
 async function deleteCase(event) {
@@ -311,24 +374,9 @@ async function deleteCase(event) {
   const item = await getCaseById(id);
   if (!item) return fail("CASE_NOT_FOUND", "案例不存在或已删除");
 
-  const coverImage = trimText(item.coverImage);
-  const coverThumbnail = trimText(item.coverThumbnail);
+  const imageFileIds = getCaseImageFileIds(item);
   await db.collection(CASE_COLLECTION).doc(id).remove();
-
-  const deletedFileIds = [];
-  for (const fileID of [coverImage, coverThumbnail].filter((value, index, items) => value.indexOf("cloud://") === 0 && items.indexOf(value) === index)) {
-    const isReferenced = await isCaseCoverImageReferenced(fileID);
-    if (!isReferenced) {
-      try {
-        await cloud.deleteFile({
-          fileList: [fileID],
-        });
-        deletedFileIds.push(fileID);
-      } catch (error) {
-        console.warn("case cover file delete failed", error);
-      }
-    }
-  }
+  const deletedFileIds = await deleteUnreferencedCaseFiles(imageFileIds);
 
   return ok({
     id,

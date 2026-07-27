@@ -7,6 +7,7 @@ const {
 
 const CASE_ADMIN_DEFAULT_SORT_ORDER = 9999;
 const CASE_ADMIN_NOTES_MAX_LENGTH = 800;
+const CASE_ADMIN_GALLERY_MAX = 5;
 const CASE_ADMIN_VISIBILITY_OPTIONS = [
   { value: "all", label: "全部" },
   { value: "visible", label: "显示中" },
@@ -17,6 +18,7 @@ const CASE_ADMIN_VIEW_OPTIONS = [
   { value: "banner", label: "首页轮播" },
   { value: "popular", label: "热门产品" },
   { value: "latest", label: "最新产品" },
+  { value: "pinned", label: "置顶" },
 ];
 const HOME_SECTION_LABELS = HOME_SECTION_OPTIONS.reduce((labels, option) => {
   labels[option.value] = String(option.label || option.value).replace("显示", "");
@@ -69,6 +71,11 @@ function isCloudFileId(value) {
   return trimText(value).startsWith("cloud://");
 }
 
+function normalizeGalleryImages(value, fallbackImage = "") {
+  const images = uniqueValues([...(Array.isArray(value) ? value : []), fallbackImage]);
+  return images.filter(isCloudFileId).slice(0, CASE_ADMIN_GALLERY_MAX);
+}
+
 function normalizeSortOrder(value) {
   if (value === "" || value === null || value === undefined) return "";
   const numberValue = Number(value);
@@ -81,6 +88,7 @@ function createEmptyCaseForm() {
     caseId: "",
     coverImage: "",
     coverThumbnail: "",
+    galleryImages: [],
     wineType: "白酒",
     packageTypes: [],
     styles: [],
@@ -91,6 +99,7 @@ function createEmptyCaseForm() {
     sortOrder: "",
     notes: "",
     isVisible: false,
+    isPinned: false,
   };
 }
 
@@ -114,11 +123,13 @@ function buildCaseAdminOptionViews(form = {}, formOptions = CASE_ADMIN_FORM_OPTI
 }
 
 function normalizeCaseAdminForm(form = {}) {
+  const galleryImages = normalizeGalleryImages(form.galleryImages, form.coverImage);
   return {
     title: trimText(form.title),
     caseId: trimText(form.caseId),
-    coverImage: trimText(form.coverImage),
+    coverImage: galleryImages[0] || trimText(form.coverImage),
     coverThumbnail: trimText(form.coverThumbnail),
+    galleryImages,
     wineType: trimText(form.wineType) || "白酒",
     packageTypes: normalizeStringList(form.packageTypes),
     styles: normalizeStringList(form.styles),
@@ -129,6 +140,7 @@ function normalizeCaseAdminForm(form = {}) {
     sortOrder: normalizeSortOrder(form.sortOrder),
     notes: trimText(form.notes),
     isVisible: form.isVisible === true,
+    isPinned: form.isPinned === true,
   };
 }
 
@@ -156,14 +168,23 @@ function valuesObject(values = []) {
 
 function validateCaseAdminForm(form = {}, options = {}) {
   const normalized = normalizeCaseAdminForm(form);
+  const rawGalleryImages = Array.isArray(form.galleryImages) && form.galleryImages.length
+    ? form.galleryImages
+    : [form.coverImage];
   if (!normalized.title) {
     return { valid: false, message: "请填写案例标题" };
   }
-  if ((options.isCreate || normalized.coverImage) && !normalized.coverImage) {
+  if (rawGalleryImages.some((image) => trimText(image) && !isCloudFileId(image))) {
+    return { valid: false, message: "封面图片需要先上传到云存储" };
+  }
+  if (rawGalleryImages.filter((image) => trimText(image)).length > CASE_ADMIN_GALLERY_MAX) {
+    return { valid: false, message: "最多上传 5 张图片" };
+  }
+  if ((options.isCreate || normalized.coverImage) && !normalized.galleryImages.length) {
     return { valid: false, message: "请上传封面图片" };
   }
-  if (normalized.coverImage && !isCloudFileId(normalized.coverImage)) {
-    return { valid: false, message: "封面图片需要先上传到云存储" };
+  if (normalized.galleryImages.length > CASE_ADMIN_GALLERY_MAX) {
+    return { valid: false, message: "最多上传 5 张图片" };
   }
   if (!normalized.packageTypes.length) {
     return { valid: false, message: "请选择包装内容" };
@@ -184,6 +205,7 @@ function buildCaseAdminPayload(form = {}) {
     caseId: normalized.caseId,
     coverImage: normalized.coverImage,
     coverThumbnail: normalized.coverThumbnail,
+    galleryImages: normalized.galleryImages,
     wineType: normalized.wineType,
     packageTypes: valuesObject(normalized.packageTypes),
     styles: valuesObject(normalized.styles),
@@ -194,6 +216,7 @@ function buildCaseAdminPayload(form = {}) {
     sortOrder: normalized.sortOrder,
     notes: normalized.notes,
     isVisible: normalized.isVisible,
+    isPinned: normalized.isPinned,
     keywords: buildCaseKeywords(normalized),
   };
 }
@@ -220,6 +243,7 @@ function normalizeCaseAdminItem(record = {}) {
     visibilityLabel: visible ? "显示中" : "已隐藏",
     tagSummary: getTagSummary(item),
     homeSectionSummary: getHomeSectionSummary(item),
+    pinnedLabel: item.isPinned ? "默认排序置顶" : "",
     source: "case",
     sourceLabel: "案例",
   };
@@ -273,6 +297,7 @@ function buildCaseAdminImagePath(filePath = "", now = Date.now(), random = Math.
 
 module.exports = {
   CASE_ADMIN_DEFAULT_SORT_ORDER,
+  CASE_ADMIN_GALLERY_MAX,
   CASE_ADMIN_FORM_OPTIONS,
   CASE_ADMIN_NOTES_MAX_LENGTH,
   CASE_ADMIN_VIEW_OPTIONS,
@@ -286,6 +311,7 @@ module.exports = {
   isCloudFileId,
   isCaseAdminOptionSelected,
   normalizeCaseAdminForm,
+  normalizeGalleryImages,
   normalizeCaseAdminHomepageDisplayItem,
   normalizeCaseAdminItem,
   normalizeCaseAdminKeyword,

@@ -10,12 +10,17 @@
       <view class="case-subtitle">产品卡片点击后进入详情确认信息</view>
     </view>
 
-    <view wx:if="{{caseItem.coverImageUrl}}" class="hero-image-wrap" bindtap="previewImage">
-      <image
-        class="hero-image"
-        mode="aspectFill"
-        src="{{caseItem.coverImageUrl}}"
-      ></image>
+    <view wx:if="{{galleryItems.length}}" class="hero-image-wrap">
+      <swiper
+        class="hero-gallery"
+        current="{{currentImageIndex}}"
+        circular="{{galleryItems.length > 1}}"
+        bindchange="onGalleryChange"
+      >
+        <swiper-item wx:for="{{galleryItems}}" wx:key="fileID">
+          <image class="hero-image" mode="aspectFill" src="{{item.url}}" bindtap="previewImage"></image>
+        </swiper-item>
+      </swiper>
       <view
         class="hero-favorite {{isFavorited ? 'hero-favorite-active' : ''}}"
         catchtap="toggleFavorite"
@@ -37,6 +42,18 @@
     <view class="title-block">
       <view class="detail-heading">{{detailHeading}}</view>
       <view class="detail-subtitle">{{detailSubtitle}}</view>
+    </view>
+
+    <view wx:if="{{galleryItems.length > 1}}" class="gallery-thumbnails">
+      <view
+        wx:for="{{galleryItems}}"
+        wx:key="fileID"
+        class="gallery-thumbnail {{currentImageIndex === index ? 'gallery-thumbnail-active' : ''}}"
+        data-index="{{index}}"
+        bindtap="selectGalleryImage"
+      >
+        <image class="gallery-thumbnail-image" src="{{item.url}}" mode="aspectFill"></image>
+      </view>
     </view>
 
     <view class="info-card">
@@ -76,7 +93,7 @@
         <image
           class="image-preview-image"
           mode="aspectFit"
-          src="{{caseItem.coverImageUrl}}"
+          src="{{currentImageUrl}}"
         ></image>
       </movable-view>
     </movable-area>

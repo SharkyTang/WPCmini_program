@@ -5,6 +5,8 @@ const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 50;
 const SEARCH_FETCH_LIMIT = 300;
 const IMAGE_URL_BATCH_SIZE = 50;
+const CASE_GALLERY_MAX = 5;
+const PINNED_CASE_LIMIT = 20;
 const CASE_ID_PREFIX = "case_";
 const CASE_ID_PAD_LENGTH = 3;
 const CASE_ID_SEQUENCE_MAX = 999999;
@@ -37,6 +39,7 @@ const ALLOWED_CASE_FIELDS = [
   "caseId",
   "coverImage",
   "coverThumbnail",
+  "galleryImages",
   "wineType",
   "packageTypes",
   "styles",
@@ -47,6 +50,7 @@ const ALLOWED_CASE_FIELDS = [
   "sortOrder",
   "notes",
   "isVisible",
+  "isPinned",
 ];
 
 function trimText(value) {
@@ -108,6 +112,17 @@ function normalizeCloudFileIds(value = [], limit = IMAGE_URL_BATCH_SIZE) {
     .slice(0, limit);
 }
 
+function normalizeGalleryImages(value) {
+  const rawImages = normalizeValues(value).map(trimText).filter(Boolean);
+  if (rawImages.length > CASE_GALLERY_MAX) {
+    return { valid: false, code: "TOO_MANY_IMAGES", message: "一个案例最多上传 5 张图片" };
+  }
+  if (rawImages.some((fileID) => !isCloudFileId(fileID))) {
+    return { valid: false, code: "INVALID_GALLERY_IMAGE", message: "封面图片需要先上传到云存储" };
+  }
+  return { valid: true, images: uniqueValues(rawImages) };
+}
+
 function normalizeSortOrder(value) {
   if (value === "" || value === null || value === undefined) return CASE_ADMIN_DEFAULT_SORT_ORDER;
   const numberValue = Number(value);
@@ -131,7 +146,7 @@ function normalizePageSize(value) {
 }
 
 function normalizeVisibilityFilter(value) {
-  return ["visible", "hidden"].includes(value) ? value : "all";
+  return ["visible", "hidden", "pinned"].includes(value) ? value : "all";
 }
 
 function normalizeHomepageDisplaySlot(value) {
@@ -216,12 +231,19 @@ function sanitizeCasePayload(input = {}, options = {}) {
     if (!data.title) return { valid: false, code: "INVALID_TITLE", message: "请填写案例标题" };
   }
 
-  if (isCreate || Object.prototype.hasOwnProperty.call(picked, "coverImage")) {
-    data.coverImage = trimText(picked.coverImage);
-    if (!data.coverImage) return { valid: false, code: "INVALID_IMAGE", message: "请上传封面图片" };
-    if (!isCloudFileId(data.coverImage)) {
-      return { valid: false, code: "INVALID_IMAGE", message: "封面图片需要先上传到云存储" };
+  const hasGalleryInput = Object.prototype.hasOwnProperty.call(picked, "galleryImages");
+  const hasCoverInput = Object.prototype.hasOwnProperty.call(picked, "coverImage");
+  if (isCreate || hasGalleryInput || hasCoverInput) {
+    const galleryResult = normalizeGalleryImages(
+      hasGalleryInput ? picked.galleryImages : [picked.coverImage]
+    );
+    if (!galleryResult.valid) return galleryResult;
+    if (!galleryResult.images.length) {
+      return { valid: false, code: "INVALID_IMAGE", message: "请上传封面图片" };
     }
+    data.galleryImages = galleryResult.images;
+    // 服务端以首图为准，避免客户端传入的封面与图库顺序不一致。
+    data.coverImage = galleryResult.images[0];
   }
   if (Object.prototype.hasOwnProperty.call(picked, "coverThumbnail")) {
     data.coverThumbnail = trimText(picked.coverThumbnail);
@@ -286,6 +308,9 @@ function sanitizeCasePayload(input = {}, options = {}) {
   if (Object.prototype.hasOwnProperty.call(picked, "isVisible") || isCreate) {
     data.isVisible = picked.isVisible === true;
   }
+  if (Object.prototype.hasOwnProperty.call(picked, "isPinned") || isCreate) {
+    data.isPinned = picked.isPinned === true;
+  }
 
   data.keywords = buildCaseKeywords(data);
   return { valid: true, data };
@@ -315,6 +340,7 @@ function filterCaseItems(items = [], options = {}) {
   return items.filter((item) => {
     if (visibility === "visible" && item.isVisible === false) return false;
     if (visibility === "hidden" && item.isVisible !== false) return false;
+    if (visibility === "pinned" && item.isPinned !== true) return false;
     return !keyword || buildCaseSearchText(item).includes(keyword);
   });
 }
@@ -419,11 +445,13 @@ module.exports = {
   BANNER_COLLECTION,
   CASE_ADMIN_DEFAULT_SORT_ORDER,
   CASE_COLLECTION,
+  CASE_GALLERY_MAX,
   IMAGE_URL_BATCH_SIZE,
   HOME_DISPLAY_LABELS,
   HOME_DISPLAY_LIMITS,
   PAGE_SIZE_DEFAULT,
   PAGE_SIZE_MAX,
+  PINNED_CASE_LIMIT,
   SEARCH_FETCH_LIMIT,
   VALID_CASE_ADMIN_ACTIONS,
   buildCaseKeywords,
@@ -439,6 +467,7 @@ module.exports = {
   isAdminOpenid,
   isCloudFileId,
   normalizeCloudFileIds,
+  normalizeGalleryImages,
   normalizePage,
   normalizePageSize,
   normalizeHomepageDisplaySlot,

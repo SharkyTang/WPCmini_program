@@ -70,6 +70,8 @@ test("creates hidden empty case form defaults", () => {
   assert.deepEqual(plain(form.packageTypes), []);
   assert.deepEqual(plain(form.statuses), []);
   assert.deepEqual(plain(form.homeSections), []);
+  assert.deepEqual(plain(form.galleryImages), []);
+  assert.equal(form.isPinned, false);
 });
 
 test("exposes case admin form options by field key", () => {
@@ -180,6 +182,7 @@ test("normalizes case admin form and builds keywords", () => {
     title: "  青花礼盒  ",
     caseId: " case_new ",
     coverImage: "cloud://cloud1/file.jpg",
+    galleryImages: ["cloud://cloud1/file.jpg", "cloud://cloud1/detail.jpg"],
     wineType: "",
     packageTypes: ["礼盒", "礼盒", ""],
     styles: ["国风"],
@@ -190,6 +193,7 @@ test("normalizes case admin form and builds keywords", () => {
     sortOrder: "8",
     notes: "  备注  ",
     isVisible: true,
+    isPinned: true,
   });
   const keywords = buildCaseKeywords(form);
 
@@ -197,6 +201,9 @@ test("normalizes case admin form and builds keywords", () => {
   assert.equal(form.wineType, "白酒");
   assert.deepEqual(plain(form.packageTypes), ["礼盒"]);
   assert.equal(form.sortOrder, 8);
+  assert.deepEqual(plain(form.galleryImages), ["cloud://cloud1/file.jpg", "cloud://cloud1/detail.jpg"]);
+  assert.equal(form.coverImage, "cloud://cloud1/file.jpg");
+  assert.equal(form.isPinned, true);
   assert.deepEqual(plain(keywords.values), [
     "青花礼盒",
     "case_new",
@@ -207,6 +214,17 @@ test("normalizes case admin form and builds keywords", () => {
     "送礼",
     "最新产品",
   ]);
+});
+
+test("rejects galleries with more than five images", () => {
+  const result = validateCaseAdminForm({
+    title: "多图案例",
+    galleryImages: Array.from({ length: 6 }, (_, index) => `cloud://cloud1/${index}.jpg`),
+    packageTypes: ["礼盒"],
+  }, { isCreate: true });
+
+  assert.equal(result.valid, false);
+  assert.equal(result.message, "最多上传 5 张图片");
 });
 
 test("builds database payload with json value fields and leaves blank sort order for cloud default", () => {

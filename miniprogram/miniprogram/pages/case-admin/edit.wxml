@@ -13,16 +13,27 @@
 
   <view wx:else class="form-card">
     <view class="field">
-      <view class="field-label">封面图片 *</view>
-      <view class="cover-picker" bindtap="chooseCoverImage">
-        <image wx:if="{{coverImageUrl}}" class="cover-preview" src="{{coverImageUrl}}" mode="aspectFill" />
-        <view wx:else class="cover-empty">
-          <view class="cover-plus">+</view>
-          <view>上传封面</view>
+      <view class="field-label">案例图片 *</view>
+      <view class="gallery-upload-wrap">
+        <view class="gallery-grid">
+          <view wx:for="{{galleryPreviewUrls}}" wx:key="*this" class="gallery-item">
+            <image class="gallery-preview" src="{{item}}" mode="aspectFill" />
+            <view wx:if="{{index === 0}}" class="gallery-cover-badge">封面</view>
+            <view class="gallery-actions">
+              <view wx:if="{{index > 0}}" class="gallery-action" data-index="{{index}}" data-direction="left" bindtap="moveGalleryImage">←</view>
+              <view wx:if="{{index < galleryPreviewUrls.length - 1}}" class="gallery-action" data-index="{{index}}" data-direction="right" bindtap="moveGalleryImage">→</view>
+              <view class="gallery-action gallery-remove" data-index="{{index}}" bindtap="removeGalleryImage">×</view>
+            </view>
+          </view>
+          <view wx:if="{{galleryPreviewUrls.length < galleryMax}}" class="cover-picker" bindtap="chooseGalleryImages">
+            <view class="cover-plus">+</view>
+            <view>添加图片</view>
+            <view class="gallery-count">{{galleryPreviewUrls.length}} / {{galleryMax}}</view>
+          </view>
         </view>
         <view wx:if="{{uploading}}" class="upload-mask">上传中...</view>
       </view>
-      <view class="field-hint">图片会上传到云存储，不会放进小程序代码包。</view>
+      <view class="field-hint">最多 5 张；第一张为封面，可通过箭头调整顺序。图片会上传到云存储。</view>
     </view>
 
     <view class="field">
@@ -138,6 +149,14 @@
         <view class="field-hint">新增默认隐藏，确认图片和标签后再打开。</view>
       </view>
       <switch checked="{{form.isVisible}}" bindchange="onVisibleChange" />
+    </view>
+
+    <view class="visible-row">
+      <view>
+        <view class="field-label">置顶显示</view>
+        <view class="field-hint">仅在分类页默认排序优先展示，全部案例最多置顶 20 个。</view>
+      </view>
+      <switch checked="{{form.isPinned}}" bindchange="onPinnedChange" />
     </view>
 
     <view class="field home-section-field">

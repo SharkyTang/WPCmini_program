@@ -106,6 +106,20 @@ test("filters visible cases by text, single-value fields, and multi-value fields
   assert.deepEqual(plain(result.map((item) => item.id)), ["match"]);
 });
 
+test("keeps legacy covers as a one-image gallery and pins only default sorting", () => {
+  const legacy = normalizeCaseRecord({ _id: "legacy", coverImage: "cloud://legacy", isVisible: true });
+  const cases = [
+    normalizeCaseRecord({ _id: "normal", coverImage: "cloud://normal", sortOrder: 1, isVisible: true }),
+    normalizeCaseRecord({ _id: "pinned", galleryImages: ["cloud://cover", "cloud://detail"], sortOrder: 9, isVisible: true, isPinned: true }),
+  ];
+  const sorted = filterCases(cases, { pinnedFirst: true });
+
+  assert.deepEqual(plain(legacy.galleryImages), ["cloud://legacy"]);
+  assert.equal(cases[1].coverImage, "cloud://cover");
+  assert.deepEqual(plain(sorted.map((item) => item.id)), ["pinned", "normal"]);
+  assert.deepEqual(plain(filterCases(cases).map((item) => item.id)), ["normal", "pinned"]);
+});
+
 test("builds fallback banners from home section cases when CMS banners are empty", () => {
   const cases = [
     normalizeCaseRecord({

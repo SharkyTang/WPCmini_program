@@ -4,6 +4,7 @@ const {
   buildCaseAdminOptionViews,
   buildCaseAdminPayload,
   createEmptyCaseForm,
+  CASE_ADMIN_GALLERY_MAX,
   validateCaseAdminForm,
 } = require("../../utils/caseAdminData");
 const {
@@ -25,6 +26,12 @@ function getMediaPath(result = {}) {
   return file && (file.tempFilePath || file.path);
 }
 
+function getMediaPaths(result = {}) {
+  return (result.tempFiles || [])
+    .map((file) => file && (file.tempFilePath || file.path))
+    .filter(Boolean);
+}
+
 Page({
   data: {
     id: "",
@@ -34,6 +41,8 @@ Page({
     uploading: false,
     errorMessage: "",
     coverImageUrl: "",
+    galleryPreviewUrls: [],
+    galleryMax: CASE_ADMIN_GALLERY_MAX,
     form: createEmptyCaseForm(),
     formOptions: CASE_ADMIN_FORM_OPTIONS,
     optionViews: buildCaseAdminOptionViews(createEmptyCaseForm(), CASE_ADMIN_FORM_OPTIONS),
@@ -60,6 +69,9 @@ Page({
         caseId: caseItem.caseId || "",
         coverImage: caseItem.coverImage || "",
         coverThumbnail: caseItem.coverThumbnail || "",
+        galleryImages: (caseItem.galleryImages && caseItem.galleryImages.length
+          ? caseItem.galleryImages
+          : [caseItem.coverImage]).filter(Boolean),
         wineType: caseItem.wineType || "白酒",
         packageTypes: caseItem.packageTypes || [],
         styles: caseItem.styles || [],
@@ -73,10 +85,12 @@ Page({
             : String(caseItem.sortOrder),
         notes: caseItem.notes || "",
         isVisible: caseItem.isVisible !== false,
+        isPinned: caseItem.isPinned === true,
       };
       this.setData({
         loading: false,
         coverImageUrl: caseItem.coverImageUrl || caseItem.coverImage || "",
+        galleryPreviewUrls: caseItem.galleryImageUrls || [caseItem.coverImageUrl || caseItem.coverImage].filter(Boolean),
         form,
         optionViews: buildCaseAdminOptionViews(form, this.data.formOptions),
       });
@@ -120,6 +134,10 @@ Page({
     this.updateFormField("isVisible", event.detail.value === true);
   },
 
+  onPinnedChange(event) {
+    this.updateFormField("isPinned", event.detail.value === true);
+  },
+
   selectSingle(event) {
     const { field, value } = event.currentTarget.dataset;
     if (!field) return;
@@ -134,16 +152,21 @@ Page({
     this.updateFormField(field, nextValues);
   },
 
-  chooseCoverImage() {
+  chooseGalleryImages() {
+    const remaining = CASE_ADMIN_GALLERY_MAX - this.data.form.galleryImages.length;
+    if (remaining <= 0) {
+      wx.showToast({ title: "最多上传 5 张图片", icon: "none" });
+      return;
+    }
     wx.chooseMedia({
-      count: 1,
+      count: remaining,
       mediaType: ["image"],
       sourceType: ["album", "camera"],
       sizeType: ["compressed"],
       success: async (result) => {
-        const filePath = getMediaPath(result);
-        if (!filePath) return;
-        await this.uploadCover(filePath);
+        const filePaths = getMediaPaths(result);
+        if (!filePaths.length) return;
+        await this.uploadGalleryImages(filePaths);
       },
     });
   },
@@ -163,42 +186,55 @@ Page({
     });
   },
 
-  async uploadCover(filePath) {
+  async uploadGalleryImages(filePaths = []) {
     this.setData({
       uploading: true,
     });
 
     try {
-      const compressedPath = await this.compressImage(filePath);
-      const cloudPath = buildCaseAdminImagePath(compressedPath);
-      const fileID = await uploadCaseCoverImage({
-        filePath: compressedPath,
-        cloudPath,
-      });
-      let coverThumbnail = "";
-      try {
-        const thumbnailPath = await this.compressThumbnail(filePath);
-        coverThumbnail = await uploadCaseCoverImage({
-          filePath: thumbnailPath,
-          cloudPath: cloudPath.replace(/(\.[a-zA-Z0-9]+)$/, "-thumb$1"),
-        });
-      } catch (thumbnailError) {
-        console.warn("缩略图上传失败，将继续使用原图", thumbnailError);
+      const galleryImages = [...this.data.form.galleryImages];
+      const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
+      let coverThumbnail = this.data.form.coverThumbnail;
+      let uploadedCount = 0;
+
+      for (const filePath of filePaths.slice(0, CASE_ADMIN_GALLERY_MAX - galleryImages.length)) {
+        try {
+          const compressedPath = await this.compressImage(filePath);
+          const cloudPath = buildCaseAdminImagePath(compressedPath);
+          const fileID = await uploadCaseCoverImage({ filePath: compressedPath, cloudPath });
+          if (!galleryImages.length) {
+            try {
+              const thumbnailPath = await this.compressThumbnail(filePath);
+              coverThumbnail = await uploadCaseCoverImage({
+                filePath: thumbnailPath,
+                cloudPath: cloudPath.replace(/(\.[a-zA-Z0-9]+)$/, "-thumb$1"),
+              });
+            } catch (thumbnailError) {
+              console.warn("缩略图上传失败，将继续使用原图", thumbnailError);
+            }
+          }
+          galleryImages.push(fileID);
+          galleryPreviewUrls.push(compressedPath);
+          uploadedCount += 1;
+        } catch (uploadError) {
+          console.warn("上传案例图片失败", uploadError);
+        }
       }
       const form = {
         ...this.data.form,
-        coverImage: fileID,
+        galleryImages,
+        coverImage: galleryImages[0] || "",
         coverThumbnail,
       };
       this.setData({
         uploading: false,
-        coverImageUrl: compressedPath,
-        "form.coverImage": fileID,
-        "form.coverThumbnail": coverThumbnail,
+        coverImageUrl: galleryPreviewUrls[0] || "",
+        galleryPreviewUrls,
+        form,
         optionViews: buildCaseAdminOptionViews(form, this.data.formOptions),
       });
       wx.showToast({
-        title: "图片已上传",
+        title: uploadedCount ? `已上传 ${uploadedCount} 张` : "图片上传失败",
         icon: "none",
       });
     } catch (error) {
@@ -222,6 +258,54 @@ Page({
         success: (result) => resolve(result.tempFilePath || filePath),
         fail: () => resolve(filePath),
       });
+    });
+  },
+
+  moveGalleryImage(event) {
+    const index = Number(event.currentTarget.dataset.index);
+    const direction = event.currentTarget.dataset.direction;
+    const nextIndex = direction === "left" ? index - 1 : index + 1;
+    const galleryImages = [...this.data.form.galleryImages];
+    const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
+    if (index < 0 || nextIndex < 0 || index >= galleryImages.length || nextIndex >= galleryImages.length) return;
+    [galleryImages[index], galleryImages[nextIndex]] = [galleryImages[nextIndex], galleryImages[index]];
+    [galleryPreviewUrls[index], galleryPreviewUrls[nextIndex]] = [galleryPreviewUrls[nextIndex], galleryPreviewUrls[index]];
+    const form = {
+      ...this.data.form,
+      galleryImages,
+      coverImage: galleryImages[0],
+      // 旧缩略图只对应原封面，调整首图后安全回退到原图。
+      coverThumbnail: "",
+    };
+    this.setData({
+      form,
+      coverImageUrl: galleryPreviewUrls[0] || "",
+      galleryPreviewUrls,
+      optionViews: buildCaseAdminOptionViews(form, this.data.formOptions),
+    });
+  },
+
+  removeGalleryImage(event) {
+    const index = Number(event.currentTarget.dataset.index);
+    const galleryImages = [...this.data.form.galleryImages];
+    const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
+    if (galleryImages.length <= 1) {
+      wx.showToast({ title: "案例至少保留一张图片", icon: "none" });
+      return;
+    }
+    galleryImages.splice(index, 1);
+    galleryPreviewUrls.splice(index, 1);
+    const form = {
+      ...this.data.form,
+      galleryImages,
+      coverImage: galleryImages[0],
+      coverThumbnail: index === 0 ? "" : this.data.form.coverThumbnail,
+    };
+    this.setData({
+      form,
+      coverImageUrl: galleryPreviewUrls[0] || "",
+      galleryPreviewUrls,
+      optionViews: buildCaseAdminOptionViews(form, this.data.formOptions),
     });
   },
 
