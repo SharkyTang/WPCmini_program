@@ -75,8 +75,7 @@ button::after {
   padding: 28rpx;
 }
 
-.card-head,
-.card-actions {
+.card-head {
   display: flex;
   align-items: center;
   gap: 12rpx;
@@ -119,10 +118,14 @@ button::after {
 
 .card-actions {
   margin-top: 24rpx;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12rpx;
 }
 
 .action-button {
-  min-width: 112rpx;
+  width: 100%;
+  min-width: 0;
   height: 58rpx;
   margin: 0;
   padding: 0 20rpx;
@@ -133,6 +136,12 @@ button::after {
   font-size: 22rpx;
   line-height: 54rpx;
   font-weight: 800;
+}
+
+.action-delete {
+  border-color: #d9aaa4;
+  background: #fff8f7;
+  color: #a33b31;
 }
 
 .action-primary {

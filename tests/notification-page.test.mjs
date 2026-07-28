@@ -25,8 +25,10 @@ function loadNotificationPage(options = {}) {
   const calls = {
     subscribeRequests: [],
     grants: [],
+    grantAttempts: 0,
     navigations: [],
     settings: 0,
+    settingChecks: 0,
     toasts: [],
   };
   const notificationData = loadNotificationData();
@@ -48,6 +50,12 @@ function loadNotificationPage(options = {}) {
           fetchPublicNotifications: async () => options.notifications || [],
           fetchSubscriptionStatus: async () => subscriptionResult,
           saveSubscriptionGrant: async (type, templateId, status) => {
+            calls.grantAttempts += 1;
+            if (calls.grantAttempts <= Number(options.grantFailures || 0)) {
+              const error = new Error(options.grantErrorMessage || "save failed");
+              error.code = options.grantErrorCode || "SERVER_ERROR";
+              throw error;
+            }
             calls.grants.push({ type, templateId, status });
             return {
               subscriptions: notificationData.normalizeSubscriptionState({
@@ -62,8 +70,21 @@ function loadNotificationPage(options = {}) {
     },
     console,
     wx: {
+      getSetting(request) {
+        calls.settingChecks += 1;
+        request.success(options.settingsResponse || {
+          subscriptionsSetting: {
+            mainSwitch: true,
+            itemSettings: {},
+          },
+        });
+      },
       requestSubscribeMessage(request) {
         calls.subscribeRequests.push(request);
+        if (options.subscribeError) {
+          request.fail(options.subscribeError);
+          return;
+        }
         request.success({
           [request.tmplIds[0]]: options.subscribeStatus || "accept",
         });
@@ -190,6 +211,7 @@ await test("notification page removes custom customer replies and exposes one-ti
   assert.equal(wxml.includes("客服回复"), false);
   assert.equal(pageSource.includes("订阅下一次"), true);
   assert.equal(wxml.includes('bindtap="subscribeNext"'), true);
+  assert.equal(wxml.includes("item.hasCaseLink"), true);
 });
 
 await test("subscription authorization is triggered by a tap and stored server-side", async () => {
@@ -206,6 +228,90 @@ await test("subscription authorization is triggered by a tap and stored server-s
     status: "accept",
   }]);
   assert.equal(page.data.subscriptions.product_new.status, "granted");
+});
+
+await test("disabled subscription settings open WeChat settings before authorization", async () => {
+  const { page, calls } = loadNotificationPage({
+    settingsResponse: {
+      subscriptionsSetting: {
+        mainSwitch: false,
+        itemSettings: {},
+      },
+    },
+  });
+  await page.loadNotifications();
+  await page.subscribeNext({
+    currentTarget: { dataset: { type: "product_new" } },
+  });
+
+  assert.equal(calls.settingChecks, 1);
+  assert.equal(calls.settings, 1);
+  assert.equal(calls.subscribeRequests.length, 0);
+  assert.equal(calls.grantAttempts, 0);
+});
+
+await test("WeChat authorization errors are reported without saving a grant", async () => {
+  const { page, calls } = loadNotificationPage({
+    subscribeError: {
+      errCode: 20001,
+      errMsg: "requestSubscribeMessage:fail invalid template id",
+    },
+  });
+  await page.loadNotifications();
+  await page.subscribeNext({
+    currentTarget: { dataset: { type: "product_new" } },
+  });
+
+  assert.equal(calls.grantAttempts, 0);
+  assert.equal(calls.toasts.at(-1).title, "订阅模板配置无效，请联系管理员");
+});
+
+await test("a code-only main switch error directs the user to WeChat settings", async () => {
+  const { page, calls } = loadNotificationPage({
+    subscribeError: {
+      errCode: 20004,
+      errMsg: "requestSubscribeMessage:fail",
+    },
+  });
+  await page.loadNotifications();
+  await page.subscribeNext({
+    currentTarget: { dataset: { type: "product_new" } },
+  });
+
+  assert.equal(calls.grantAttempts, 0);
+  assert.equal(calls.toasts.at(-1).title, "请在微信设置中开启订阅消息");
+});
+
+await test("cloud grant saving retries once after WeChat authorization succeeds", async () => {
+  const { page, calls } = loadNotificationPage({
+    subscribeStatus: "accept",
+    grantFailures: 1,
+  });
+  await page.loadNotifications();
+  await page.subscribeNext({
+    currentTarget: { dataset: { type: "version_update" } },
+  });
+
+  assert.equal(calls.subscribeRequests.length, 1);
+  assert.equal(calls.grantAttempts, 2);
+  assert.equal(calls.grants.length, 1);
+  assert.equal(page.data.subscriptions.version_update.status, "granted");
+});
+
+await test("cloud grant failures show a separate configuration error after retry", async () => {
+  const { page, calls } = loadNotificationPage({
+    subscribeStatus: "accept",
+    grantFailures: 2,
+    grantErrorCode: "INVALID_TEMPLATE",
+  });
+  await page.loadNotifications();
+  await page.subscribeNext({
+    currentTarget: { dataset: { type: "version_update" } },
+  });
+
+  assert.equal(calls.subscribeRequests.length, 1);
+  assert.equal(calls.grantAttempts, 2);
+  assert.equal(calls.toasts.at(-1).title, "微信已授权，但云端模板配置不匹配");
 });
 
 await test("banned subscriptions open WeChat settings instead of requesting again", async () => {

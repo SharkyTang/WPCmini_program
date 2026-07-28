@@ -48,6 +48,83 @@ function buildSubscriptionItems(subscriptions = {}, templateIds = {}) {
   });
 }
 
+function getErrorDetails(error = {}) {
+  return {
+    code: error.errCode || error.code || "",
+    message: error.errMsg || error.message || "",
+  };
+}
+
+function getAuthorizationErrorMessage(error = {}) {
+  const details = getErrorDetails(error);
+  const source = `${details.code} ${details.message}`.toLowerCase();
+  const code = Number(details.code);
+  if (
+    [10001, 10002, 10003, 20001, 20002, 20003].includes(code)
+    || /template|tmplid|invalid.*id/.test(source)
+  ) {
+    return "订阅模板配置无效，请联系管理员";
+  }
+  if (
+    code === 20004
+    || /main.?switch|switch.?off|permission|auth deny|ban/.test(source)
+  ) {
+    return "请在微信设置中开启订阅消息";
+  }
+  if (code === 20005) {
+    return "当前小程序暂不能使用订阅消息";
+  }
+  if (/frequen|too many|limit/.test(source)) {
+    return "操作过于频繁，请稍后再试";
+  }
+  if (/not support|unsupported|version/.test(source)) {
+    return "当前微信版本不支持，请升级后重试";
+  }
+  return details.code
+    ? `订阅授权失败（${details.code}）`
+    : "订阅授权失败，请稍后重试";
+}
+
+function getGrantSaveErrorMessage(error = {}) {
+  const details = getErrorDetails(error);
+  if (details.code === "INVALID_TEMPLATE") {
+    return "微信已授权，但云端模板配置不匹配";
+  }
+  if (details.code === "SERVER_ERROR") {
+    return "微信已授权，但订阅状态保存失败";
+  }
+  return "微信已授权，但云端保存失败";
+}
+
+async function requestSubscriptionSettings() {
+  if (!wx.getSetting) return {};
+  try {
+    return await new Promise((resolve, reject) => {
+      wx.getSetting({
+        withSubscriptions: true,
+        success: resolve,
+        fail: reject,
+      });
+    });
+  } catch (error) {
+    console.warn("读取微信订阅设置失败，将继续请求授权", error);
+    return {};
+  }
+}
+
+async function saveSubscriptionGrantWithRetry(type, templateId, status) {
+  try {
+    return await saveSubscriptionGrant(type, templateId, status);
+  } catch (firstError) {
+    console.warn("订阅状态首次保存失败，准备重试", {
+      stage: "cloud_save_retry",
+      type,
+      ...getErrorDetails(firstError),
+    });
+    return saveSubscriptionGrant(type, templateId, status);
+  }
+}
+
 Page({
   data: {
     tabs: TAB_ITEMS,
@@ -116,6 +193,15 @@ Page({
     this.refreshDisplayNotifications();
   },
 
+  openSubscriptionSettings() {
+    wx.openSetting({
+      withSubscriptions: true,
+      fail() {
+        wx.showToast({ title: "请在微信设置中检查订阅消息权限", icon: "none" });
+      },
+    });
+  },
+
   async subscribeNext(event) {
     const type = event.currentTarget.dataset.type;
     const templateId = this.data.templateIds[type];
@@ -123,26 +209,65 @@ Page({
     if (!type || !templateId || this.data.subscribingType) return;
 
     if (subscription.status === "banned") {
-      wx.openSetting({
-        withSubscriptions: true,
-        fail() {
-          wx.showToast({ title: "请在微信设置中检查订阅消息权限", icon: "none" });
-        },
-      });
+      this.openSubscriptionSettings();
       return;
     }
 
     this.setData({ subscribingType: type });
     try {
-      const response = await new Promise((resolve, reject) => {
-        wx.requestSubscribeMessage({
-          tmplIds: [templateId],
-          success: resolve,
-          fail: reject,
+      const settingResponse = await requestSubscriptionSettings();
+      const subscriptionsSetting = settingResponse.subscriptionsSetting || {};
+      const itemSettings = subscriptionsSetting.itemSettings || {};
+      if (
+        subscriptionsSetting.mainSwitch === false
+        || itemSettings[templateId] === "reject"
+        || itemSettings[templateId] === "ban"
+      ) {
+        wx.showToast({ title: "请先在微信设置中开启订阅消息", icon: "none" });
+        this.openSubscriptionSettings();
+        return;
+      }
+
+      let response;
+      try {
+        response = await new Promise((resolve, reject) => {
+          wx.requestSubscribeMessage({
+            tmplIds: [templateId],
+            success: resolve,
+            fail: reject,
+          });
         });
-      });
+      } catch (error) {
+        console.error("订阅消息授权失败", {
+          stage: "wechat_authorization",
+          type,
+          ...getErrorDetails(error),
+        });
+        wx.showToast({
+          title: getAuthorizationErrorMessage(error),
+          icon: "none",
+        });
+        return;
+      }
+
       const status = response[templateId] || "reject";
-      const result = await saveSubscriptionGrant(type, templateId, status);
+      let result;
+      try {
+        result = await saveSubscriptionGrantWithRetry(type, templateId, status);
+      } catch (error) {
+        console.error("订阅状态云端保存失败", {
+          stage: "cloud_save",
+          type,
+          status,
+          ...getErrorDetails(error),
+        });
+        wx.showToast({
+          title: getGrantSaveErrorMessage(error),
+          icon: "none",
+        });
+        return;
+      }
+
       this.setData({
         subscriptions: result.subscriptions,
         templateIds: result.templateIds,
@@ -158,12 +283,6 @@ Page({
           ? "请检查微信订阅设置"
           : "已取消，可稍后再订阅";
       wx.showToast({ title, icon: "none" });
-    } catch (error) {
-      console.error("订阅消息授权失败", error);
-      wx.showToast({
-        title: "订阅失败，请稍后重试",
-        icon: "none",
-      });
     } finally {
       this.setData({ subscribingType: "" });
     }

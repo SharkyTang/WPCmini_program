@@ -45,6 +45,10 @@ page {
   color: #fff;
 }
 
+.type-chip-locked {
+  opacity: 0.65;
+}
+
 .text-input,
 .textarea-input {
   width: 100%;
@@ -58,6 +62,7 @@ page {
 
 .text-input { height: 76rpx; padding: 0 22rpx; }
 .textarea-input { min-height: 220rpx; padding: 20rpx 22rpx; line-height: 1.5; }
+.text-input[disabled] { background: #f3eee7; color: #766b60; }
 
 .send-row {
   min-height: 96rpx;
@@ -88,3 +93,4 @@ page {
 button::after { border: 0; }
 .secondary-button { background: #f3e8d7; color: #80531f; }
 .primary-button { background: #241d16; color: #fff; }
+.save-change-button { margin-top: 34rpx; }

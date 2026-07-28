@@ -20,6 +20,7 @@ Page({
   data: {
     id: "",
     isEdit: false,
+    publishStatus: "draft",
     saving: false,
     draft: createDraft(),
     topTips: { show: false, message: "", type: "error" },
@@ -36,6 +37,7 @@ Page({
     try {
       const item = await fetchAnnouncementDetail(id);
       this.setData({
+        publishStatus: item.publishStatus || "draft",
         draft: {
           type: item.type || "version_update",
           title: item.title || "",
@@ -61,6 +63,7 @@ Page({
   },
 
   selectType(event) {
+    if (this.data.publishStatus !== "draft") return;
     const type = event.currentTarget.dataset.type;
     if (type) this.setData({ "draft.type": type });
   },
@@ -78,6 +81,7 @@ Page({
   },
 
   onCaseIdInput(event) {
+    if (this.data.publishStatus !== "draft") return;
     this.setData({ "draft.caseDocId": event.detail.value || "" });
   },
 
@@ -120,7 +124,12 @@ Page({
       if (publishNow) {
         await publishAnnouncement(id, this.data.draft.sendSubscription);
       }
-      wx.showToast({ title: publishNow ? "已发布" : "草稿已保存", icon: "none" });
+      const successTitle = publishNow
+        ? "已发布"
+        : this.data.publishStatus === "draft"
+          ? "草稿已保存"
+          : "修改已保存";
+      wx.showToast({ title: successTitle, icon: "none" });
       setTimeout(() => wx.navigateBack({ delta: 1 }), 350);
     } catch (error) {
       console.error("通知保存失败", error);

@@ -1,6 +1,7 @@
 const {
   DEFAULT_PAGE_SIZE,
   checkNotificationAdminAccess,
+  deleteAnnouncement,
   fetchAnnouncementList,
   fetchDeliverySummary,
   publishAnnouncement,
@@ -125,6 +126,21 @@ Page({
     });
   },
 
+  requestDelete(event) {
+    const id = event.currentTarget.dataset.id;
+    if (!id) return;
+    this.setData({
+      confirmDialog: {
+        show: true,
+        title: "删除这条通知？",
+        content: "删除后站内通知、推送统计和发送记录将永久移除；已经发送到微信的消息无法撤回。",
+        buttons: [{ text: "取消" }, { text: "删除", type: "warn" }],
+        action: "delete",
+        id,
+      },
+    });
+  },
+
   async handleConfirmDialogTap(event) {
     const confirmed = event.detail.index === 1;
     const dialog = this.data.confirmDialog;
@@ -138,6 +154,9 @@ Page({
       } else if (dialog.action === "visibility") {
         await setAnnouncementVisibility(dialog.id, dialog.isVisible);
         wx.showToast({ title: dialog.isVisible ? "已显示" : "已隐藏", icon: "none" });
+      } else if (dialog.action === "delete") {
+        await deleteAnnouncement(dialog.id);
+        wx.showToast({ title: "已删除", icon: "none" });
       }
       await this.loadAnnouncements({ reset: true });
     } catch (error) {

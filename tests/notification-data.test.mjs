@@ -20,6 +20,7 @@ vm.runInNewContext(source, sandbox, { filename: modulePath });
 
 const {
   getNotificationTypeLabel,
+  normalizeNotification,
   normalizeNotifications,
   normalizeSubscriptionState,
 } = sandbox.module.exports;
@@ -67,6 +68,24 @@ test("sorts notifications by created time descending", () => {
     "new",
     "old",
   ]);
+});
+
+test("only linked product announcements expose a case entry", () => {
+  const versionItem = normalizeNotification({
+    _id: "version_1",
+    type: "version_update",
+    caseDocId: "legacy_case",
+    targetPage: "/pages/detail/index?id=legacy_case",
+  });
+  const productItem = normalizeNotification({
+    _id: "product_1",
+    type: "product_new",
+    caseDocId: "case_doc_1",
+    targetPage: "/pages/detail/index?id=case_doc_1",
+  });
+
+  assert.equal(versionItem.hasCaseLink, false);
+  assert.equal(productItem.hasCaseLink, true);
 });
 
 test("normalizes one-time subscription states for public notification types", () => {

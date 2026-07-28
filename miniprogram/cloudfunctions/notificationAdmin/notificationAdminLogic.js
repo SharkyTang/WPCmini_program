@@ -9,6 +9,7 @@ const VALID_NOTIFICATION_ADMIN_ACTIONS = [
   "publishAnnouncement",
   "setAnnouncementVisibility",
   "getDeliverySummary",
+  "deleteAnnouncement",
 ];
 const TITLE_MAX_LENGTH = 80;
 const CONTENT_MAX_LENGTH = 500;

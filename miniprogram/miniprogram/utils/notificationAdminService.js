@@ -35,8 +35,10 @@ function normalizeAdminAnnouncement(record = {}) {
     ...item,
     publishStatus,
     publishStatusLabel: statusLabels[publishStatus] || "未知状态",
-    canEdit: publishStatus === "draft",
-    canPublish: publishStatus === "draft" || publishStatus === "hidden",
+    canEdit: true,
+    canPublish: publishStatus === "draft",
+    canToggleVisibility: publishStatus === "published" || publishStatus === "hidden",
+    canShowDeliverySummary: publishStatus === "published" || publishStatus === "hidden",
     isVisible: record.isVisible === true,
   };
 }
@@ -111,6 +113,10 @@ async function fetchDeliverySummary(id) {
   return result.summary || {};
 }
 
+async function deleteAnnouncement(id) {
+  return callNotificationAdmin("deleteAnnouncement", { id });
+}
+
 async function publishProductAnnouncement(input = {}) {
   const createResult = await createAnnouncement({
     type: "product_new",
@@ -126,6 +132,7 @@ module.exports = {
   DEFAULT_PAGE_SIZE,
   checkNotificationAdminAccess,
   createAnnouncement,
+  deleteAnnouncement,
   fetchAnnouncementDetail,
   fetchAnnouncementList,
   fetchDeliverySummary,

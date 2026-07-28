@@ -66,8 +66,8 @@
     <view
       wx:for="{{displayNotifications}}"
       wx:key="id"
-      class="notification-card notification-{{item.type}} {{item.targetPage ? 'notification-card-link' : ''}}"
-      data-target="{{item.targetPage}}"
+      class="notification-card notification-{{item.type}} {{item.hasCaseLink ? 'notification-card-link' : ''}}"
+      data-target="{{item.hasCaseLink ? item.targetPage : ''}}"
       bindtap="openNotification"
     >
       <view class="notification-meta">
@@ -76,7 +76,7 @@
       </view>
       <view class="notification-title">{{item.title}}</view>
       <view class="notification-content">{{item.content}}</view>
-      <view wx:if="{{item.targetPage}}" class="notification-link">查看对应案例 ›</view>
+      <view wx:if="{{item.hasCaseLink}}" class="notification-link">查看对应案例 ›</view>
     </view>
   </view>
 </view>

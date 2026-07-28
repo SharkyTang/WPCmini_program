@@ -15,6 +15,18 @@ const logic = require(resolve(
   __dirname,
   "../miniprogram/cloudfunctions/notificationAdmin/notificationAdminLogic.js"
 ));
+const adminPagePath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/notification-admin/index.js"
+);
+const adminWxmlPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/notification-admin/index.wxml"
+);
+const adminWxssPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/notification-admin/index.wxss"
+);
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -28,6 +40,7 @@ function loadNotificationAdmin(options = {}) {
   const collections = {
     app_notifications: clone(options.announcements || []),
     notification_push_jobs: clone(options.jobs || []),
+    notification_delivery_logs: clone(options.deliveryLogs || []),
   };
   const mockCloud = {
     DYNAMIC_CURRENT_ENV: "dynamic",
@@ -72,6 +85,15 @@ function loadNotificationAdmin(options = {}) {
               records.push({ _id: id, ...clone(payload.data || {}) });
               return { _id: id };
             },
+            async remove() {
+              const matchedIds = new Set(
+                records.filter((item) => matches(item, condition)).map((item) => item._id)
+              );
+              for (let index = records.length - 1; index >= 0; index -= 1) {
+                if (matchedIds.has(records[index]._id)) records.splice(index, 1);
+              }
+              return { stats: { removed: matchedIds.size } };
+            },
             doc(id) {
               return {
                 async get() {
@@ -84,6 +106,12 @@ function loadNotificationAdmin(options = {}) {
                   if (!item) throw new Error("not found");
                   Object.assign(item, clone(payload.data || {}));
                   return {};
+                },
+                async remove() {
+                  const index = records.findIndex((record) => record._id === id);
+                  if (index < 0) throw new Error("not found");
+                  records.splice(index, 1);
+                  return { stats: { removed: 1 } };
                 },
               };
             },
@@ -118,6 +146,69 @@ function loadNotificationAdmin(options = {}) {
   };
 }
 
+function loadNotificationAdminPage() {
+  let page;
+  const calls = {
+    deletes: [],
+    listLoads: 0,
+    toasts: [],
+  };
+  const sandbox = {
+    Page(config) {
+      page = config;
+    },
+    require(moduleName) {
+      if (moduleName === "../../utils/notificationAdminService") {
+        return {
+          DEFAULT_PAGE_SIZE: 20,
+          checkNotificationAdminAccess: async () => true,
+          deleteAnnouncement: async (id) => {
+            calls.deletes.push(id);
+          },
+          fetchAnnouncementList: async () => {
+            calls.listLoads += 1;
+            return {
+              items: [],
+              page: 1,
+              hasMore: false,
+            };
+          },
+          fetchDeliverySummary: async () => ({}),
+          publishAnnouncement: async () => ({}),
+          setAnnouncementVisibility: async () => ({}),
+        };
+      }
+      throw new Error(`Unexpected require: ${moduleName}`);
+    },
+    console,
+    wx: {
+      showToast(request) {
+        calls.toasts.push(request);
+      },
+      showModal() {},
+      navigateTo() {},
+      stopPullDownRefresh() {},
+    },
+  };
+  vm.runInNewContext(readFileSync(adminPagePath, "utf8"), sandbox, {
+    filename: adminPagePath,
+  });
+  page.setData = function setData(nextData) {
+    Object.entries(nextData).forEach(([key, value]) => {
+      if (key === "confirmDialog.show") {
+        this.data.confirmDialog = {
+          ...this.data.confirmDialog,
+          show: value,
+        };
+        return;
+      }
+      this.data[key] = value;
+    });
+  };
+  page.setData({ isAdmin: true });
+  return { page, calls };
+}
+
 async function test(name, fn) {
   try {
     await fn();
@@ -131,6 +222,7 @@ async function test(name, fn) {
 await test("notification admin validates public announcement fields", () => {
   assert.equal(logic.VALID_NOTIFICATION_ADMIN_ACTIONS.includes("publishAnnouncement"), true);
   assert.equal(logic.VALID_NOTIFICATION_ADMIN_ACTIONS.includes("getAnnouncement"), true);
+  assert.equal(logic.VALID_NOTIFICATION_ADMIN_ACTIONS.includes("deleteAnnouncement"), true);
   assert.equal(logic.sanitizeAnnouncement({ type: "unknown", title: "x", content: "x" }).code, "INVALID_TYPE");
   assert.equal(logic.sanitizeAnnouncement({ type: "version_update", title: "", content: "x" }).code, "INVALID_TITLE");
   assert.equal(logic.sanitizeAnnouncement({
@@ -192,6 +284,142 @@ await test("publishing makes a draft public and creates one push job", async () 
   assert.equal(collections.app_notifications[0].isVisible, true);
   assert.equal(collections.app_notifications[0].publishStatus, "published");
   assert.equal(collections.notification_push_jobs.length, 1);
+});
+
+await test("published announcements can update content but cannot change type", async () => {
+  const source = {
+    _id: "notice_1",
+    type: "version_update",
+    title: "旧标题",
+    content: "旧内容",
+    version: "1.0.0",
+    publishStatus: "published",
+    isVisible: true,
+  };
+  const { main, collections } = loadNotificationAdmin({
+    announcements: [source],
+  });
+  const updateResult = await main({
+    action: "updateAnnouncement",
+    id: "notice_1",
+    announcement: {
+      type: "version_update",
+      title: "新标题",
+      content: "新内容",
+      version: "1.0.1",
+    },
+  });
+  const typeResult = await main({
+    action: "updateAnnouncement",
+    id: "notice_1",
+    announcement: {
+      type: "product_new",
+      title: "错误类型",
+      content: "内容",
+      caseDocId: "case_doc_1",
+    },
+  });
+
+  assert.equal(updateResult.ok, true);
+  assert.equal(collections.app_notifications[0].title, "新标题");
+  assert.equal(collections.app_notifications[0].publishStatus, "published");
+  assert.equal(collections.app_notifications[0].isVisible, true);
+  assert.equal(typeResult.code, "TYPE_LOCKED");
+});
+
+await test("deleting an announcement removes its completed jobs and delivery logs", async () => {
+  const { main, collections } = loadNotificationAdmin({
+    announcements: [{
+      _id: "notice_1",
+      type: "version_update",
+      publishStatus: "published",
+    }],
+    jobs: [{
+      _id: "job_1",
+      announcementId: "notice_1",
+      status: "completed",
+    }],
+    deliveryLogs: [{
+      _id: "log_1",
+      announcementId: "notice_1",
+      openid: "customer_1",
+    }],
+  });
+  const result = await main({
+    action: "deleteAnnouncement",
+    id: "notice_1",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(collections.app_notifications.length, 0);
+  assert.equal(collections.notification_push_jobs.length, 0);
+  assert.equal(collections.notification_delivery_logs.length, 0);
+});
+
+await test("deleting is rejected while a push job is pending", async () => {
+  const { main, collections } = loadNotificationAdmin({
+    announcements: [{
+      _id: "notice_1",
+      type: "version_update",
+      publishStatus: "published",
+    }],
+    jobs: [{
+      _id: "job_1",
+      announcementId: "notice_1",
+      status: "pending",
+    }],
+  });
+  const result = await main({
+    action: "deleteAnnouncement",
+    id: "notice_1",
+  });
+
+  assert.equal(result.code, "PUSH_IN_PROGRESS");
+  assert.equal(collections.app_notifications.length, 1);
+  assert.equal(collections.notification_push_jobs.length, 1);
+});
+
+await test("non admins cannot delete announcements", async () => {
+  const { main, collections } = loadNotificationAdmin({
+    openid: "customer_openid",
+    announcements: [{
+      _id: "notice_1",
+      type: "version_update",
+    }],
+  });
+  const result = await main({
+    action: "deleteAnnouncement",
+    id: "notice_1",
+  });
+
+  assert.equal(result.code, "FORBIDDEN");
+  assert.equal(collections.app_notifications.length, 1);
+});
+
+await test("notification admin actions use two columns and expose edit and delete", () => {
+  const wxml = readFileSync(adminWxmlPath, "utf8");
+  const wxss = readFileSync(adminWxssPath, "utf8");
+  assert.equal(wxml.includes("editAnnouncement"), true);
+  assert.equal(wxml.includes("requestDelete"), true);
+  assert.equal(wxml.includes("推送统计"), true);
+  assert.equal(wxss.includes("grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)"), true);
+});
+
+await test("delete confirmation cancels cleanly and only deletes after confirmation", async () => {
+  const { page, calls } = loadNotificationAdminPage();
+  page.requestDelete({
+    currentTarget: { dataset: { id: "notice_1" } },
+  });
+  await page.handleConfirmDialogTap({ detail: { index: 0 } });
+  assert.equal(calls.deletes.length, 0);
+
+  page.requestDelete({
+    currentTarget: { dataset: { id: "notice_1" } },
+  });
+  await page.handleConfirmDialogTap({ detail: { index: 1 } });
+  assert.deepEqual(calls.deletes, ["notice_1"]);
+  assert.equal(calls.listLoads, 1);
+  assert.equal(calls.toasts.at(-1).title, "已删除");
 });
 
 await test("product announcements are idempotent for the same case", async () => {

@@ -47,6 +47,8 @@ function formatNotificationTime(value) {
 function normalizeNotification(record = {}, fallbackType = "") {
   const type = record.type || fallbackType;
   const createdAt = record.createdAt || record.updatedAt || "";
+  const caseDocId = record.caseDocId || "";
+  const targetPage = record.targetPage || "";
 
   return {
     id: record._id || record.id || "",
@@ -55,8 +57,9 @@ function normalizeNotification(record = {}, fallbackType = "") {
     title: record.title || "消息通知",
     content: record.content || "",
     version: record.version || "",
-    caseDocId: record.caseDocId || "",
-    targetPage: record.targetPage || "",
+    caseDocId,
+    targetPage,
+    hasCaseLink: type === "product_new" && Boolean(caseDocId && targetPage),
     publishStatus: record.publishStatus || (record.isVisible === false ? "hidden" : "published"),
     createdAt,
     timestamp: getNotificationTimestamp(createdAt),

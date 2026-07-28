@@ -13,6 +13,7 @@ cloud.init({
 const db = cloud.database();
 const ANNOUNCEMENT_COLLECTION = "app_notifications";
 const PUSH_JOB_COLLECTION = "notification_push_jobs";
+const DELIVERY_LOG_COLLECTION = "notification_delivery_logs";
 
 function ok(data = {}) {
   return { ok: true, ...data };
@@ -112,12 +113,20 @@ async function updateAnnouncement(event, openid) {
   if (!id) return fail("INVALID_ID", "缺少通知 ID");
   const existing = await getAnnouncementById(id);
   if (!existing) return fail("ANNOUNCEMENT_NOT_FOUND", "通知不存在");
-  if ((existing.publishStatus || "published") !== "draft") {
-    return fail("ANNOUNCEMENT_PUBLISHED", "已发布通知不能再编辑正文");
-  }
-
   const validation = sanitizeAnnouncement(event.announcement || event.data || {});
   if (!validation.valid) return fail(validation.code, validation.message);
+  const publishStatus = existing.publishStatus || "published";
+  if (publishStatus !== "draft") {
+    if (validation.data.type !== existing.type) {
+      return fail("TYPE_LOCKED", "已发布通知不能修改通知类型");
+    }
+    if (
+      existing.type === "product_new"
+      && validation.data.caseDocId !== trimText(existing.caseDocId)
+    ) {
+      return fail("CASE_LOCKED", "已发布产品通知不能修改关联案例");
+    }
+  }
   await db.collection(ANNOUNCEMENT_COLLECTION).doc(id).update({
     data: {
       ...validation.data,
@@ -244,6 +253,23 @@ async function getDeliverySummary(event) {
   });
 }
 
+async function deleteAnnouncement(event) {
+  const id = trimText(event.id);
+  if (!id) return fail("INVALID_ID", "缺少通知 ID");
+  const existing = await getAnnouncementById(id);
+  if (!existing) return fail("ANNOUNCEMENT_NOT_FOUND", "通知不存在");
+
+  const pushJob = await findPushJob(id);
+  if (pushJob && ["pending", "processing"].includes(pushJob.status)) {
+    return fail("PUSH_IN_PROGRESS", "通知推送正在进行，请稍后再删除");
+  }
+
+  await db.collection(ANNOUNCEMENT_COLLECTION).doc(id).remove();
+  await db.collection(PUSH_JOB_COLLECTION).where({ announcementId: id }).remove();
+  await db.collection(DELIVERY_LOG_COLLECTION).where({ announcementId: id }).remove();
+  return ok({ id });
+}
+
 exports.main = async (event = {}) => {
   const { OPENID } = cloud.getWXContext();
   const action = trimText(event.action);
@@ -266,6 +292,7 @@ exports.main = async (event = {}) => {
       return setAnnouncementVisibility(event, OPENID);
     }
     if (action === "getDeliverySummary") return getDeliverySummary(event);
+    if (action === "deleteAnnouncement") return deleteAnnouncement(event);
     return fail("UNKNOWN_ACTION", "未知通知管理操作");
   } catch (error) {
     console.error("notificationAdmin error", error);
