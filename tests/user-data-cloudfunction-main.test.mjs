@@ -51,7 +51,18 @@ function loadUserDataFunction(options = {}) {
     getWXContext() {
       return {
         OPENID: options.openid || "openid_1",
+        APPID: options.appid || "wx351f937287eb5886",
       };
+    },
+    openapi: {
+      subscribeMessage: {
+        async getTemplateList() {
+          if (options.templateListError) throw options.templateListError;
+          return {
+            data: options.templateList || [],
+          };
+        },
+      },
     },
     database() {
       return {
@@ -92,8 +103,9 @@ function loadUserDataFunction(options = {}) {
     console,
     process: {
       env: {
-        VERSION_UPDATE_TEMPLATE_ID: "version_template",
-        PRODUCT_NEW_TEMPLATE_ID: "product_template",
+        VERSION_UPDATE_TEMPLATE_ID: "version_template_id_1234567890",
+        PRODUCT_NEW_TEMPLATE_ID: "product_template_id_1234567890",
+        ...(options.env || {}),
       },
     },
     require(moduleName) {
@@ -131,7 +143,7 @@ await test("fetchSubscriptionStatus uses server openid and returns configured te
         _id: "subscription_1",
         openid: "server_openid",
         type: "product_new",
-        templateId: "product_template",
+        templateId: "product_template_id_1234567890",
         status: "granted",
       }],
     },
@@ -151,7 +163,58 @@ await test("fetchSubscriptionStatus uses server openid and returns configured te
     },
   });
   assert.equal(result.subscriptions.product_new.status, "granted");
-  assert.equal(result.templateIds.version_update, "version_template");
+  assert.equal(result.templateIds.version_update, "version_template_id_1234567890");
+  assert.equal(result.templateConfigs.version_update.valid, true);
+});
+
+await test("invalid template numbers are diagnosed and stale grants are ignored", async () => {
+  const { main } = loadUserDataFunction({
+    env: {
+      VERSION_UPDATE_TEMPLATE_ID: "10103",
+      PRODUCT_NEW_TEMPLATE_ID: "product_template_id_new_1234567890",
+    },
+    recordsByCollection: {
+      notification_subscriptions: [{
+        _id: "subscription_old",
+        openid: "openid_1",
+        type: "product_new",
+        templateId: "product_template_id_old_1234567890",
+        status: "granted",
+      }],
+    },
+  });
+  const result = await main({ action: "fetchSubscriptionStatus" });
+  assert.equal(result.templateConfigs.version_update.valid, false);
+  assert.equal(result.templateConfigs.version_update.envKey, "VERSION_UPDATE_TEMPLATE_ID");
+  assert.equal(result.subscriptions.product_new.status, "idle");
+  assert.equal(
+    result.subscriptions.product_new.templateId,
+    "product_template_id_new_1234567890"
+  );
+});
+
+await test("verifySubscriptionTemplates checks the running AppID template list", async () => {
+  const { main } = loadUserDataFunction({
+    appid: "wx351f937287eb5886",
+    templateList: [{
+      priTmplId: "version_template_id_1234567890",
+      title: "升级成功通知",
+      type: 2,
+    }],
+  });
+
+  const result = await main({ action: "verifySubscriptionTemplates" });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.appid, "wx351f937287eb5886");
+  assert.equal(result.verificationAvailable, true);
+  assert.equal(result.templates.version_update.existsInCurrentApp, true);
+  assert.equal(result.templates.version_update.title, "升级成功通知");
+  assert.equal(result.templates.product_new.existsInCurrentApp, false);
+  assert.equal(
+    result.templates.product_new.code,
+    "TEMPLATE_NOT_IN_CURRENT_APP"
+  );
 });
 
 await test("saveSubscriptionGrant stores server openid and normalized status", async () => {
@@ -162,7 +225,7 @@ await test("saveSubscriptionGrant stores server openid and normalized status", a
   const result = await main({
     action: "saveSubscriptionGrant",
     type: "product_new",
-    templateId: "product_template",
+    templateId: "product_template_id_1234567890",
     status: "accept",
     openid: "spoofed",
   });

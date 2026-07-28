@@ -46,7 +46,12 @@ async function fetchSubscriptionStatus() {
   return {
     subscriptions: normalizeSubscriptionState(result.subscriptions || {}),
     templateIds: result.templateIds || {},
+    templateConfigs: result.templateConfigs || {},
   };
+}
+
+async function verifySubscriptionTemplates() {
+  return callUserData("verifySubscriptionTemplates");
 }
 
 async function saveSubscriptionGrant(type, templateId, status) {
@@ -58,6 +63,7 @@ async function saveSubscriptionGrant(type, templateId, status) {
   return {
     subscriptions: normalizeSubscriptionState(result.subscriptions || {}),
     templateIds: result.templateIds || {},
+    templateConfigs: result.templateConfigs || {},
   };
 }
 
@@ -66,4 +72,5 @@ module.exports = {
   fetchPublicNotifications,
   fetchSubscriptionStatus,
   saveSubscriptionGrant,
+  verifySubscriptionTemplates,
 };

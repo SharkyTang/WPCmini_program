@@ -86,20 +86,20 @@ test("builds feedback records without trusting client identity fields", () => {
 
 test("validates subscription grants against the configured template", () => {
   const templates = {
-    version_update: "version_template",
-    product_new: "product_template",
+    version_update: "version_template_id_1234567890",
+    product_new: "product_template_id_1234567890",
   };
   assert.deepEqual(
     plain(validateSubscriptionGrant({
       type: "product_new",
-      templateId: "product_template",
+      templateId: "product_template_id_1234567890",
       status: "accept",
     }, templates)),
     {
       valid: true,
       data: {
         type: "product_new",
-        templateId: "product_template",
+        templateId: "product_template_id_1234567890",
         status: "granted",
       },
     }
@@ -119,6 +119,11 @@ test("validates subscription grants against the configured template", () => {
       status: "accept",
     }, templates).code,
     "INVALID_TEMPLATE"
+  );
+  assert.equal(logic.isValidSubscriptionTemplateId("10103"), false);
+  assert.equal(
+    logic.buildTemplateConfig("product_new", "1330").envKey,
+    "PRODUCT_NEW_TEMPLATE_ID"
   );
 });
 

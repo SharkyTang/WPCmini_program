@@ -38,6 +38,16 @@ function getTemplateId(type) {
     : trimText(process.env.PRODUCT_NEW_TEMPLATE_ID);
 }
 
+function isValidSubscriptionTemplateId(value) {
+  const templateId = trimText(value);
+  return (
+    !["10103", "1330"].includes(templateId)
+    && templateId.length >= 20
+    && templateId.length <= 100
+    && /^[A-Za-z0-9_-]+$/.test(templateId)
+  );
+}
+
 function getMiniProgramState() {
   const value = trimText(process.env.SUBSCRIBE_MESSAGE_STATE);
   return ["developer", "trial", "formal"].includes(value) ? value : "formal";
@@ -169,9 +179,12 @@ async function processJob(jobId = "") {
   }
 
   const templateId = getTemplateId(announcement.type);
-  if (!templateId) {
+  if (!isValidSubscriptionTemplateId(templateId)) {
     await updateJob(job, { success: 0, failed: 0, skipped: 0 }, "partial_failed");
-    return fail("TEMPLATE_NOT_CONFIGURED", "订阅消息模板尚未配置");
+    return fail(
+      "INVALID_TEMPLATE_CONFIG",
+      "订阅模板配置错误，请填写当前 AppID“我的模板”中的长模板 ID，不能填写模板编号"
+    );
   }
 
   await db.collection(PUSH_JOB_COLLECTION).doc(job._id).update({
@@ -185,6 +198,7 @@ async function processJob(jobId = "") {
     .collection(SUBSCRIPTION_COLLECTION)
     .where({
       type: announcement.type,
+      templateId,
       status: "granted",
       grantedAt: _.lte(announcement.publishedAt),
     })

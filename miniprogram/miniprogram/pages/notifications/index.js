@@ -1,12 +1,14 @@
 const {
   NOTIFICATION_TYPE_KEYS,
   getNotificationTypeLabel,
+  isValidSubscriptionTemplateId,
   normalizeSubscriptionState,
 } = require("../../utils/notificationData");
 const {
   fetchPublicNotifications,
   fetchSubscriptionStatus,
   saveSubscriptionGrant,
+  verifySubscriptionTemplates,
 } = require("../../utils/notificationService");
 
 const TAB_ITEMS = [
@@ -28,20 +30,41 @@ function getSubscriptionActionLabel(item = {}) {
   return "订阅下一次";
 }
 
-function buildSubscriptionItems(subscriptions = {}, templateIds = {}) {
+function getTemplateConfig(type, templateIds = {}, templateConfigs = {}) {
+  const templateId = templateIds[type] || "";
+  const serverConfig = templateConfigs[type] || {};
+  const valid = serverConfig.valid === true && isValidSubscriptionTemplateId(templateId);
+  const envKey = serverConfig.envKey || (
+    type === "version_update"
+      ? "VERSION_UPDATE_TEMPLATE_ID"
+      : "PRODUCT_NEW_TEMPLATE_ID"
+  );
+  return {
+    templateId,
+    envKey,
+    valid,
+    message: serverConfig.message || `${envKey} 配置错误，不能填写模板编号`,
+  };
+}
+
+function buildSubscriptionItems(subscriptions = {}, templateIds = {}, templateConfigs = {}) {
   const state = normalizeSubscriptionState(subscriptions);
   return NOTIFICATION_TYPE_KEYS.map((type) => {
+    const config = getTemplateConfig(type, templateIds, templateConfigs);
     const item = {
       ...state[type],
-      templateId: templateIds[type] || state[type].templateId || "",
+      templateId: config.templateId || state[type].templateId || "",
+      templateConfig: config,
     };
     return {
       ...item,
       label: `${getNotificationTypeLabel(type)}提醒`,
       actionLabel: getSubscriptionActionLabel(item),
-      actionDisabled: !item.templateId || item.status === "granted",
+      actionDisabled: !config.valid || item.status === "granted",
       stateText:
-        item.status === "granted"
+        !config.valid
+          ? `${config.envKey} 尚未正确配置`
+          : item.status === "granted"
           ? "已授权，发布下一条消息后需要重新订阅"
           : "由你主动授权，仅用于下一条对应通知",
     };
@@ -55,10 +78,19 @@ function getErrorDetails(error = {}) {
   };
 }
 
+function maskTemplateId(value) {
+  const templateId = typeof value === "string" ? value : "";
+  if (templateId.length < 8) return `length:${templateId.length}`;
+  return `${templateId.slice(0, 4)}***${templateId.slice(-4)} (length:${templateId.length})`;
+}
+
 function getAuthorizationErrorMessage(error = {}) {
   const details = getErrorDetails(error);
   const source = `${details.code} ${details.message}`.toLowerCase();
   const code = Number(details.code);
+  if (/tap gesture|user tap|user gesture/.test(source)) {
+    return "请直接点击订阅按钮重试";
+  }
   if (
     [10001, 10002, 10003, 20001, 20002, 20003].includes(code)
     || /template|tmplid|invalid.*id/.test(source)
@@ -85,6 +117,44 @@ function getAuthorizationErrorMessage(error = {}) {
     : "订阅授权失败，请稍后重试";
 }
 
+function getTemplateVerificationMessage(result = {}, type = "") {
+  const item = result.templates && result.templates[type];
+  const appid = result.appid || "当前小程序";
+  if (result.verificationAvailable && item && item.existsInCurrentApp === false) {
+    return {
+      title: "模板不属于当前小程序",
+      content: `微信在 AppID ${appid} 的“我的模板”中查不到这个模板。请从该 AppID 的订阅消息页面重新复制长模板 ID，保存后重新部署 userData 和 notificationDispatcher。`,
+    };
+  }
+  if (result.verificationAvailable && item && item.existsInCurrentApp === true) {
+    return {
+      title: "模板类型暂不可用",
+      content: `模板“${item.title || "未命名模板"}”存在于 AppID ${appid}，但微信仍拒绝授权。请在“我的模板”中删除后重新添加一次性订阅模板，并重新复制模板 ID。`,
+    };
+  }
+  return {
+    title: "暂时无法核验模板",
+    content: `${result.verificationMessage || "云端未能读取当前小程序的模板列表"}。请确认 userData 已重新部署，并检查云函数日志。`,
+  };
+}
+
+async function showTemplateVerification(result, type) {
+  const message = getTemplateVerificationMessage(result, type);
+  if (!wx.showModal) {
+    wx.showToast({ title: message.title, icon: "none" });
+    return;
+  }
+  await new Promise((resolve) => {
+    wx.showModal({
+      title: message.title,
+      content: message.content,
+      showCancel: false,
+      confirmText: "知道了",
+      complete: resolve,
+    });
+  });
+}
+
 function getGrantSaveErrorMessage(error = {}) {
   const details = getErrorDetails(error);
   if (details.code === "INVALID_TEMPLATE") {
@@ -94,22 +164,6 @@ function getGrantSaveErrorMessage(error = {}) {
     return "微信已授权，但订阅状态保存失败";
   }
   return "微信已授权，但云端保存失败";
-}
-
-async function requestSubscriptionSettings() {
-  if (!wx.getSetting) return {};
-  try {
-    return await new Promise((resolve, reject) => {
-      wx.getSetting({
-        withSubscriptions: true,
-        success: resolve,
-        fail: reject,
-      });
-    });
-  } catch (error) {
-    console.warn("读取微信订阅设置失败，将继续请求授权", error);
-    return {};
-  }
 }
 
 async function saveSubscriptionGrantWithRetry(type, templateId, status) {
@@ -136,6 +190,7 @@ Page({
     displayNotifications: [],
     subscriptions: normalizeSubscriptionState({}),
     templateIds: {},
+    templateConfigs: {},
     subscriptionItems: buildSubscriptionItems(),
   },
 
@@ -159,9 +214,11 @@ Page({
         publicNotifications,
         subscriptions: subscriptionResult.subscriptions,
         templateIds: subscriptionResult.templateIds,
+        templateConfigs: subscriptionResult.templateConfigs || {},
         subscriptionItems: buildSubscriptionItems(
           subscriptionResult.subscriptions,
-          subscriptionResult.templateIds
+          subscriptionResult.templateIds,
+          subscriptionResult.templateConfigs || {}
         ),
       });
       this.refreshDisplayNotifications();
@@ -205,8 +262,26 @@ Page({
   async subscribeNext(event) {
     const type = event.currentTarget.dataset.type;
     const templateId = this.data.templateIds[type];
+    const templateConfig = getTemplateConfig(
+      type,
+      this.data.templateIds,
+      this.data.templateConfigs
+    );
     const subscription = this.data.subscriptions[type] || {};
-    if (!type || !templateId || this.data.subscribingType) return;
+    if (!type || this.data.subscribingType) return;
+    if (!templateConfig.valid) {
+      console.error("订阅模板本地配置校验失败", {
+        stage: "local_template_validation",
+        type,
+        envKey: templateConfig.envKey,
+        templateId: maskTemplateId(templateId),
+      });
+      wx.showToast({
+        title: `${templateConfig.envKey} 配置错误，不能填写模板编号`,
+        icon: "none",
+      });
+      return;
+    }
 
     if (subscription.status === "banned") {
       this.openSubscriptionSettings();
@@ -215,21 +290,9 @@ Page({
 
     this.setData({ subscribingType: type });
     try {
-      const settingResponse = await requestSubscriptionSettings();
-      const subscriptionsSetting = settingResponse.subscriptionsSetting || {};
-      const itemSettings = subscriptionsSetting.itemSettings || {};
-      if (
-        subscriptionsSetting.mainSwitch === false
-        || itemSettings[templateId] === "reject"
-        || itemSettings[templateId] === "ban"
-      ) {
-        wx.showToast({ title: "请先在微信设置中开启订阅消息", icon: "none" });
-        this.openSubscriptionSettings();
-        return;
-      }
-
       let response;
       try {
+        // 必须在点击事件的同步调用链中立即触发，否则微信会判定缺少 TAP 手势。
         response = await new Promise((resolve, reject) => {
           wx.requestSubscribeMessage({
             tmplIds: [templateId],
@@ -238,11 +301,31 @@ Page({
           });
         });
       } catch (error) {
+        const errorDetails = getErrorDetails(error);
         console.error("订阅消息授权失败", {
           stage: "wechat_authorization",
           type,
-          ...getErrorDetails(error),
+          templateId: maskTemplateId(templateId),
+          ...errorDetails,
         });
+        if (Number(errorDetails.code) === 20001) {
+          let templateVerification = null;
+          try {
+            templateVerification = await verifySubscriptionTemplates();
+          } catch (verificationError) {
+            templateVerification = {
+              verificationAvailable: false,
+              verificationMessage: getErrorDetails(verificationError).message,
+            };
+          }
+          await showTemplateVerification(templateVerification, type);
+          return;
+        }
+        if (Number(errorDetails.code) === 20004) {
+          wx.showToast({ title: "请在微信设置中开启订阅消息", icon: "none" });
+          this.openSubscriptionSettings();
+          return;
+        }
         wx.showToast({
           title: getAuthorizationErrorMessage(error),
           icon: "none",
@@ -271,9 +354,11 @@ Page({
       this.setData({
         subscriptions: result.subscriptions,
         templateIds: result.templateIds,
+        templateConfigs: result.templateConfigs || this.data.templateConfigs,
         subscriptionItems: buildSubscriptionItems(
           result.subscriptions,
-          result.templateIds
+          result.templateIds,
+          result.templateConfigs || this.data.templateConfigs
         ),
       });
 

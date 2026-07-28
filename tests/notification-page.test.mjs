@@ -30,13 +30,27 @@ function loadNotificationPage(options = {}) {
     settings: 0,
     settingChecks: 0,
     toasts: [],
+    modals: [],
+    templateVerifications: 0,
   };
   const notificationData = loadNotificationData();
   const subscriptionResult = options.subscriptionResult || {
     subscriptions: notificationData.normalizeSubscriptionState({}),
     templateIds: {
-      version_update: "version_template",
-      product_new: "product_template",
+      version_update: "version_template_id_1234567890",
+      product_new: "product_template_id_1234567890",
+    },
+    templateConfigs: {
+      version_update: {
+        valid: true,
+        envKey: "VERSION_UPDATE_TEMPLATE_ID",
+        templateId: "version_template_id_1234567890",
+      },
+      product_new: {
+        valid: true,
+        envKey: "PRODUCT_NEW_TEMPLATE_ID",
+        templateId: "product_template_id_1234567890",
+      },
     },
   };
   const sandbox = {
@@ -49,6 +63,26 @@ function loadNotificationPage(options = {}) {
         return {
           fetchPublicNotifications: async () => options.notifications || [],
           fetchSubscriptionStatus: async () => subscriptionResult,
+          verifySubscriptionTemplates: async () => {
+            calls.templateVerifications += 1;
+            if (options.templateVerificationError) {
+              throw options.templateVerificationError;
+            }
+            return options.templateVerification || {
+              appid: "wx351f937287eb5886",
+              verificationAvailable: true,
+              templates: {
+                version_update: {
+                  existsInCurrentApp: true,
+                  title: "升级成功通知",
+                },
+                product_new: {
+                  existsInCurrentApp: true,
+                  title: "商品上新通知",
+                },
+              },
+            };
+          },
           saveSubscriptionGrant: async (type, templateId, status) => {
             calls.grantAttempts += 1;
             if (calls.grantAttempts <= Number(options.grantFailures || 0)) {
@@ -62,6 +96,7 @@ function loadNotificationPage(options = {}) {
                 [type]: { templateId, status: status === "accept" ? "granted" : status === "ban" ? "banned" : "rejected" },
               }),
               templateIds: subscriptionResult.templateIds,
+              templateConfigs: subscriptionResult.templateConfigs,
             };
           },
         };
@@ -97,6 +132,10 @@ function loadNotificationPage(options = {}) {
       },
       showToast(request) {
         calls.toasts.push(request);
+      },
+      showModal(request) {
+        calls.modals.push(request);
+        if (request.complete) request.complete({ confirm: true });
       },
     },
   };
@@ -221,21 +260,46 @@ await test("subscription authorization is triggered by a tap and stored server-s
     currentTarget: { dataset: { type: "product_new" } },
   });
 
-  assert.deepEqual(JSON.parse(JSON.stringify(calls.subscribeRequests[0].tmplIds)), ["product_template"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.subscribeRequests[0].tmplIds)), ["product_template_id_1234567890"]);
   assert.deepEqual(calls.grants, [{
     type: "product_new",
-    templateId: "product_template",
+    templateId: "product_template_id_1234567890",
     status: "accept",
   }]);
   assert.equal(page.data.subscriptions.product_new.status, "granted");
 });
 
-await test("disabled subscription settings open WeChat settings before authorization", async () => {
+await test("disabled subscription settings open WeChat settings after authorization fails", async () => {
   const { page, calls } = loadNotificationPage({
-    settingsResponse: {
-      subscriptionsSetting: {
-        mainSwitch: false,
-        itemSettings: {},
+    subscribeError: {
+      errCode: 20004,
+      errMsg: "requestSubscribeMessage:fail main switch off",
+    },
+  });
+  await page.loadNotifications();
+  await page.subscribeNext({
+    currentTarget: { dataset: { type: "product_new" } },
+  });
+
+  assert.equal(calls.settingChecks, 0);
+  assert.equal(calls.settings, 1);
+  assert.equal(calls.subscribeRequests.length, 1);
+  assert.equal(calls.grantAttempts, 0);
+});
+
+await test("a template absent from the running AppID is diagnosed after WeChat rejects it", async () => {
+  const { page, calls } = loadNotificationPage({
+    subscribeError: {
+      errCode: 20001,
+      errMsg: "requestSubscribeMessage:fail No template data return",
+    },
+    templateVerification: {
+      appid: "wx351f937287eb5886",
+      verificationAvailable: true,
+      templates: {
+        product_new: {
+          existsInCurrentApp: false,
+        },
       },
     },
   });
@@ -244,17 +308,18 @@ await test("disabled subscription settings open WeChat settings before authoriza
     currentTarget: { dataset: { type: "product_new" } },
   });
 
-  assert.equal(calls.settingChecks, 1);
-  assert.equal(calls.settings, 1);
-  assert.equal(calls.subscribeRequests.length, 0);
+  assert.equal(calls.subscribeRequests.length, 1);
+  assert.equal(calls.templateVerifications, 1);
   assert.equal(calls.grantAttempts, 0);
+  assert.equal(calls.modals.at(-1).title, "模板不属于当前小程序");
+  assert.equal(calls.modals.at(-1).content.includes("wx351f937287eb5886"), true);
 });
 
-await test("WeChat authorization errors are reported without saving a grant", async () => {
+await test("WeChat 20001 reports a template type mismatch after cloud verification", async () => {
   const { page, calls } = loadNotificationPage({
     subscribeError: {
       errCode: 20001,
-      errMsg: "requestSubscribeMessage:fail invalid template id",
+      errMsg: "requestSubscribeMessage:fail No template data return, verify the template id exist",
     },
   });
   await page.loadNotifications();
@@ -263,7 +328,27 @@ await test("WeChat authorization errors are reported without saving a grant", as
   });
 
   assert.equal(calls.grantAttempts, 0);
-  assert.equal(calls.toasts.at(-1).title, "订阅模板配置无效，请联系管理员");
+  assert.equal(calls.subscribeRequests.length, 1);
+  assert.equal(calls.templateVerifications, 1);
+  assert.equal(calls.modals.at(-1).title, "模板类型暂不可用");
+  assert.equal(calls.modals.at(-1).content.includes("商品上新通知"), true);
+});
+
+await test("tap gesture errors tell the user to tap the subscription button again", async () => {
+  const { page, calls } = loadNotificationPage({
+    subscribeError: {
+      errMsg: "requestSubscribeMessage:fail can only be invoked by user TAP gesture",
+    },
+  });
+  await page.loadNotifications();
+  await page.subscribeNext({
+    currentTarget: { dataset: { type: "version_update" } },
+  });
+
+  assert.equal(calls.subscribeRequests.length, 1);
+  assert.equal(calls.templateVerifications, 0);
+  assert.equal(calls.grantAttempts, 0);
+  assert.equal(calls.toasts.at(-1).title, "请直接点击订阅按钮重试");
 });
 
 await test("a code-only main switch error directs the user to WeChat settings", async () => {
@@ -279,6 +364,8 @@ await test("a code-only main switch error directs the user to WeChat settings", 
   });
 
   assert.equal(calls.grantAttempts, 0);
+  assert.equal(calls.subscribeRequests.length, 1);
+  assert.equal(calls.settings, 1);
   assert.equal(calls.toasts.at(-1).title, "请在微信设置中开启订阅消息");
 });
 
@@ -319,11 +406,15 @@ await test("banned subscriptions open WeChat settings instead of requesting agai
   const { page, calls } = loadNotificationPage({
     subscriptionResult: {
       subscriptions: data.normalizeSubscriptionState({
-        product_new: { templateId: "product_template", status: "banned" },
+        product_new: { templateId: "product_template_id_1234567890", status: "banned" },
       }),
       templateIds: {
-        version_update: "version_template",
-        product_new: "product_template",
+        version_update: "version_template_id_1234567890",
+        product_new: "product_template_id_1234567890",
+      },
+      templateConfigs: {
+        version_update: { valid: true, envKey: "VERSION_UPDATE_TEMPLATE_ID" },
+        product_new: { valid: true, envKey: "PRODUCT_NEW_TEMPLATE_ID" },
       },
     },
   });
@@ -333,6 +424,39 @@ await test("banned subscriptions open WeChat settings instead of requesting agai
   });
   assert.equal(calls.settings, 1);
   assert.equal(calls.subscribeRequests.length, 0);
+});
+
+await test("invalid local template configuration is blocked before WeChat authorization", async () => {
+  const data = loadNotificationData();
+  const { page, calls } = loadNotificationPage({
+    subscriptionResult: {
+      subscriptions: data.normalizeSubscriptionState({}),
+      templateIds: {
+        version_update: "10103",
+        product_new: "1330",
+      },
+      templateConfigs: {
+        version_update: {
+          valid: false,
+          envKey: "VERSION_UPDATE_TEMPLATE_ID",
+          message: "VERSION_UPDATE_TEMPLATE_ID 配置错误",
+        },
+        product_new: {
+          valid: false,
+          envKey: "PRODUCT_NEW_TEMPLATE_ID",
+          message: "PRODUCT_NEW_TEMPLATE_ID 配置错误",
+        },
+      },
+    },
+  });
+  await page.loadNotifications();
+  await page.subscribeNext({
+    currentTarget: { dataset: { type: "product_new" } },
+  });
+
+  assert.equal(calls.subscribeRequests.length, 0);
+  assert.equal(calls.grantAttempts, 0);
+  assert.equal(calls.toasts.at(-1).title.includes("PRODUCT_NEW_TEMPLATE_ID"), true);
 });
 
 await test("product announcements navigate to their linked case", () => {

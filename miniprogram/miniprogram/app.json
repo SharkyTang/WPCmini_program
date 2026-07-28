@@ -9,6 +9,7 @@
     "pages/notifications/index",
     "pages/notification-admin/index",
     "pages/notification-admin/edit",
+    "pages/notification-cases/index",
     "pages/feedback/index",
     "pages/inquiry/index",
     "pages/inquiry-admin/index",

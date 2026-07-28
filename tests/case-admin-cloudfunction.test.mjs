@@ -53,6 +53,7 @@ test("declares supported case admin actions", () => {
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getCaseImageUrls"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getVisibleImageUrls"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listHomepageDisplay"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listRecentCases"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("createCase"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("setCaseVisibility"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("deleteCase"), true);

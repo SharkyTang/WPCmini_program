@@ -1,8 +1,11 @@
 const cloud = require("wx-server-sdk");
 const {
+  buildNotificationCasesPage,
   isAdminOpenid,
+  normalizeCaseDocIds,
   normalizePage,
   normalizePageSize,
+  sameCaseDocIds,
   sanitizeAnnouncement,
 } = require("./notificationAdminLogic");
 
@@ -14,6 +17,8 @@ const db = cloud.database();
 const ANNOUNCEMENT_COLLECTION = "app_notifications";
 const PUSH_JOB_COLLECTION = "notification_push_jobs";
 const DELIVERY_LOG_COLLECTION = "notification_delivery_logs";
+const CASE_COLLECTION = "wine_packaging";
+const _ = db.command;
 
 function ok(data = {}) {
   return { ok: true, ...data };
@@ -59,35 +64,52 @@ async function getAnnouncement(event) {
   if (!id) return fail("INVALID_ID", "缺少通知 ID");
   const item = await getAnnouncementById(id);
   if (!item) return fail("ANNOUNCEMENT_NOT_FOUND", "通知不存在");
-  return ok({ item });
+  const linkedCaseItems = item.type === "product_new"
+    ? await getCasesByIds(normalizeCaseDocIds(item.caseDocIds, item.caseDocId), {
+      visibleOnly: true,
+    })
+    : [];
+  return ok({
+    item: {
+      ...item,
+      linkedCaseItems,
+    },
+  });
 }
 
-async function findProductAnnouncement(caseDocId) {
-  if (!caseDocId) return null;
+async function getCasesByIds(caseDocIds, options = {}) {
+  const ids = normalizeCaseDocIds(caseDocIds);
+  if (!ids.length) return [];
   const response = await db
-    .collection(ANNOUNCEMENT_COLLECTION)
-    .where({
-      type: "product_new",
-      caseDocId,
-    })
-    .limit(1)
+    .collection(CASE_COLLECTION)
+    .where({ _id: _.in(ids) })
+    .limit(ids.length)
     .get();
-  return (response.data || [])[0] || null;
+  const byId = (response.data || [])
+    .filter((item) => !options.visibleOnly || item.isVisible === true)
+    .reduce((map, item) => {
+    map[item._id] = item;
+    return map;
+  }, {});
+  return ids.map((id) => byId[id]).filter(Boolean);
+}
+
+async function validateLinkedCases(caseDocIds) {
+  const ids = normalizeCaseDocIds(caseDocIds);
+  if (!ids.length) return fail("INVALID_CASE", "产品上新通知需要关联案例");
+  const items = await getCasesByIds(ids, { visibleOnly: true });
+  if (items.length !== ids.length) {
+    return fail("INVALID_CASE", "关联案例不存在、已隐藏或已删除，请重新选择");
+  }
+  return null;
 }
 
 async function createAnnouncement(event, openid) {
   const validation = sanitizeAnnouncement(event.announcement || event.data || {});
   if (!validation.valid) return fail(validation.code, validation.message);
-
   if (validation.data.type === "product_new") {
-    const existing = await findProductAnnouncement(validation.data.caseDocId);
-    if (existing) {
-      return ok({
-        id: existing._id,
-        reused: true,
-        publishStatus: existing.publishStatus || "draft",
-      });
-    }
+    const caseError = await validateLinkedCases(validation.data.caseDocIds);
+    if (caseError) return caseError;
   }
 
   const response = await db.collection(ANNOUNCEMENT_COLLECTION).add({
@@ -101,8 +123,16 @@ async function createAnnouncement(event, openid) {
       updatedByOpenid: openid,
     },
   });
+  const id = response._id || "";
+  if (validation.data.type === "product_new" && id) {
+    await db.collection(ANNOUNCEMENT_COLLECTION).doc(id).update({
+      data: {
+        targetPage: buildNotificationCasesPage(id),
+      },
+    });
+  }
   return ok({
-    id: response._id || "",
+    id,
     reused: false,
     publishStatus: "draft",
   });
@@ -113,7 +143,9 @@ async function updateAnnouncement(event, openid) {
   if (!id) return fail("INVALID_ID", "缺少通知 ID");
   const existing = await getAnnouncementById(id);
   if (!existing) return fail("ANNOUNCEMENT_NOT_FOUND", "通知不存在");
-  const validation = sanitizeAnnouncement(event.announcement || event.data || {});
+  const validation = sanitizeAnnouncement(event.announcement || event.data || {}, {
+    announcementId: id,
+  });
   if (!validation.valid) return fail(validation.code, validation.message);
   const publishStatus = existing.publishStatus || "published";
   if (publishStatus !== "draft") {
@@ -122,10 +154,17 @@ async function updateAnnouncement(event, openid) {
     }
     if (
       existing.type === "product_new"
-      && validation.data.caseDocId !== trimText(existing.caseDocId)
+      && !sameCaseDocIds(
+        validation.data.caseDocIds,
+        normalizeCaseDocIds(existing.caseDocIds, existing.caseDocId)
+      )
     ) {
       return fail("CASE_LOCKED", "已发布产品通知不能修改关联案例");
     }
+  }
+  if (validation.data.type === "product_new") {
+    const caseError = await validateLinkedCases(validation.data.caseDocIds);
+    if (caseError) return caseError;
   }
   await db.collection(ANNOUNCEMENT_COLLECTION).doc(id).update({
     data: {
@@ -270,6 +309,35 @@ async function deleteAnnouncement(event) {
   return ok({ id });
 }
 
+async function getPublishedLinkedCases(event) {
+  const id = trimText(event.announcementId || event.id);
+  if (!id) return fail("INVALID_ID", "缺少通知 ID");
+  const announcement = await getAnnouncementById(id);
+  if (
+    !announcement
+    || announcement.type !== "product_new"
+    || announcement.publishStatus !== "published"
+    || announcement.isVisible !== true
+  ) {
+    return fail("ANNOUNCEMENT_NOT_FOUND", "产品上新通知不存在或已隐藏");
+  }
+  const caseDocIds = normalizeCaseDocIds(
+    announcement.caseDocIds,
+    announcement.caseDocId
+  );
+  const items = await getCasesByIds(caseDocIds, { visibleOnly: true });
+  return ok({
+    announcement: {
+      _id: id,
+      title: announcement.title || "",
+      caseDocIds,
+      targetPage: buildNotificationCasesPage(id),
+    },
+    items,
+    unavailableCount: Math.max(0, caseDocIds.length - items.length),
+  });
+}
+
 exports.main = async (event = {}) => {
   const { OPENID } = cloud.getWXContext();
   const action = trimText(event.action);
@@ -277,6 +345,14 @@ exports.main = async (event = {}) => {
 
   if (action === "checkAccess") {
     return ok({ isAdmin: admin });
+  }
+  if (action === "getPublishedLinkedCases") {
+    try {
+      return await getPublishedLinkedCases(event);
+    } catch (error) {
+      console.error("notification linked cases error", error);
+      return fail("SERVER_ERROR", error.message || "关联案例读取失败");
+    }
   }
   if (!admin) {
     return fail("FORBIDDEN", "无权限管理通知");

@@ -22,6 +22,7 @@ const NOTIFICATION_TYPE_KEYS = [
   "product_new",
 ];
 const SUBSCRIPTION_STATUS_KEYS = ["accept", "reject", "ban"];
+const SUBSCRIPTION_TEMPLATE_ID_MIN_LENGTH = 20;
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -176,6 +177,34 @@ function normalizeSubscriptionStatus(value) {
   return "";
 }
 
+function isValidSubscriptionTemplateId(value) {
+  const templateId = trimText(value);
+  if (!templateId || ["10103", "1330"].includes(templateId)) return false;
+  return (
+    templateId.length >= SUBSCRIPTION_TEMPLATE_ID_MIN_LENGTH
+    && templateId.length <= 100
+    && /^[A-Za-z0-9_-]+$/.test(templateId)
+  );
+}
+
+function buildTemplateConfig(type, templateId) {
+  const normalizedId = trimText(templateId);
+  const envKey = type === "version_update"
+    ? "VERSION_UPDATE_TEMPLATE_ID"
+    : "PRODUCT_NEW_TEMPLATE_ID";
+  const valid = isValidSubscriptionTemplateId(normalizedId);
+  return {
+    type,
+    envKey,
+    templateId: normalizedId,
+    valid,
+    code: valid ? "" : "INVALID_TEMPLATE_CONFIG",
+    message: valid
+      ? ""
+      : `${envKey} 配置错误，请填写当前小程序“我的模板”中的长模板 ID，不能填写模板编号`,
+  };
+}
+
 function validateSubscriptionGrant(input = {}, templateIds = {}) {
   const type = normalizeNotificationType(trimText(input.type));
   const templateId = trimText(input.templateId);
@@ -185,7 +214,10 @@ function validateSubscriptionGrant(input = {}, templateIds = {}) {
   if (!type || !templateId || !SUBSCRIPTION_STATUS_KEYS.includes(rawStatus) || !status) {
     return { valid: false, code: "INVALID_SUBSCRIPTION", message: "订阅状态无效" };
   }
-  if (!templateIds[type] || templateIds[type] !== templateId) {
+  if (!isValidSubscriptionTemplateId(templateIds[type])) {
+    return { valid: false, code: "INVALID_TEMPLATE_CONFIG", message: buildTemplateConfig(type, templateIds[type]).message };
+  }
+  if (templateIds[type] !== templateId) {
     return { valid: false, code: "INVALID_TEMPLATE", message: "订阅模板配置不匹配" };
   }
   return {
@@ -240,6 +272,8 @@ module.exports = {
   USER_PROFILE_NICKNAME_MAX_LENGTH,
   normalizeNotificationType,
   normalizeSubscriptionStatus,
+  buildTemplateConfig,
+  isValidSubscriptionTemplateId,
   normalizeUserProfileDraft,
   pickPreferenceRecord,
   validateSubscriptionGrant,

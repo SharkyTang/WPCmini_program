@@ -1,0 +1,6 @@
+{
+  "navigationBarTitleText": "上新案例",
+  "usingComponents": {
+    "mp-msg": "weui-miniprogram/msg/msg"
+  }
+}

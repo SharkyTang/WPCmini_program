@@ -29,6 +29,9 @@ function matchesCondition(record, condition = {}) {
         ? actual.some((value) => expected.values.includes(value))
         : expected.values.includes(actual);
     }
+    if (expected && expected.__op === "gte") {
+      return new Date(record[field]).getTime() >= new Date(expected.value).getTime();
+    }
     return record[field] === expected;
   });
 }
@@ -36,6 +39,7 @@ function matchesCondition(record, condition = {}) {
 function createQuery(collectionName, records, calls, condition = {}) {
   const query = {
     limitValue: null,
+    skipValue: 0,
     where(nextCondition) {
       calls.push({ collectionName, type: "where", condition: nextCondition });
       return createQuery(collectionName, records, calls, nextCondition);
@@ -54,11 +58,13 @@ function createQuery(collectionName, records, calls, condition = {}) {
       return this;
     },
     skip(value) {
+      this.skipValue = value;
       calls.push({ collectionName, type: "skip", value });
       return this;
     },
     async get() {
       let data = records.filter((record) => matchesCondition(record, condition));
+      data = data.slice(this.skipValue);
       if (this.limitValue !== null) data = data.slice(0, this.limitValue);
       return { data: clone(data) };
     },
@@ -91,6 +97,9 @@ function loadCaseAdminFunction(options = {}) {
         command: {
           in(values) {
             return { __op: "in", values };
+          },
+          gte(value) {
+            return { __op: "gte", value };
           },
         },
         serverDate() {
@@ -373,5 +382,23 @@ await test("homepage display endpoint is admin-only and returns the active homep
   const customer = loadCaseAdminFunction({ openid: "customer_openid" });
   const forbidden = await customer.main({ action: "listHomepageDisplay", slot: "popular" });
   assert.equal(forbidden.ok, false);
+  assert.equal(forbidden.code, "FORBIDDEN");
+});
+
+await test("recent case endpoint only returns visible cases created in the last 24 hours", async () => {
+  const now = Date.now();
+  const { main } = loadCaseAdminFunction({
+    cases: [
+      { _id: "recent_visible", title: "近期案例", isVisible: true, createdAt: new Date(now - 60 * 60 * 1000).toISOString() },
+      { _id: "recent_hidden", title: "隐藏案例", isVisible: false, createdAt: new Date(now - 60 * 60 * 1000).toISOString() },
+      { _id: "old_visible", title: "旧案例", isVisible: true, createdAt: new Date(now - 25 * 60 * 60 * 1000).toISOString() },
+    ],
+  });
+  const result = await main({ action: "listRecentCases", page: 1, pageSize: 20 });
+  assert.equal(result.ok, true);
+  assert.deepEqual(clone(result.items.map((item) => item._id)), ["recent_visible"]);
+
+  const customer = loadCaseAdminFunction({ openid: "customer_openid" });
+  const forbidden = await customer.main({ action: "listRecentCases" });
   assert.equal(forbidden.code, "FORBIDDEN");
 });

@@ -86,6 +86,20 @@ test("only linked product announcements expose a case entry", () => {
 
   assert.equal(versionItem.hasCaseLink, false);
   assert.equal(productItem.hasCaseLink, true);
+  assert.equal(
+    productItem.targetPage,
+    "/pages/notification-cases/index?announcementId=product_1"
+  );
+});
+
+test("normalizes legacy delimited case ids into an ordered unique list", () => {
+  const productItem = normalizeNotification({
+    _id: "product_many",
+    type: "product_new",
+    caseDocId: "case_1，case_2; case_1 case_3",
+  });
+  assert.deepEqual(plain(productItem.caseDocIds), ["case_1", "case_2", "case_3"]);
+  assert.equal(productItem.caseDocId, "case_1");
 });
 
 test("normalizes one-time subscription states for public notification types", () => {

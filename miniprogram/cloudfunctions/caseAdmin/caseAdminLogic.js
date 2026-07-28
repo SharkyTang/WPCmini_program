@@ -24,6 +24,7 @@ const HOME_DISPLAY_LABELS = {
 const VALID_CASE_ADMIN_ACTIONS = [
   "checkAccess",
   "listCases",
+  "listRecentCases",
   "getCase",
   "getCaseImageUrls",
   "getVisibleImageUrls",

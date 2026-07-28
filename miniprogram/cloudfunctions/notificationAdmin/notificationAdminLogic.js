@@ -10,10 +10,12 @@ const VALID_NOTIFICATION_ADMIN_ACTIONS = [
   "setAnnouncementVisibility",
   "getDeliverySummary",
   "deleteAnnouncement",
+  "getPublishedLinkedCases",
 ];
 const TITLE_MAX_LENGTH = 80;
 const CONTENT_MAX_LENGTH = 500;
 const VERSION_MAX_LENGTH = 30;
+const CASE_LINK_LIMIT = 20;
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -39,12 +41,45 @@ function sanitizeTargetPage(value) {
   return page.startsWith("/pages/") ? page.slice(0, 300) : "";
 }
 
-function sanitizeAnnouncement(input = {}) {
+function normalizeCaseDocIds(value, fallback = "") {
+  const rawValues = Array.isArray(value)
+    ? value
+    : value && Array.isArray(value.values)
+      ? value.values
+      : [value || fallback];
+  const seen = new Set();
+  return rawValues
+    .flatMap((item) => trimText(item).split(/[,，;；\s]+/))
+    .map(trimText)
+    .filter(Boolean)
+    .filter((id) => {
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+}
+
+function sameCaseDocIds(left, right) {
+  const leftIds = normalizeCaseDocIds(left);
+  const rightIds = normalizeCaseDocIds(right);
+  return leftIds.length === rightIds.length
+    && leftIds.every((id, index) => id === rightIds[index]);
+}
+
+function buildNotificationCasesPage(id) {
+  const announcementId = trimText(id);
+  return announcementId
+    ? `/pages/notification-cases/index?announcementId=${encodeURIComponent(announcementId)}`
+    : "/pages/notifications/index";
+}
+
+function sanitizeAnnouncement(input = {}, options = {}) {
   const type = normalizeAnnouncementType(trimText(input.type));
   const title = trimText(input.title);
   const content = trimText(input.content);
   const version = trimText(input.version);
-  const caseDocId = trimText(input.caseDocId);
+  const caseDocIds = normalizeCaseDocIds(input.caseDocIds, input.caseDocId);
+  const caseDocId = caseDocIds[0] || "";
   const targetPage = sanitizeTargetPage(input.targetPage);
 
   if (!type) {
@@ -65,7 +100,10 @@ function sanitizeAnnouncement(input = {}) {
   if (version.length > VERSION_MAX_LENGTH) {
     return { valid: false, code: "INVALID_VERSION", message: "版本号最多 30 个字符" };
   }
-  if (type === "product_new" && !caseDocId) {
+  if (caseDocIds.length > CASE_LINK_LIMIT) {
+    return { valid: false, code: "TOO_MANY_CASES", message: `一条产品通知最多关联 ${CASE_LINK_LIMIT} 个案例` };
+  }
+  if (type === "product_new" && !caseDocIds.length) {
     return { valid: false, code: "INVALID_CASE", message: "产品上新通知需要关联案例" };
   }
 
@@ -76,12 +114,11 @@ function sanitizeAnnouncement(input = {}) {
       title,
       content,
       version,
-      caseDocId,
-      targetPage: targetPage || (
-        type === "product_new"
-          ? `/pages/detail/index?id=${encodeURIComponent(caseDocId)}`
-          : "/pages/notifications/index"
-      ),
+      caseDocIds: type === "product_new" ? caseDocIds : [],
+      caseDocId: type === "product_new" ? caseDocId : "",
+      targetPage: type === "product_new"
+        ? buildNotificationCasesPage(options.announcementId)
+        : (targetPage || "/pages/notifications/index"),
     },
   };
 }
@@ -99,6 +136,7 @@ function normalizePageSize(value) {
 
 module.exports = {
   ANNOUNCEMENT_TYPES,
+  CASE_LINK_LIMIT,
   CONTENT_MAX_LENGTH,
   PUBLISH_STATUSES,
   TITLE_MAX_LENGTH,
@@ -107,7 +145,10 @@ module.exports = {
   getAdminOpenidsFromEnv,
   isAdminOpenid,
   normalizeAnnouncementType,
+  normalizeCaseDocIds,
   normalizePage,
   normalizePageSize,
+  buildNotificationCasesPage,
+  sameCaseDocIds,
   sanitizeAnnouncement,
 };

@@ -11,7 +11,7 @@ function createDraft() {
     title: "",
     content: "",
     version: "",
-    caseDocId: "",
+    caseDocIds: [],
     sendSubscription: true,
   };
 }
@@ -24,6 +24,7 @@ Page({
     saving: false,
     draft: createDraft(),
     topTips: { show: false, message: "", type: "error" },
+    selectedCases: [],
   },
 
   onLoad(options = {}) {
@@ -38,12 +39,13 @@ Page({
       const item = await fetchAnnouncementDetail(id);
       this.setData({
         publishStatus: item.publishStatus || "draft",
+        selectedCases: item.linkedCaseItems || [],
         draft: {
           type: item.type || "version_update",
           title: item.title || "",
           content: item.content || "",
           version: item.version || "",
-          caseDocId: item.caseDocId || "",
+          caseDocIds: item.caseDocIds || [item.caseDocId].filter(Boolean),
           sendSubscription: true,
         },
       });
@@ -80,9 +82,34 @@ Page({
     this.setData({ "draft.version": event.detail.value || "" });
   },
 
-  onCaseIdInput(event) {
+  chooseCases() {
     if (this.data.publishStatus !== "draft") return;
-    this.setData({ "draft.caseDocId": event.detail.value || "" });
+    wx.navigateTo({
+      url: "/pages/notification-cases/index?mode=select",
+      events: {
+        confirmSelection: (payload = {}) => {
+          this.setData({
+            "draft.caseDocIds": payload.caseDocIds || [],
+            selectedCases: payload.items || [],
+          });
+        },
+      },
+      success: (response) => {
+        if (!response.eventChannel) return;
+        response.eventChannel.emit("initSelection", {
+          caseDocIds: this.data.draft.caseDocIds || [],
+          items: this.data.selectedCases || [],
+        });
+      },
+    });
+  },
+
+  clearCases() {
+    if (this.data.publishStatus !== "draft") return;
+    this.setData({
+      "draft.caseDocIds": [],
+      selectedCases: [],
+    });
   },
 
   onSendChange(event) {
@@ -93,7 +120,7 @@ Page({
     const draft = this.data.draft;
     if (!draft.title.trim()) return "请填写通知标题";
     if (!draft.content.trim()) return "请填写通知内容";
-    if (draft.type === "product_new" && !draft.caseDocId.trim()) return "请填写关联案例文档 ID";
+    if (draft.type === "product_new" && !draft.caseDocIds.length) return "请至少选择一个上新案例";
     return "";
   },
 
@@ -111,7 +138,7 @@ Page({
         title: this.data.draft.title,
         content: this.data.draft.content,
         version: this.data.draft.version,
-        caseDocId: this.data.draft.caseDocId,
+        caseDocIds: this.data.draft.caseDocIds,
       };
       let id = this.data.id;
       if (id) {

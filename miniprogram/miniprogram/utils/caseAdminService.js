@@ -196,6 +196,21 @@ async function fetchCaseAdminList(options = {}) {
   };
 }
 
+async function fetchRecentCaseAdminList(options = {}) {
+  const result = await callCaseAdmin("listRecentCases", {
+    page: options.page || 1,
+    pageSize: options.pageSize || DEFAULT_PAGE_SIZE,
+  });
+  const items = (result.items || []).map(normalizeCaseAdminItem);
+  return {
+    items: await attachCaseCoverUrls(items),
+    page: result.page || 1,
+    pageSize: result.pageSize || DEFAULT_PAGE_SIZE,
+    hasMore: Boolean(result.hasMore),
+    since: result.since || "",
+  };
+}
+
 async function fetchCaseAdminHomepageDisplay(options = {}) {
   const result = await callCaseAdmin("listHomepageDisplay", {
     slot: options.slot,
@@ -272,6 +287,7 @@ module.exports = {
   fetchCaseAdminDetail,
   fetchCaseAdminHomepageDisplay,
   fetchCaseAdminList,
+  fetchRecentCaseAdminList,
   attachCaseGalleryUrls,
   setCaseVisibility,
   updateCaseAdmin,

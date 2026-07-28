@@ -28,6 +28,7 @@ cloud.init({
 
 const db = cloud.database();
 const _ = db.command;
+const RECENT_CASE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function ok(data = {}) {
   return {
@@ -80,6 +81,29 @@ async function listCases(event) {
     page,
     pageSize,
     hasMore: (response.data || []).length === pageSize,
+  });
+}
+
+async function listRecentCases(event) {
+  const page = normalizePage(event.page);
+  const pageSize = normalizePageSize(event.pageSize);
+  const since = new Date(Date.now() - RECENT_CASE_WINDOW_MS);
+  const response = await db
+    .collection(CASE_COLLECTION)
+    .where({
+      isVisible: true,
+      createdAt: _.gte(since),
+    })
+    .orderBy("createdAt", "desc")
+    .skip((page - 1) * pageSize)
+    .limit(pageSize)
+    .get();
+  return ok({
+    items: response.data || [],
+    page,
+    pageSize,
+    hasMore: (response.data || []).length === pageSize,
+    since: since.toISOString(),
   });
 }
 
@@ -459,6 +483,7 @@ exports.main = async (event = {}) => {
 
   try {
     if (action === "listCases") return listCases(event);
+    if (action === "listRecentCases") return listRecentCases(event);
     if (action === "listHomepageDisplay") return listHomepageDisplay(event);
     if (action === "getCase") return getCase(event);
     if (action === "getCaseImageUrls") return getCaseImageUrls(event);

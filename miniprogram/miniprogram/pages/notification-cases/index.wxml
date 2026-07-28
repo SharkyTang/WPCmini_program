@@ -1,0 +1,68 @@
+<view class="page">
+  <view class="hero">
+    <view>
+      <view class="page-title">{{title}}</view>
+      <view class="page-subtitle">
+        {{mode === 'select' ? '仅显示近 24 小时新增并已开启前台显示的案例' : '查看本次产品上新关联的包装案例'}}
+      </view>
+    </view>
+    <view wx:if="{{mode === 'select' && cards.length}}" class="manage-button" bindtap="toggleSelectMode">
+      {{selectMode ? '查看' : '选择'}}
+    </view>
+  </view>
+
+  <view wx:if="{{unavailableCount}}" class="unavailable-tip">
+    部分关联案例已下架，本页已自动省略 {{unavailableCount}} 个
+  </view>
+
+  <view wx:if="{{loading}}" class="state-shell">
+    <mp-msg type="waiting" title="正在读取案例" desc="正在整理本次上新内容" />
+  </view>
+  <view wx:elif="{{errorMessage}}" class="state-shell state-error">
+    <mp-msg type="warn" title="案例读取失败" desc="{{errorMessage}}" />
+    <view class="state-button" bindtap="retry">重新读取</view>
+  </view>
+  <view wx:elif="{{!cards.length}}" class="state-shell">
+    <mp-msg
+      type="info"
+      title="{{mode === 'select' ? '近 24 小时暂无可选案例' : '关联案例已下架'}}"
+      desc="{{mode === 'select' ? '请先新增案例并开启前台显示' : '这条通知关联的案例暂时无法查看'}}"
+    />
+    <view wx:if="{{mode !== 'select'}}" class="state-button" bindtap="goToCategory">返回案例库</view>
+  </view>
+
+  <view wx:else>
+    <view wx:if="{{mode === 'select' && selectMode}}" class="manage-toolbar">
+      <view class="manage-count">已选择 {{selectedCaseIds.length}} / 20</view>
+      <view class="manage-action" bindtap="toggleSelectAll">
+        {{selectedCaseIds.length && selectedCaseIds.length === cards.length ? '取消全选' : '全选已加载'}}
+      </view>
+    </view>
+
+    <view class="cases-grid {{selectMode ? 'cases-grid-selecting' : ''}}">
+      <view
+        wx:for="{{cards}}"
+        wx:key="id"
+        class="case-card {{item.selected ? 'case-card-selected' : ''}}"
+        data-id="{{item.id}}"
+        bindtap="handleCardTap"
+      >
+        <view wx:if="{{mode === 'select' && selectMode}}" class="select-mark">
+          <view class="select-dot">{{item.selected ? '✓' : ''}}</view>
+        </view>
+        <image wx:if="{{item.coverImageUrl}}" class="case-image" src="{{item.coverImageUrl}}" mode="aspectFill" lazy-load />
+        <view wx:else class="case-placeholder">暂无图片</view>
+        <view class="case-title">{{item.title}}</view>
+        <view class="case-tags">{{item.tagSummary}}</view>
+      </view>
+    </view>
+
+    <view wx:if="{{mode === 'select' && hasMore}}" class="load-more" bindtap="loadMore">
+      {{loadingMore ? '加载中...' : '加载更多'}}
+    </view>
+  </view>
+
+  <view wx:if="{{mode === 'select' && selectMode}}" class="bottom-bar">
+    <view class="complete-button" bindtap="completeSelection">完成选择（{{selectedCaseIds.length}}）</view>
+  </view>
+</view>

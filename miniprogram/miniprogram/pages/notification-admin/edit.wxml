@@ -36,8 +36,33 @@
     </view>
 
     <view wx:if="{{draft.type === 'product_new'}}" class="field">
-      <view class="field-label">关联案例文档 ID *</view>
-      <input class="text-input" disabled="{{publishStatus !== 'draft'}}" value="{{draft.caseDocId}}" placeholder="填写 wine_packaging 文档 ID" bindinput="onCaseIdInput" />
+      <view class="case-select-heading">
+        <view>
+          <view class="field-label">关联上新案例 *</view>
+          <view class="field-hint">仅可选择近 24 小时新增且已开启前台显示的案例，最多 20 个</view>
+        </view>
+        <view wx:if="{{publishStatus === 'draft' && draft.caseDocIds.length}}" class="clear-cases" bindtap="clearCases">清空</view>
+      </view>
+      <view class="case-select-summary">
+        <view class="case-select-count">已选择 {{draft.caseDocIds.length}} 个案例</view>
+        <view
+          wx:if="{{publishStatus === 'draft'}}"
+          class="case-select-button"
+          bindtap="chooseCases"
+        >
+          {{draft.caseDocIds.length ? '重新选择' : '选择近24小时新增案例'}}
+        </view>
+        <view wx:else class="case-select-locked">已发布后不可更换关联案例</view>
+      </view>
+      <scroll-view wx:if="{{selectedCases.length}}" class="case-preview-scroll" scroll-x enhanced>
+        <view class="case-preview-row">
+          <view wx:for="{{selectedCases}}" wx:key="id" class="case-preview">
+            <image wx:if="{{item.coverImageUrl}}" class="case-preview-image" src="{{item.coverImageUrl}}" mode="aspectFill" />
+            <view wx:else class="case-preview-placeholder">暂无图片</view>
+            <view class="case-preview-title">{{item.title}}</view>
+          </view>
+        </view>
+      </scroll-view>
     </view>
 
     <view wx:if="{{publishStatus === 'draft'}}" class="send-row">

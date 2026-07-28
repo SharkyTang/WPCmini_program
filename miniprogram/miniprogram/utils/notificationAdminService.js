@@ -1,4 +1,6 @@
 const { normalizeNotification } = require("./notificationData");
+const { normalizeCaseRecord } = require("./caseData");
+const { attachCaseImageUrls } = require("./cloudData");
 
 const NOTIFICATION_ADMIN_FUNCTION = "notificationAdmin";
 const NOTIFICATION_DISPATCHER_FUNCTION = "notificationDispatcher";
@@ -23,6 +25,10 @@ async function callNotificationAdmin(action, payload = {}) {
   return normalizeFunctionResult(response);
 }
 
+async function fetchPublishedLinkedCases(announcementId) {
+  return callNotificationAdmin("getPublishedLinkedCases", { announcementId });
+}
+
 function normalizeAdminAnnouncement(record = {}) {
   const item = normalizeNotification(record);
   const publishStatus = record.publishStatus || (record.isVisible === false ? "hidden" : "published");
@@ -40,6 +46,7 @@ function normalizeAdminAnnouncement(record = {}) {
     canToggleVisibility: publishStatus === "published" || publishStatus === "hidden",
     canShowDeliverySummary: publishStatus === "published" || publishStatus === "hidden",
     isVisible: record.isVisible === true,
+    linkedCaseItems: record.linkedCaseItems || [],
   };
 }
 
@@ -68,7 +75,12 @@ async function fetchAnnouncementList(options = {}) {
 
 async function fetchAnnouncementDetail(id) {
   const result = await callNotificationAdmin("getAnnouncement", { id });
-  return normalizeAdminAnnouncement(result.item || {});
+  const item = normalizeAdminAnnouncement(result.item || {});
+  const linkedCaseItems = (item.linkedCaseItems || []).map(normalizeCaseRecord);
+  return {
+    ...item,
+    linkedCaseItems: await attachCaseImageUrls(linkedCaseItems),
+  };
 }
 
 async function createAnnouncement(announcement) {
@@ -122,8 +134,7 @@ async function publishProductAnnouncement(input = {}) {
     type: "product_new",
     title: input.title,
     content: input.content,
-    caseDocId: input.caseDocId,
-    targetPage: `/pages/detail/index?id=${encodeURIComponent(input.caseDocId || "")}`,
+    caseDocIds: input.caseDocIds || [input.caseDocId].filter(Boolean),
   });
   return publishAnnouncement(createResult.id, input.sendSubscription !== false);
 }
@@ -135,6 +146,7 @@ module.exports = {
   deleteAnnouncement,
   fetchAnnouncementDetail,
   fetchAnnouncementList,
+  fetchPublishedLinkedCases,
   fetchDeliverySummary,
   publishAnnouncement,
   publishProductAnnouncement,

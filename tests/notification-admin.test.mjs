@@ -33,7 +33,13 @@ function clone(value) {
 }
 
 function matches(record, condition = {}) {
-  return Object.keys(condition).every((key) => record[key] === condition[key]);
+  return Object.keys(condition).every((key) => {
+    const expected = condition[key];
+    if (expected && expected.__op === "in") {
+      return expected.values.includes(record[key]);
+    }
+    return record[key] === expected;
+  });
 }
 
 function loadNotificationAdmin(options = {}) {
@@ -41,6 +47,7 @@ function loadNotificationAdmin(options = {}) {
     app_notifications: clone(options.announcements || []),
     notification_push_jobs: clone(options.jobs || []),
     notification_delivery_logs: clone(options.deliveryLogs || []),
+    wine_packaging: clone(options.cases || []),
   };
   const mockCloud = {
     DYNAMIC_CURRENT_ENV: "dynamic",
@@ -50,6 +57,11 @@ function loadNotificationAdmin(options = {}) {
     },
     database() {
       return {
+        command: {
+          in(values) {
+            return { __op: "in", values };
+          },
+        },
         serverDate() {
           return "server-date";
         },
@@ -223,6 +235,7 @@ await test("notification admin validates public announcement fields", () => {
   assert.equal(logic.VALID_NOTIFICATION_ADMIN_ACTIONS.includes("publishAnnouncement"), true);
   assert.equal(logic.VALID_NOTIFICATION_ADMIN_ACTIONS.includes("getAnnouncement"), true);
   assert.equal(logic.VALID_NOTIFICATION_ADMIN_ACTIONS.includes("deleteAnnouncement"), true);
+  assert.equal(logic.VALID_NOTIFICATION_ADMIN_ACTIONS.includes("getPublishedLinkedCases"), true);
   assert.equal(logic.sanitizeAnnouncement({ type: "unknown", title: "x", content: "x" }).code, "INVALID_TYPE");
   assert.equal(logic.sanitizeAnnouncement({ type: "version_update", title: "", content: "x" }).code, "INVALID_TITLE");
   assert.equal(logic.sanitizeAnnouncement({
@@ -230,6 +243,16 @@ await test("notification admin validates public announcement fields", () => {
     title: "新品",
     content: "内容",
   }).code, "INVALID_CASE");
+  assert.deepEqual(
+    clone(logic.normalizeCaseDocIds("case_1，case_2; case_1 case_3")),
+    ["case_1", "case_2", "case_3"]
+  );
+  assert.equal(logic.sanitizeAnnouncement({
+    type: "product_new",
+    title: "新品",
+    content: "内容",
+    caseDocIds: Array.from({ length: 21 }, (_, index) => `case_${index}`),
+  }).code, "TOO_MANY_CASES");
 });
 
 await test("non admins cannot create announcements", async () => {
@@ -422,12 +445,17 @@ await test("delete confirmation cancels cleanly and only deletes after confirmat
   assert.equal(calls.toasts.at(-1).title, "已删除");
 });
 
-await test("product announcements are idempotent for the same case", async () => {
+await test("product announcements support multiple ordered cases without reusing old notices", async () => {
   const { main, collections } = loadNotificationAdmin({
+    cases: [
+      { _id: "case_doc_1", title: "案例一", isVisible: true },
+      { _id: "case_doc_2", title: "案例二", isVisible: true },
+    ],
     announcements: [{
       _id: "notice_existing",
       type: "product_new",
       caseDocId: "case_doc_1",
+      caseDocIds: ["case_doc_1"],
       title: "已有通知",
       content: "已有内容",
       publishStatus: "published",
@@ -437,15 +465,49 @@ await test("product announcements are idempotent for the same case", async () =>
     action: "createAnnouncement",
     announcement: {
       type: "product_new",
-      caseDocId: "case_doc_1",
+      caseDocIds: ["case_doc_2", "case_doc_1"],
       title: "重复通知",
       content: "重复内容",
     },
   });
   assert.equal(result.ok, true);
-  assert.equal(result.reused, true);
-  assert.equal(result.id, "notice_existing");
-  assert.equal(collections.app_notifications.length, 1);
+  assert.equal(result.reused, false);
+  assert.equal(collections.app_notifications.length, 2);
+  assert.deepEqual(
+    clone(collections.app_notifications[1].caseDocIds),
+    ["case_doc_2", "case_doc_1"]
+  );
+  assert.equal(
+    collections.app_notifications[1].targetPage,
+    `/pages/notification-cases/index?announcementId=${result.id}`
+  );
+});
+
+await test("published linked cases are public, ordered, and omit hidden cases", async () => {
+  const { main } = loadNotificationAdmin({
+    openid: "customer_openid",
+    cases: [
+      { _id: "case_doc_1", title: "案例一", isVisible: true },
+      { _id: "case_doc_2", title: "隐藏案例", isVisible: false },
+      { _id: "case_doc_3", title: "案例三", isVisible: true },
+    ],
+    announcements: [{
+      _id: "notice_product",
+      type: "product_new",
+      caseDocIds: ["case_doc_3", "case_doc_2", "case_doc_1"],
+      caseDocId: "case_doc_3",
+      title: "本周上新",
+      publishStatus: "published",
+      isVisible: true,
+    }],
+  });
+  const result = await main({
+    action: "getPublishedLinkedCases",
+    announcementId: "notice_product",
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(clone(result.items.map((item) => item._id)), ["case_doc_3", "case_doc_1"]);
+  assert.equal(result.unavailableCount, 1);
 });
 
 await test("dispatcher source batches, deduplicates, and consumes one-time grants", () => {

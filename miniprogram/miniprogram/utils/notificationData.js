@@ -9,6 +9,7 @@ const NOTIFICATION_TYPES = {
 
 const NOTIFICATION_TYPE_KEYS = Object.keys(NOTIFICATION_TYPES);
 const SUBSCRIPTION_STATUSES = ["idle", "granted", "consumed", "rejected", "banned"];
+const SUBSCRIPTION_TEMPLATE_ID_MIN_LENGTH = 20;
 
 function getNotificationTypeLabel(type) {
   return (NOTIFICATION_TYPES[type] && NOTIFICATION_TYPES[type].label) || "通知";
@@ -16,6 +17,35 @@ function getNotificationTypeLabel(type) {
 
 function isKnownNotificationType(type) {
   return NOTIFICATION_TYPE_KEYS.includes(type);
+}
+
+function normalizeCaseDocIds(value, fallback = "") {
+  const values = Array.isArray(value)
+    ? value
+    : value && Array.isArray(value.values)
+      ? value.values
+      : [value || fallback];
+  const seen = new Set();
+  return values
+    .flatMap((item) => (typeof item === "string" ? item.trim().split(/[,，;；\s]+/) : []))
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((id) => {
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .slice(0, 20);
+}
+
+function isValidSubscriptionTemplateId(value) {
+  const templateId = typeof value === "string" ? value.trim() : "";
+  return (
+    !["10103", "1330"].includes(templateId)
+    && templateId.length >= SUBSCRIPTION_TEMPLATE_ID_MIN_LENGTH
+    && templateId.length <= 100
+    && /^[A-Za-z0-9_-]+$/.test(templateId)
+  );
 }
 
 function getNotificationTimestamp(value) {
@@ -47,19 +77,24 @@ function formatNotificationTime(value) {
 function normalizeNotification(record = {}, fallbackType = "") {
   const type = record.type || fallbackType;
   const createdAt = record.createdAt || record.updatedAt || "";
-  const caseDocId = record.caseDocId || "";
-  const targetPage = record.targetPage || "";
+  const id = record._id || record.id || "";
+  const caseDocIds = normalizeCaseDocIds(record.caseDocIds, record.caseDocId);
+  const caseDocId = caseDocIds[0] || "";
+  const targetPage = type === "product_new" && id && caseDocIds.length
+    ? `/pages/notification-cases/index?announcementId=${encodeURIComponent(id)}`
+    : record.targetPage || "";
 
   return {
-    id: record._id || record.id || "",
+    id,
     type,
     typeLabel: getNotificationTypeLabel(type),
     title: record.title || "消息通知",
     content: record.content || "",
     version: record.version || "",
     caseDocId,
+    caseDocIds,
     targetPage,
-    hasCaseLink: type === "product_new" && Boolean(caseDocId && targetPage),
+    hasCaseLink: type === "product_new" && Boolean(caseDocIds.length && targetPage),
     publishStatus: record.publishStatus || (record.isVisible === false ? "hidden" : "published"),
     createdAt,
     timestamp: getNotificationTimestamp(createdAt),
@@ -105,6 +140,8 @@ module.exports = {
   getNotificationTypeLabel,
   normalizeNotification,
   normalizeNotifications,
+  normalizeCaseDocIds,
   normalizeSubscriptionStatus,
   normalizeSubscriptionState,
+  isValidSubscriptionTemplateId,
 };
