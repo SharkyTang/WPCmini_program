@@ -1,6 +1,6 @@
 const { normalizeNotification } = require("./notificationData");
-const { normalizeCaseRecord } = require("./caseData");
-const { attachCaseImageUrls } = require("./cloudData");
+const { normalizeCaseRecord } = require("../../../utils/caseData");
+const { attachCaseImageUrls } = require("../../../utils/cloudData");
 
 const NOTIFICATION_ADMIN_FUNCTION = "notificationAdmin";
 const NOTIFICATION_DISPATCHER_FUNCTION = "notificationDispatcher";

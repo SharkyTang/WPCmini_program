@@ -13,6 +13,7 @@ function loadCategoryPage(cases = [], appGlobalData = {}, wxMock = {}) {
     globalData: appGlobalData,
   };
   const sandbox = {
+    clearTimeout,
     Page(config) {
       pageConfig = config;
     },
@@ -49,6 +50,20 @@ function loadCategoryPage(cases = [], appGlobalData = {}, wxMock = {}) {
           refreshImageUrl: async (fileID) => fileID,
         };
       }
+      if (moduleName === "../../utils/caseCatalogService") {
+        return {
+          fetchCatalogSnapshot: async () => {
+            throw new Error("catalog unavailable");
+          },
+        };
+      }
+      if (moduleName === "../../utils/catalogCache") {
+        return {
+          CATALOG_CACHE_KEY: "wineCatalogSnapshotV2",
+          readCache: () => null,
+          writeCache() {},
+        };
+      }
       if (moduleName === "../../utils/caseRefresh") {
         return {
           getCaseDataVersion: () => 1,
@@ -58,6 +73,7 @@ function loadCategoryPage(cases = [], appGlobalData = {}, wxMock = {}) {
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     console,
+    setTimeout,
     wx: {
       getStorageSync() {
         return "";
@@ -72,7 +88,9 @@ function loadCategoryPage(cases = [], appGlobalData = {}, wxMock = {}) {
   vm.runInNewContext(readFileSync(pagePath, "utf8"), sandbox, {
     filename: pagePath,
   });
+  const setDataCalls = [];
   pageConfig.setData = function setData(nextData) {
+    setDataCalls.push(nextData);
     this.data = {
       ...this.data,
       ...nextData,
@@ -81,6 +99,7 @@ function loadCategoryPage(cases = [], appGlobalData = {}, wxMock = {}) {
   return {
     app,
     page: pageConfig,
+    setDataCalls,
   };
 }
 
@@ -130,7 +149,7 @@ await test("category page initializes latest sort from URL options", async () =>
   assert.equal(page.data.selectedSort, "latest");
   assert.equal(page.data.activeNavKey, "sort");
   assert.equal(page.data.expandedNavKey, "sort");
-  assert.deepEqual(plain(page.data.filteredCases.map((item) => item.id)), [
+  assert.deepEqual(plain(page._filteredCases.map((item) => item.id)), [
     "case_3",
     "case_1",
   ]);
@@ -147,7 +166,7 @@ await test("category page initializes popular sort from URL options", async () =
 
   assert.equal(page.data.selectedSort, "popular");
   assert.equal(page.data.activeNavKey, "sort");
-  assert.deepEqual(plain(page.data.filteredCases.map((item) => item.id)), [
+  assert.deepEqual(plain(page._filteredCases.map((item) => item.id)), [
     "case_3",
   ]);
 });
@@ -179,7 +198,7 @@ await test("category page consumes pending tab sort from app global data", async
   assert.equal(page.data.selectedSort, "popular");
   assert.equal(page.data.activeNavKey, "sort");
   assert.equal(page.data.expandedNavKey, "sort");
-  assert.deepEqual(plain(page.data.filteredCases.map((item) => item.id)), ["case_2"]);
+  assert.deepEqual(plain(page._filteredCases.map((item) => item.id)), ["case_2"]);
   assert.equal(app.globalData.pendingCategorySort, "");
 });
 
@@ -198,7 +217,7 @@ await test("category page applies pending tab sort during first load", async () 
 
   assert.equal(page.data.selectedSort, "popular");
   assert.equal(page.data.activeNavKey, "sort");
-  assert.deepEqual(plain(page.data.filteredCases.map((item) => item.id)), ["case_2"]);
+  assert.deepEqual(plain(page._filteredCases.map((item) => item.id)), ["case_2"]);
   assert.equal(app.globalData.pendingCategorySort, "");
 });
 
@@ -223,8 +242,63 @@ await test("category page consumes pending tab sort from storage", async () => {
   await page.onLoad({});
 
   assert.equal(page.data.selectedSort, "latest");
-  assert.deepEqual(plain(page.data.filteredCases.map((item) => item.id)), [
+  assert.deepEqual(plain(page._filteredCases.map((item) => item.id)), [
     "case_3",
   ]);
   assert.equal(removedKey, "pendingCategorySort");
+});
+
+await test("category keeps the full snapshot off data and renders at most 24 cards", async () => {
+  const cases = Array.from({ length: 50 }, (_, index) =>
+    buildCase(`case_${index + 1}`)
+  );
+  const { page } = loadCategoryPage(cases);
+
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  assert.equal(page._allCases.length, 50);
+  assert.equal(page._filteredCases.length, 50);
+  assert.equal(page.data.visibleCards.length, 24);
+  assert.equal(Object.prototype.hasOwnProperty.call(page.data, "allCases"), false);
+  assert.equal(page.data.filteredCount, 50);
+});
+
+await test("category search applies only once after the 250ms debounce window", async () => {
+  const { page } = loadCategoryPage([buildCase("case_1")]);
+  await page.onLoad({});
+  let applyCount = 0;
+  page.applyFilters = () => {
+    applyCount += 1;
+  };
+
+  page.onSearchInput({ detail: { value: "青" } });
+  page.onSearchInput({ detail: { value: "青花" } });
+  page.onSearchInput({ detail: { value: "青花瓷" } });
+  assert.equal(applyCount, 0);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 280));
+  assert.equal(applyCount, 1);
+});
+
+await test("category load-more sends only appended card paths", async () => {
+  const cases = Array.from({ length: 50 }, (_, index) =>
+    buildCase(`case_${index + 1}`)
+  );
+  const { page, setDataCalls } = loadCategoryPage(cases);
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  setDataCalls.length = 0;
+
+  page.loadMore();
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  const appendPatch = setDataCalls.find((patch) =>
+    Object.prototype.hasOwnProperty.call(patch, "visibleCards[24]")
+  );
+  assert.ok(appendPatch);
+  assert.equal(Object.prototype.hasOwnProperty.call(appendPatch, "visibleCards"), false);
+  assert.equal(
+    Object.keys(appendPatch).filter((key) => key.startsWith("visibleCards[")).length,
+    24
+  );
 });

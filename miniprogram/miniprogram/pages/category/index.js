@@ -4,6 +4,12 @@ const {
   selectedFilterCount,
 } = require("../../utils/caseData");
 const { attachCaseImageUrls, fetchVisibleCases, refreshImageUrl } = require("../../utils/cloudData");
+const { fetchCatalogSnapshot } = require("../../utils/caseCatalogService");
+const {
+  CATALOG_CACHE_KEY,
+  readCache,
+  writeCache,
+} = require("../../utils/catalogCache");
 const {
   getCaseDataVersion,
   shouldRefreshCaseData,
@@ -23,6 +29,7 @@ const SORT_OPTIONS = [
 ];
 const PENDING_CATEGORY_SORT_KEY = "pendingCategorySort";
 const CARD_PAGE_SIZE = 24;
+const SEARCH_DEBOUNCE_MS = 250;
 const PANEL_SUBTITLES = {
   sort: "选择案例排序方式",
   wineType: "按酒类查看产品与案例",
@@ -220,12 +227,9 @@ Page({
     selectedSort: "default",
     activeNavKey: "packageTypes",
     expandedNavKey: "packageTypes",
-    allCases: [],
-    filteredCases: [],
+    filteredCount: 0,
     visibleCards: [],
-    displayLimit: CARD_PAGE_SIZE,
     isLoadingMore: false,
-    imageRequestVersion: 0,
     filters: createFilters(),
     navItems: [],
     activePanel: null,
@@ -236,29 +240,55 @@ Page({
   },
 
   onLoad(options = {}) {
+    this._allCases = [];
+    this._filteredCases = [];
+    this._displayLimit = CARD_PAGE_SIZE;
+    this._imageRequestVersion = 0;
+    this._searchTimer = null;
+    this._catalogCache = readCache(CATALOG_CACHE_KEY);
     const initialSort = normalizeInitialSort(options.sort || takePendingCategorySort());
     this.applySortFromEntry(initialSort);
     this.refreshPanels();
-    return this.loadData();
+    if (this._catalogCache) {
+      this.applyCatalogItems(this._catalogCache.data.items || [], {
+        revision: this._catalogCache.revision,
+      });
+    }
+    return this.loadData({ silent: Boolean(this._catalogCache) });
   },
 
   onShow() {
     const pendingSort = normalizeInitialSort(takePendingCategorySort());
     if (pendingSort !== "default") {
       this.applySortFromEntry(pendingSort);
-      if (this.data.allCases.length) {
+      if (this._allCases && this._allCases.length) {
         this.applyFilters();
       } else {
         this.refreshPanels();
       }
     }
     if (!this.data.loading && shouldRefreshCaseData(this.data.caseDataVersion)) {
-      this.loadData({ silent: true });
+      this.loadData({ silent: true, forceRefresh: true });
     }
   },
 
   onPullDownRefresh() {
-    this.loadData().finally(() => wx.stopPullDownRefresh());
+    this.loadData({ forceRefresh: true }).finally(() => wx.stopPullDownRefresh());
+  },
+
+  onUnload() {
+    if (this._searchTimer) clearTimeout(this._searchTimer);
+  },
+
+  applyCatalogItems(items, options = {}) {
+    this._allCases = items || [];
+    this.setData({
+      caseDataVersion: getCaseDataVersion(),
+      catalogRevision: Number(options.revision) || 1,
+      loading: false,
+      errorMessage: "",
+    });
+    this.applyFilters();
   },
 
   async loadData(options = {}) {
@@ -274,15 +304,48 @@ Page({
     }
 
     try {
-      const cases = await fetchVisibleCases({ includeImageUrls: false });
-      this.setData({
-        allCases: cases,
-        caseDataVersion: getCaseDataVersion(),
-        loading: false,
-      });
-      this.applyFilters();
+      const knownRevision =
+        !options.forceRefresh && this._catalogCache && this._catalogCache.fresh
+          ? this._catalogCache.revision
+          : undefined;
+      let result;
+      try {
+        result = await fetchCatalogSnapshot({ knownRevision });
+      } catch (catalogError) {
+        console.warn("分类聚合接口不可用，使用兼容读取", catalogError);
+        const cases = await fetchVisibleCases({
+          includeImageUrls: false,
+          forceRefresh: options.forceRefresh,
+        });
+        result = {
+          revision: getCaseDataVersion() || 1,
+          notModified: false,
+          items: cases,
+        };
+      }
+      if (result.notModified && this._catalogCache) {
+        this.applyCatalogItems(this._catalogCache.data.items || [], {
+          revision: result.revision,
+        });
+        return;
+      }
+      const items = result.items || [];
+      this._catalogCache = {
+        revision: result.revision,
+        cachedAt: Date.now(),
+        fresh: true,
+        data: { items },
+      };
+      writeCache(CATALOG_CACHE_KEY, result.revision, { items });
+      this.applyCatalogItems(items, { revision: result.revision });
     } catch (error) {
       console.error("分类数据读取失败", error);
+      if (this._catalogCache) {
+        this.applyCatalogItems(this._catalogCache.data.items || [], {
+          revision: this._catalogCache.revision,
+        });
+        return;
+      }
       this.setData({
         loading: false,
         errorMessage: "暂时读取不到案例数据，请检查云环境和数据库权限。",
@@ -317,7 +380,7 @@ Page({
 
   applyFilters() {
     const selectedFilters = buildSelectedFilters(this.data.filters);
-    const filteredCases = filterCases(this.data.allCases, {
+    const filteredCases = filterCases(this._allCases || [], {
       query: this.data.query,
       selectedFilters,
       pinnedFirst: this.data.selectedSort === "default",
@@ -329,9 +392,10 @@ Page({
           ? filteredCases.filter(isPopularCase)
           : filteredCases;
 
+    this._filteredCases = buildCaseCards(sortedCases);
+    this._displayLimit = CARD_PAGE_SIZE;
     this.setData({
-      filteredCases: buildCaseCards(sortedCases),
-      displayLimit: CARD_PAGE_SIZE,
+      filteredCount: this._filteredCases.length,
       selectedPills: buildSelectedPills(this.data.filters),
       selectedCount: selectedFilterCount(selectedFilters),
     });
@@ -339,29 +403,59 @@ Page({
     this.refreshVisibleCards();
   },
 
-  async refreshVisibleCards() {
-    const requestVersion = this.data.imageRequestVersion + 1;
-    const sourceCards = this.data.filteredCases.slice(0, this.data.displayLimit);
-    this.setData({ imageRequestVersion: requestVersion, isLoadingMore: true });
+  async refreshVisibleCards(options = {}) {
+    const requestVersion = this._imageRequestVersion + 1;
+    this._imageRequestVersion = requestVersion;
+    const start = options.append ? this.data.visibleCards.length : 0;
+    const sourceCards = this._filteredCases.slice(start, this._displayLimit);
+    this.setData({ isLoadingMore: true });
     try {
-      const visibleCards = await attachCaseImageUrls(sourceCards, { preferThumbnail: true });
-      if (this.data.imageRequestVersion !== requestVersion) return;
-      this.setData({ visibleCards, isLoadingMore: false });
+      const alreadyHydrated = sourceCards.every(
+        (item) =>
+          item.coverImageUrl ||
+          !(item.imageFileId || item.coverThumbnail || item.coverImage)
+      );
+      const visibleCards = alreadyHydrated
+        ? sourceCards
+        : await attachCaseImageUrls(sourceCards, { preferThumbnail: true });
+      if (this._imageRequestVersion !== requestVersion) return;
+      if (!options.append) {
+        this.setData({ visibleCards, isLoadingMore: false });
+        return;
+      }
+      const patch = { isLoadingMore: false };
+      visibleCards.forEach((item, index) => {
+        patch[`visibleCards[${start + index}]`] = item;
+      });
+      this.setData(patch);
     } catch (error) {
       console.warn("分类图片链接读取失败", error);
-      if (this.data.imageRequestVersion === requestVersion) {
-        this.setData({
-          visibleCards: sourceCards.map((item) => ({ ...item, coverImageUrl: "", imageLoadState: "failed" })),
-          isLoadingMore: false,
+      if (this._imageRequestVersion === requestVersion) {
+        const failedCards = sourceCards.map((item) => ({
+          ...item,
+          coverImageUrl: "",
+          imageLoadState: "failed",
+        }));
+        if (!options.append) {
+          this.setData({ visibleCards: failedCards, isLoadingMore: false });
+          return;
+        }
+        const patch = { isLoadingMore: false };
+        failedCards.forEach((item, index) => {
+          patch[`visibleCards[${start + index}]`] = item;
         });
+        this.setData(patch);
       }
     }
   },
 
   loadMore() {
-    if (this.data.isLoadingMore || this.data.visibleCards.length >= this.data.filteredCases.length) return;
-    this.setData({ displayLimit: this.data.displayLimit + CARD_PAGE_SIZE });
-    this.refreshVisibleCards();
+    if (
+      this.data.isLoadingMore ||
+      this.data.visibleCards.length >= this._filteredCases.length
+    ) return;
+    this._displayLimit += CARD_PAGE_SIZE;
+    this.refreshVisibleCards({ append: true });
   },
 
   async retryCardImage(event) {
@@ -374,15 +468,21 @@ Page({
     console.warn("案例图片加载失败", { caseId: card.id, fileId: card.imageFileId, error: event.detail && event.detail.errMsg });
     try {
       const coverImageUrl = await refreshImageUrl(card.imageFileId);
-      const visibleCards = this.data.visibleCards.map((item) => item.id === id
-        ? { ...item, coverImageUrl, imageRetryCount: manualRetry ? 0 : retryCount + 1, imageLoadState: coverImageUrl ? "retrying" : "failed" }
-        : item);
-      this.setData({ visibleCards });
+      const index = this.data.visibleCards.findIndex((item) => item.id === id);
+      if (index === -1) return;
+      this.setData({
+        [`visibleCards[${index}].coverImageUrl`]: coverImageUrl,
+        [`visibleCards[${index}].imageRetryCount`]: manualRetry ? 0 : retryCount + 1,
+        [`visibleCards[${index}].imageLoadState`]: coverImageUrl ? "retrying" : "failed",
+      });
     } catch (error) {
-      const visibleCards = this.data.visibleCards.map((item) => item.id === id
-        ? { ...item, coverImageUrl: "", imageRetryCount: retryCount + 1, imageLoadState: "failed" }
-        : item);
-      this.setData({ visibleCards });
+      const index = this.data.visibleCards.findIndex((item) => item.id === id);
+      if (index === -1) return;
+      this.setData({
+        [`visibleCards[${index}].coverImageUrl`]: "",
+        [`visibleCards[${index}].imageRetryCount`]: retryCount + 1,
+        [`visibleCards[${index}].imageLoadState`]: "failed",
+      });
     }
   },
 
@@ -390,7 +490,11 @@ Page({
     this.setData({
       query: event.detail.value,
     });
-    this.applyFilters();
+    if (this._searchTimer) clearTimeout(this._searchTimer);
+    this._searchTimer = setTimeout(() => {
+      this._searchTimer = null;
+      this.applyFilters();
+    }, SEARCH_DEBOUNCE_MS);
   },
 
   selectNav(event) {

@@ -3,7 +3,7 @@ const {
   HOME_SECTION_OPTIONS,
   normalizeCaseRecord,
   normalizeValues,
-} = require("./caseData");
+} = require("../../../utils/caseData");
 
 const CASE_ADMIN_DEFAULT_SORT_ORDER = 9999;
 const CASE_ADMIN_NOTES_MAX_LENGTH = 800;
@@ -89,6 +89,8 @@ function createEmptyCaseForm() {
     coverImage: "",
     coverThumbnail: "",
     galleryImages: [],
+    sourceGalleryImages: [],
+    galleryThumbnails: [],
     wineType: "白酒",
     packageTypes: [],
     styles: [],
@@ -124,12 +126,18 @@ function buildCaseAdminOptionViews(form = {}, formOptions = CASE_ADMIN_FORM_OPTI
 
 function normalizeCaseAdminForm(form = {}) {
   const galleryImages = normalizeGalleryImages(form.galleryImages, form.coverImage);
+  const sourceGalleryImages = normalizeGalleryImages(form.sourceGalleryImages);
+  const galleryThumbnails = normalizeGalleryImages(form.galleryThumbnails);
   return {
     title: trimText(form.title),
     caseId: trimText(form.caseId),
     coverImage: galleryImages[0] || trimText(form.coverImage),
     coverThumbnail: trimText(form.coverThumbnail),
     galleryImages,
+    sourceGalleryImages: sourceGalleryImages.length
+      ? sourceGalleryImages
+      : galleryImages.slice(),
+    galleryThumbnails,
     wineType: trimText(form.wineType) || "白酒",
     packageTypes: normalizeStringList(form.packageTypes),
     styles: normalizeStringList(form.styles),
@@ -206,6 +214,8 @@ function buildCaseAdminPayload(form = {}) {
     coverImage: normalized.coverImage,
     coverThumbnail: normalized.coverThumbnail,
     galleryImages: normalized.galleryImages,
+    sourceGalleryImages: normalized.sourceGalleryImages,
+    galleryThumbnails: normalized.galleryThumbnails,
     wineType: normalized.wineType,
     packageTypes: valuesObject(normalized.packageTypes),
     styles: valuesObject(normalized.styles),

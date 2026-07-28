@@ -6,7 +6,7 @@ const {
   fetchCaseAdminHomepageDisplay,
   fetchCaseAdminList,
   setCaseVisibility,
-} = require("../../utils/caseAdminService");
+} = require("./utils/caseAdminService");
 
 const HOME_DISPLAY_VIEWS = new Set(["banner", "popular", "latest"]);
 

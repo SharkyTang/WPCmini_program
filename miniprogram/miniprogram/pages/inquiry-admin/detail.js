@@ -1,12 +1,12 @@
 const {
   INQUIRY_STATUS_OPTIONS,
   validateAdminNote,
-} = require("../../utils/inquiryAdminData");
+} = require("./utils/inquiryAdminData");
 const {
   fetchInquiryDetail,
   saveInquiryNote,
   updateInquiryStatus,
-} = require("../../utils/inquiryAdminService");
+} = require("./utils/inquiryAdminService");
 
 Page({
   data: {

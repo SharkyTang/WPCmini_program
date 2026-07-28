@@ -85,13 +85,13 @@
         </view>
 
         <view class="result-count">
-          <text wx:if="{{selectedCount || query}}">已展示 {{visibleCards.length}} / {{filteredCases.length}} 个案例</text>
-          <text wx:else>已展示 {{visibleCards.length}} / {{filteredCases.length}} 个案例</text>
+          <text wx:if="{{selectedCount || query}}">已展示 {{visibleCards.length}} / {{filteredCount}} 个案例</text>
+          <text wx:else>已展示 {{visibleCards.length}} / {{filteredCount}} 个案例</text>
         </view>
 
         <view wx:if="{{loading}}" class="state-box">正在读取案例...</view>
         <view wx:elif="{{errorMessage}}" class="state-box state-error">{{errorMessage}}</view>
-        <view wx:elif="{{!filteredCases.length}}" class="state-box">暂无匹配案例，换个条件试试</view>
+        <view wx:elif="{{!filteredCount}}" class="state-box">暂无匹配案例，换个条件试试</view>
         <view wx:else class="case-grid">
           <view
             wx:for="{{visibleCards}}"

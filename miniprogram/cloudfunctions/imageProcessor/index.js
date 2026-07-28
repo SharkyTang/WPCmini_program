@@ -1,0 +1,77 @@
+const cloud = require("wx-server-sdk");
+const sharp = require("sharp");
+const {
+  buildVariantPaths,
+  generateVariantBuffers,
+  isAdminOpenid,
+  normalizeSourceFiles,
+  trimText,
+} = require("./imageProcessorLogic");
+
+cloud.init({
+  env: cloud.DYNAMIC_CURRENT_ENV,
+});
+
+function ok(data = {}) {
+  return { ok: true, ...data };
+}
+
+function fail(code, message) {
+  return { ok: false, code, message };
+}
+
+async function uploadVariant(cloudPath, fileContent) {
+  const response = await cloud.uploadFile({
+    cloudPath,
+    fileContent,
+  });
+  return response.fileID || response.fileId || "";
+}
+
+async function processFile(fileID) {
+  const paths = buildVariantPaths(fileID);
+  const response = await cloud.downloadFile({ fileID });
+  const buffers = await generateVariantBuffers(sharp, response.fileContent);
+  const [displayFileID, thumbnailFileID] = await Promise.all([
+    uploadVariant(paths.displayPath, buffers.displayBuffer),
+    uploadVariant(paths.thumbnailPath, buffers.thumbnailBuffer),
+  ]);
+  if (!displayFileID || !thumbnailFileID) {
+    throw new Error("图片变体上传失败");
+  }
+  return {
+    sourceFileID: fileID,
+    displayFileID,
+    thumbnailFileID,
+    ...buffers.metadata,
+  };
+}
+
+async function generateCaseVariants(event) {
+  const requested = Array.isArray(event.files) ? event.files : event.fileIDs;
+  const fileIDs = normalizeSourceFiles(requested);
+  if (!fileIDs.length) return fail("INVALID_FILES", "缺少有效的云存储图片");
+  if ((requested || []).length > fileIDs.length) {
+    return fail("INVALID_FILES", "图片必须是五张以内且不能重复的云存储文件");
+  }
+  const variants = [];
+  for (const fileID of fileIDs) {
+    variants.push(await processFile(fileID));
+  }
+  return ok({ variants });
+}
+
+exports.main = async (event = {}) => {
+  const { OPENID } = cloud.getWXContext();
+  if (!isAdminOpenid(OPENID, process.env.ADMIN_OPENIDS)) {
+    return fail("FORBIDDEN", "无权限处理案例图片");
+  }
+  try {
+    const action = trimText(event.action);
+    if (action === "generateCaseVariants") return generateCaseVariants(event);
+    return fail("UNKNOWN_ACTION", "未知图片处理操作");
+  } catch (error) {
+    console.error("imageProcessor error", error);
+    return fail("IMAGE_PROCESSING_FAILED", error.message || "图片处理失败");
+  }
+};

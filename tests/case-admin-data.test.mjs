@@ -25,7 +25,7 @@ const caseDataPath = resolve(__dirname, "../miniprogram/miniprogram/utils/caseDa
 const caseData = loadCommonJsModule(caseDataPath);
 const caseAdminDataPath = resolve(
   __dirname,
-  "../miniprogram/miniprogram/utils/caseAdminData.js"
+  "../miniprogram/miniprogram/pages/case-admin/utils/caseAdminData.js"
 );
 const caseAdminEditWxmlPath = resolve(
   __dirname,
@@ -37,7 +37,7 @@ const caseAdminEditJsonPath = resolve(
 );
 const appJsonPath = resolve(__dirname, "../miniprogram/miniprogram/app.json");
 const caseAdminData = loadCommonJsModule(caseAdminDataPath, {
-  "./caseData": caseData,
+  "../../../utils/caseData": caseData,
 });
 
 const {

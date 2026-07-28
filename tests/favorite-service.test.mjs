@@ -36,6 +36,15 @@ function loadFavoriteService(recordsByCondition = {}, options = {}) {
           normalizeSelectedFavoriteIds: (ids) => ids.filter(Boolean),
         };
       }
+      if (path === "./caseCatalogService") {
+        return {
+          fetchUserLibrary:
+            options.fetchUserLibrary ||
+            (async () => {
+              throw new Error("catalog unavailable");
+            }),
+        };
+      }
       if (path === "./userService") {
         return {
           ensureProfileIdentity: async () => ({ ready: true, openid: "openid_1" }),

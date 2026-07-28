@@ -41,6 +41,8 @@ const ALLOWED_CASE_FIELDS = [
   "coverImage",
   "coverThumbnail",
   "galleryImages",
+  "sourceGalleryImages",
+  "galleryThumbnails",
   "wineType",
   "packageTypes",
   "styles",
@@ -263,6 +265,32 @@ function sanitizeCasePayload(input = {}, options = {}) {
     if (data.coverThumbnail && !isCloudFileId(data.coverThumbnail)) {
       return { valid: false, code: "INVALID_THUMBNAIL", message: "缩略图需要先上传到云存储" };
     }
+  }
+  for (const field of ["sourceGalleryImages", "galleryThumbnails"]) {
+    if (Object.prototype.hasOwnProperty.call(picked, field)) {
+      const normalizedImages = normalizeGalleryImages(picked[field]);
+      if (!normalizedImages.valid) return normalizedImages;
+      data[field] = normalizedImages.images;
+    }
+  }
+  if (data.galleryImages && data.sourceGalleryImages && data.sourceGalleryImages.length) {
+    if (data.sourceGalleryImages.length !== data.galleryImages.length) {
+      return {
+        valid: false,
+        code: "INCOMPLETE_IMAGE_VARIANTS",
+        message: "原图与展示图数量不一致，请重新处理图片",
+      };
+    }
+  }
+  if (data.galleryImages && data.galleryThumbnails && data.galleryThumbnails.length) {
+    if (data.galleryThumbnails.length !== data.galleryImages.length) {
+      return {
+        valid: false,
+        code: "INCOMPLETE_IMAGE_VARIANTS",
+        message: "缩略图与展示图数量不一致，请重新处理图片",
+      };
+    }
+    data.coverThumbnail = data.galleryThumbnails[0];
   }
 
   if (isCreate || Object.prototype.hasOwnProperty.call(picked, "packageTypes")) {

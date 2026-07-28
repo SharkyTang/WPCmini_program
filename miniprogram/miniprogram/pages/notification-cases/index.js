@@ -1,5 +1,5 @@
-const { fetchRecentCaseAdminList } = require("../../utils/caseAdminService");
-const { fetchPublishedLinkedCases } = require("../../utils/notificationAdminService");
+const { fetchRecentCaseAdminList } = require("./utils/caseAdminService");
+const { fetchPublishedLinkedCases } = require("./utils/notificationAdminService");
 const { normalizeCaseRecord } = require("../../utils/caseData");
 const { attachCaseImageUrls } = require("../../utils/cloudData");
 

@@ -58,7 +58,7 @@
         data-index="{{index}}"
         bindtap="selectGalleryImage"
       >
-        <image class="gallery-thumbnail-image" src="{{item.url}}" mode="aspectFill"></image>
+        <image class="gallery-thumbnail-image" src="{{item.thumbnailUrl}}" mode="aspectFill" lazy-load></image>
       </view>
     </view>
 

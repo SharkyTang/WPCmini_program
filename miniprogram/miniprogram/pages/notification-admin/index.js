@@ -6,7 +6,7 @@ const {
   fetchDeliverySummary,
   publishAnnouncement,
   setAnnouncementVisibility,
-} = require("../../utils/notificationAdminService");
+} = require("./utils/notificationAdminService");
 
 Page({
   data: {

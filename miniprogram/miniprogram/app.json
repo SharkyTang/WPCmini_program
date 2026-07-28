@@ -3,21 +3,77 @@
     "pages/index/index",
     "pages/category/index",
     "pages/profile/index",
-    "pages/profile/edit/index",
-    "pages/favorites/index",
-    "pages/history/index",
-    "pages/notifications/index",
-    "pages/notification-admin/index",
-    "pages/notification-admin/edit",
-    "pages/notification-cases/index",
-    "pages/feedback/index",
-    "pages/inquiry/index",
-    "pages/inquiry-admin/index",
-    "pages/inquiry-admin/detail",
-    "pages/case-admin/index",
-    "pages/case-admin/edit",
     "pages/detail/index"
   ],
+  "subpackages": [
+    {
+      "name": "account-profile-edit",
+      "root": "pages/profile/edit",
+      "pages": ["index"]
+    },
+    {
+      "name": "account-favorites",
+      "root": "pages/favorites",
+      "pages": ["index"]
+    },
+    {
+      "name": "account-history",
+      "root": "pages/history",
+      "pages": ["index"]
+    },
+    {
+      "name": "account-notifications",
+      "root": "pages/notifications",
+      "pages": ["index"]
+    },
+    {
+      "name": "account-feedback",
+      "root": "pages/feedback",
+      "pages": ["index"]
+    },
+    {
+      "name": "account-inquiry",
+      "root": "pages/inquiry",
+      "pages": ["index"]
+    },
+    {
+      "name": "account-notification-cases",
+      "root": "pages/notification-cases",
+      "pages": ["index"]
+    },
+    {
+      "name": "admin-case",
+      "root": "pages/case-admin",
+      "pages": ["index", "edit"]
+    },
+    {
+      "name": "admin-inquiry",
+      "root": "pages/inquiry-admin",
+      "pages": ["index", "detail"]
+    },
+    {
+      "name": "admin-notification",
+      "root": "pages/notification-admin",
+      "pages": ["index", "edit"]
+    }
+  ],
+  "preloadRule": {
+    "pages/profile/index": {
+      "network": "wifi",
+      "packages": [
+        "account-profile-edit",
+        "account-favorites",
+        "account-history",
+        "account-notifications",
+        "account-feedback",
+        "account-inquiry"
+      ]
+    },
+    "pages/notifications/index": {
+      "network": "wifi",
+      "packages": ["account-notification-cases"]
+    }
+  },
   "window": {
     "backgroundColor": "#F7F3EC",
     "backgroundTextStyle": "light",

@@ -19,7 +19,7 @@ function loadCommonJsModule(modulePath) {
 
 const inquiryAdminDataPath = resolve(
   __dirname,
-  "../miniprogram/miniprogram/utils/inquiryAdminData.js"
+  "../miniprogram/miniprogram/pages/inquiry-admin/utils/inquiryAdminData.js"
 );
 const inquiryAdminData = loadCommonJsModule(inquiryAdminDataPath);
 

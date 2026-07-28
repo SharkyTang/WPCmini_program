@@ -98,6 +98,19 @@ test("uses the first gallery image as the server-side cover", () => {
   assert.equal(result.data.isPinned, true);
 });
 
+test("rejects partially generated image variant arrays", () => {
+  const result = sanitizeCasePayload({
+    title: "不完整图片案例",
+    galleryImages: ["cloud://env/display-1.jpg", "cloud://env/display-2.jpg"],
+    sourceGalleryImages: ["cloud://env/source-1.jpg", "cloud://env/source-2.jpg"],
+    galleryThumbnails: ["cloud://env/thumb-1.jpg"],
+    packageTypes: ["礼盒"],
+  }, { isCreate: true, defaultCaseId: "case_092" });
+
+  assert.equal(result.valid, false);
+  assert.equal(result.code, "INCOMPLETE_IMAGE_VARIANTS");
+});
+
 test("sanitizes create payload with defaults and preserves visible flag", () => {
   const result = sanitizeCasePayload(
     {

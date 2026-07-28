@@ -6,16 +6,17 @@ const {
   createEmptyCaseForm,
   CASE_ADMIN_GALLERY_MAX,
   validateCaseAdminForm,
-} = require("../../utils/caseAdminData");
+} = require("./utils/caseAdminData");
 const {
   createCaseAdmin,
   fetchCaseAdminDetail,
+  generateCaseImageVariants,
   updateCaseAdmin,
   uploadCaseCoverImage,
-} = require("../../utils/caseAdminService");
+} = require("./utils/caseAdminService");
 const {
   publishProductAnnouncement,
-} = require("../../utils/notificationAdminService");
+} = require("./utils/notificationAdminService");
 
 function buildProductNotificationDraft(form = {}) {
   const summary = [
@@ -95,6 +96,14 @@ Page({
         galleryImages: (caseItem.galleryImages && caseItem.galleryImages.length
           ? caseItem.galleryImages
           : [caseItem.coverImage]).filter(Boolean),
+        sourceGalleryImages:
+          caseItem.sourceGalleryImages && caseItem.sourceGalleryImages.length
+            ? caseItem.sourceGalleryImages
+            : (caseItem.galleryImages || [caseItem.coverImage]).filter(Boolean),
+        galleryThumbnails:
+          caseItem.galleryThumbnails && caseItem.galleryThumbnails.length
+            ? caseItem.galleryThumbnails
+            : [caseItem.coverThumbnail].filter(Boolean),
         wineType: caseItem.wineType || "白酒",
         packageTypes: caseItem.packageTypes || [],
         styles: caseItem.styles || [],
@@ -224,27 +233,12 @@ Page({
       count: remaining,
       mediaType: ["image"],
       sourceType: ["album", "camera"],
-      sizeType: ["compressed"],
+      sizeType: ["original"],
       success: async (result) => {
         const filePaths = getMediaPaths(result);
         if (!filePaths.length) return;
         await this.uploadGalleryImages(filePaths);
       },
-    });
-  },
-
-  compressImage(filePath) {
-    if (!wx.compressImage) {
-      return Promise.resolve(filePath);
-    }
-
-    return new Promise((resolve) => {
-      wx.compressImage({
-        src: filePath,
-        quality: 70,
-        success: (result) => resolve(result.tempFilePath || filePath),
-        fail: () => resolve(filePath),
-      });
     });
   },
 
@@ -255,38 +249,47 @@ Page({
 
     try {
       const galleryImages = [...this.data.form.galleryImages];
+      const sourceGalleryImages = [
+        ...(this.data.form.sourceGalleryImages || this.data.form.galleryImages),
+      ];
+      const galleryThumbnails = [...(this.data.form.galleryThumbnails || [])];
       const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
-      let coverThumbnail = this.data.form.coverThumbnail;
-      let uploadedCount = 0;
-
-      for (const filePath of filePaths.slice(0, CASE_ADMIN_GALLERY_MAX - galleryImages.length)) {
+      const selectedPaths = filePaths.slice(
+        0,
+        CASE_ADMIN_GALLERY_MAX - galleryImages.length
+      );
+      const uploadedSources = [];
+      const uploadedPreviews = [];
+      for (const filePath of selectedPaths) {
         try {
-          const compressedPath = await this.compressImage(filePath);
-          const cloudPath = buildCaseAdminImagePath(compressedPath);
-          const fileID = await uploadCaseCoverImage({ filePath: compressedPath, cloudPath });
-          if (!galleryImages.length) {
-            try {
-              const thumbnailPath = await this.compressThumbnail(filePath);
-              coverThumbnail = await uploadCaseCoverImage({
-                filePath: thumbnailPath,
-                cloudPath: cloudPath.replace(/(\.[a-zA-Z0-9]+)$/, "-thumb$1"),
-              });
-            } catch (thumbnailError) {
-              console.warn("缩略图上传失败，将继续使用原图", thumbnailError);
-            }
-          }
-          galleryImages.push(fileID);
-          galleryPreviewUrls.push(compressedPath);
-          uploadedCount += 1;
+          const cloudPath = buildCaseAdminImagePath(filePath);
+          const fileID = await uploadCaseCoverImage({ filePath, cloudPath });
+          uploadedSources.push(fileID);
+          uploadedPreviews.push(filePath);
         } catch (uploadError) {
           console.warn("上传案例图片失败", uploadError);
         }
       }
+      if (!uploadedSources.length) {
+        throw new Error("图片上传失败");
+      }
+      const variants = await generateCaseImageVariants(uploadedSources);
+      if (variants.length !== uploadedSources.length) {
+        throw new Error("图片处理结果不完整，请重试");
+      }
+      variants.forEach((variant, index) => {
+        sourceGalleryImages.push(variant.sourceFileID);
+        galleryImages.push(variant.displayFileID);
+        galleryThumbnails.push(variant.thumbnailFileID);
+        galleryPreviewUrls.push(uploadedPreviews[index]);
+      });
       const form = {
         ...this.data.form,
         galleryImages,
+        sourceGalleryImages,
+        galleryThumbnails,
         coverImage: galleryImages[0] || "",
-        coverThumbnail,
+        coverThumbnail: galleryThumbnails[0] || "",
       };
       this.setData({
         uploading: false,
@@ -296,12 +299,9 @@ Page({
         optionViews: buildCaseAdminOptionViews(form, this.data.formOptions),
       });
       wx.showToast({
-        title: uploadedCount ? `已上传 ${uploadedCount} 张` : "图片上传失败",
+        title: `已上传 ${variants.length} 张`,
         icon: "none",
       });
-      if (!uploadedCount) {
-        this.showTopTips("图片上传失败，请重新选择一张图片");
-      }
     } catch (error) {
       console.warn("上传案例封面失败", error);
       this.setData({
@@ -315,33 +315,26 @@ Page({
     }
   },
 
-  async compressThumbnail(filePath) {
-    if (!wx.compressImage) return filePath;
-    return new Promise((resolve) => {
-      wx.compressImage({
-        src: filePath,
-        quality: 35,
-        success: (result) => resolve(result.tempFilePath || filePath),
-        fail: () => resolve(filePath),
-      });
-    });
-  },
-
   moveGalleryImage(event) {
     const index = Number(event.currentTarget.dataset.index);
     const direction = event.currentTarget.dataset.direction;
     const nextIndex = direction === "left" ? index - 1 : index + 1;
     const galleryImages = [...this.data.form.galleryImages];
+    const sourceGalleryImages = [...(this.data.form.sourceGalleryImages || galleryImages)];
+    const galleryThumbnails = [...(this.data.form.galleryThumbnails || [])];
     const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
     if (index < 0 || nextIndex < 0 || index >= galleryImages.length || nextIndex >= galleryImages.length) return;
     [galleryImages[index], galleryImages[nextIndex]] = [galleryImages[nextIndex], galleryImages[index]];
+    [sourceGalleryImages[index], sourceGalleryImages[nextIndex]] = [sourceGalleryImages[nextIndex], sourceGalleryImages[index]];
+    [galleryThumbnails[index], galleryThumbnails[nextIndex]] = [galleryThumbnails[nextIndex], galleryThumbnails[index]];
     [galleryPreviewUrls[index], galleryPreviewUrls[nextIndex]] = [galleryPreviewUrls[nextIndex], galleryPreviewUrls[index]];
     const form = {
       ...this.data.form,
       galleryImages,
+      sourceGalleryImages,
+      galleryThumbnails,
       coverImage: galleryImages[0],
-      // 旧缩略图只对应原封面，调整首图后安全回退到原图。
-      coverThumbnail: "",
+      coverThumbnail: galleryThumbnails[0] || "",
     };
     this.setData({
       form,
@@ -354,6 +347,8 @@ Page({
   removeGalleryImage(event) {
     const index = Number(event.currentTarget.dataset.index);
     const galleryImages = [...this.data.form.galleryImages];
+    const sourceGalleryImages = [...(this.data.form.sourceGalleryImages || galleryImages)];
+    const galleryThumbnails = [...(this.data.form.galleryThumbnails || [])];
     const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
     if (galleryImages.length <= 1) {
       this.showTopTips("案例至少保留一张图片");
@@ -361,12 +356,16 @@ Page({
       return;
     }
     galleryImages.splice(index, 1);
+    sourceGalleryImages.splice(index, 1);
+    galleryThumbnails.splice(index, 1);
     galleryPreviewUrls.splice(index, 1);
     const form = {
       ...this.data.form,
       galleryImages,
+      sourceGalleryImages,
+      galleryThumbnails,
       coverImage: galleryImages[0],
-      coverThumbnail: index === 0 ? "" : this.data.form.coverThumbnail,
+      coverThumbnail: galleryThumbnails[0] || "",
     };
     this.setData({
       form,

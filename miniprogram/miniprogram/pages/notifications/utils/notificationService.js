@@ -2,7 +2,7 @@ const {
   normalizeNotifications,
   normalizeSubscriptionState,
 } = require("./notificationData");
-const { callUserData } = require("./userDataService");
+const { callUserData } = require("../../../utils/userDataService");
 
 const APP_NOTIFICATION_COLLECTION = "app_notifications";
 

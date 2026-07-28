@@ -32,6 +32,20 @@ function loadHomePage(wxMock = {}, cases = []) {
           fetchVisibleBanners: async () => [],
         };
       }
+      if (moduleName === "../../utils/caseCatalogService") {
+        return {
+          fetchHomeFeed: async () => {
+            throw new Error("catalog unavailable");
+          },
+        };
+      }
+      if (moduleName === "../../utils/catalogCache") {
+        return {
+          HOME_CACHE_KEY: "wineHomeFeedV2",
+          readCache: () => null,
+          writeCache() {},
+        };
+      }
       if (moduleName === "../../utils/caseRefresh") {
         return {
           getCaseDataVersion: () => 1,

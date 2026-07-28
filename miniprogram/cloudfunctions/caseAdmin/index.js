@@ -29,6 +29,8 @@ cloud.init({
 const db = cloud.database();
 const _ = db.command;
 const RECENT_CASE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const CATALOG_META_COLLECTION = "catalog_meta";
+const CATALOG_META_DOCUMENT_ID = "current";
 
 function ok(data = {}) {
   return {
@@ -43,6 +45,29 @@ function fail(code, message) {
     code,
     message,
   };
+}
+
+async function bumpCatalogRevision() {
+  try {
+    const revision = _ && typeof _.inc === "function" ? _.inc(1) : 2;
+    await db.collection(CATALOG_META_COLLECTION).doc(CATALOG_META_DOCUMENT_ID).update({
+      data: {
+        revision,
+        updatedAt: db.serverDate(),
+      },
+    });
+  } catch (error) {
+    try {
+      await db.collection(CATALOG_META_COLLECTION).doc(CATALOG_META_DOCUMENT_ID).set({
+        data: {
+          revision: 1,
+          updatedAt: db.serverDate(),
+        },
+      });
+    } catch (createError) {
+      console.warn("catalog revision update failed", createError);
+    }
+  }
 }
 
 async function listCases(event) {
@@ -203,18 +228,30 @@ function buildFileIdSet(records = [], field) {
 async function fetchCaseImageFileIdSet(fileIDs = [], where = {}) {
   const normalizedFileIDs = normalizeCloudFileIds(fileIDs);
   if (!normalizedFileIDs.length) return new Set();
-  const [coverResponse, thumbnailResponse, galleryResponse] = await Promise.all([
+  const [
+    coverResponse,
+    thumbnailResponse,
+    galleryResponse,
+    sourceGalleryResponse,
+    galleryThumbnailResponse,
+  ] = await Promise.all([
     db.collection(CASE_COLLECTION).where({ ...where, coverImage: _.in(normalizedFileIDs) })
       .field({ coverImage: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
     db.collection(CASE_COLLECTION).where({ ...where, coverThumbnail: _.in(normalizedFileIDs) })
       .field({ coverThumbnail: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
     db.collection(CASE_COLLECTION).where({ ...where, galleryImages: _.in(normalizedFileIDs) })
       .field({ galleryImages: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
+    db.collection(CASE_COLLECTION).where({ ...where, sourceGalleryImages: _.in(normalizedFileIDs) })
+      .field({ sourceGalleryImages: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
+    db.collection(CASE_COLLECTION).where({ ...where, galleryThumbnails: _.in(normalizedFileIDs) })
+      .field({ galleryThumbnails: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
   ]);
   return new Set([
     ...buildFileIdSet(coverResponse.data || [], "coverImage"),
     ...buildFileIdSet(thumbnailResponse.data || [], "coverThumbnail"),
     ...buildFileIdSet(galleryResponse.data || [], "galleryImages"),
+    ...buildFileIdSet(sourceGalleryResponse.data || [], "sourceGalleryImages"),
+    ...buildFileIdSet(galleryThumbnailResponse.data || [], "galleryThumbnails"),
   ]);
 }
 
@@ -296,6 +333,7 @@ async function createCase(event, openid) {
       updatedByOpenid: openid,
     },
   });
+  await bumpCatalogRevision();
 
   return ok({
     id: response._id,
@@ -337,8 +375,12 @@ async function updateCase(event, openid) {
     },
   });
   const nextFileIds = new Set(getCaseImageFileIds({ ...existing, ...result.data }));
-  const removedFileIds = getCaseImageFileIds(existing).filter((fileID) => !nextFileIds.has(fileID));
+  const sourceFileIds = new Set(getCaseSourceFileIds(existing));
+  const removedFileIds = getCaseImageFileIds(existing).filter(
+    (fileID) => !nextFileIds.has(fileID) && !sourceFileIds.has(fileID)
+  );
   await deleteUnreferencedCaseFiles(removedFileIds);
+  await bumpCatalogRevision();
 
   return ok({ id });
 }
@@ -367,6 +409,7 @@ async function setCaseVisibility(event, openid) {
       updatedByOpenid: openid,
     },
   });
+  await bumpCatalogRevision();
 
   return ok({
     id,
@@ -379,13 +422,34 @@ function getCaseImageFileIds(item = {}) {
     trimText(item.coverImage),
     trimText(item.coverThumbnail),
     ...normalizeCloudFileIds(item.galleryImages || [], CASE_GALLERY_MAX),
+    ...normalizeCloudFileIds(item.sourceGalleryImages || [], CASE_GALLERY_MAX),
+    ...normalizeCloudFileIds(item.galleryThumbnails || [], CASE_GALLERY_MAX),
+  ].filter((fileID) => fileID.indexOf("cloud://") === 0)));
+}
+
+function getCaseSourceFileIds(item = {}) {
+  const explicitSources = normalizeCloudFileIds(
+    item.sourceGalleryImages || [],
+    CASE_GALLERY_MAX
+  );
+  if (explicitSources.length) return explicitSources;
+  return Array.from(new Set([
+    trimText(item.coverImage),
+    ...normalizeCloudFileIds(item.galleryImages || [], CASE_GALLERY_MAX),
   ].filter((fileID) => fileID.indexOf("cloud://") === 0)));
 }
 
 async function isCaseImageReferenced(fileID) {
   if (!fileID || fileID.indexOf("cloud://") !== 0) return false;
 
-  const [coverResponse, thumbnailResponse, galleryResponse, bannerResponse] = await Promise.all([
+  const [
+    coverResponse,
+    thumbnailResponse,
+    galleryResponse,
+    sourceGalleryResponse,
+    galleryThumbnailResponse,
+    bannerResponse,
+  ] = await Promise.all([
     db
       .collection(CASE_COLLECTION)
       .where({ coverImage: fileID })
@@ -405,6 +469,18 @@ async function isCaseImageReferenced(fileID) {
       .limit(1)
       .get(),
     db
+      .collection(CASE_COLLECTION)
+      .where({ sourceGalleryImages: _.in([fileID]) })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
+      .collection(CASE_COLLECTION)
+      .where({ galleryThumbnails: _.in([fileID]) })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
       .collection(BANNER_COLLECTION)
       .where({ image: fileID })
       .field({ _id: true })
@@ -416,6 +492,8 @@ async function isCaseImageReferenced(fileID) {
       (coverResponse.data || []).length ||
       (thumbnailResponse.data || []).length ||
       (galleryResponse.data || []).length ||
+      (sourceGalleryResponse.data || []).length ||
+      (galleryThumbnailResponse.data || []).length ||
       (bannerResponse.data || []).length
   );
 }
@@ -454,13 +532,18 @@ async function deleteCase(event) {
   const item = await getCaseById(id);
   if (!item) return fail("CASE_NOT_FOUND", "案例不存在或已删除");
 
-  const imageFileIds = getCaseImageFileIds(item);
+  const sourceFileIds = new Set(getCaseSourceFileIds(item));
+  const imageFileIds = getCaseImageFileIds(item).filter(
+    (fileID) => !sourceFileIds.has(fileID)
+  );
   await db.collection(CASE_COLLECTION).doc(id).remove();
   const deletedFileIds = await deleteUnreferencedCaseFiles(imageFileIds);
+  await bumpCatalogRevision();
 
   return ok({
     id,
     deletedFileIds,
+    preservedSourceFileIds: Array.from(sourceFileIds),
   });
 }
 

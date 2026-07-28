@@ -146,6 +146,11 @@ function toNumber(value, fallback = 9999) {
 function normalizeCaseRecord(record = {}) {
   const legacyCoverImage = firstImage(record.coverImage || record.image || record.images);
   const galleryImages = normalizeGalleryImages(record.galleryImages, legacyCoverImage);
+  const normalizedSourceImages = normalizeGalleryImages(record.sourceGalleryImages);
+  const sourceGalleryImages = normalizedSourceImages.length
+    ? normalizedSourceImages
+    : galleryImages.slice();
+  const galleryThumbnails = normalizeGalleryImages(record.galleryThumbnails);
   const normalized = {
     ...record,
     id: record._id || record.caseId || "",
@@ -153,6 +158,8 @@ function normalizeCaseRecord(record = {}) {
     title: record.title || record.name || "未命名案例",
     // 旧案例没有图库时以原封面作为唯一图片，保持完全兼容。
     galleryImages,
+    sourceGalleryImages,
+    galleryThumbnails,
     coverImage: galleryImages[0] || legacyCoverImage,
     coverThumbnail: firstImage(record.coverThumbnail),
     wineType: record.wineType || "白酒",

@@ -26,7 +26,7 @@ function loadPage() {
       page = config;
     },
     require(moduleName) {
-      if (moduleName === "../../utils/caseAdminService") {
+      if (moduleName === "./utils/caseAdminService") {
         return {
           fetchRecentCaseAdminList: async () => ({
             items: [],
@@ -35,7 +35,7 @@ function loadPage() {
           }),
         };
       }
-      if (moduleName === "../../utils/notificationAdminService") {
+      if (moduleName === "./utils/notificationAdminService") {
         return {
           fetchPublishedLinkedCases: async () => ({
             announcement: { title: "产品上新" },

@@ -202,7 +202,7 @@ await test("deleteCase reports missing cases", async () => {
   assert.equal(result.code, "CASE_NOT_FOUND");
 });
 
-await test("deleteCase removes an unreferenced case image", async () => {
+await test("deleteCase preserves an unreferenced legacy source image", async () => {
   const { main, collections, deletedFiles } = loadCaseAdminFunction({
     cases: [{ _id: "case_doc_1", coverImage: "cloud://env/case.jpg" }],
   });
@@ -211,8 +211,9 @@ await test("deleteCase removes an unreferenced case image", async () => {
 
   assert.equal(result.ok, true);
   assert.equal(result.id, "case_doc_1");
-  assert.deepEqual(clone(result.deletedFileIds), ["cloud://env/case.jpg"]);
-  assert.deepEqual(deletedFiles, ["cloud://env/case.jpg"]);
+  assert.deepEqual(clone(result.deletedFileIds), []);
+  assert.deepEqual(clone(result.preservedSourceFileIds), ["cloud://env/case.jpg"]);
+  assert.deepEqual(deletedFiles, []);
   assert.deepEqual(collections.wine_packaging, []);
 });
 
@@ -257,7 +258,28 @@ await test("deleteCase keeps gallery images referenced by another case", async (
 
   assert.equal(result.ok, true);
   assert.equal(deletedFiles.includes("cloud://env/shared-detail.jpg"), false);
-  assert.equal(deletedFiles.includes("cloud://env/cover.jpg"), true);
+  assert.equal(deletedFiles.includes("cloud://env/cover.jpg"), false);
+});
+
+await test("deleteCase removes unreferenced variants but keeps explicit sources", async () => {
+  const { main, deletedFiles } = loadCaseAdminFunction({
+    cases: [{
+      _id: "case_doc_1",
+      sourceGalleryImages: ["cloud://env/source.jpg"],
+      galleryImages: ["cloud://env/display.jpg"],
+      galleryThumbnails: ["cloud://env/thumb.jpg"],
+      coverImage: "cloud://env/display.jpg",
+      coverThumbnail: "cloud://env/thumb.jpg",
+    }],
+  });
+
+  const result = await main({ action: "deleteCase", id: "case_doc_1" });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(clone(result.preservedSourceFileIds), ["cloud://env/source.jpg"]);
+  assert.equal(deletedFiles.includes("cloud://env/source.jpg"), false);
+  assert.equal(deletedFiles.includes("cloud://env/display.jpg"), true);
+  assert.equal(deletedFiles.includes("cloud://env/thumb.jpg"), true);
 });
 
 await test("createCase rejects the twenty-first configured pinned case", async () => {

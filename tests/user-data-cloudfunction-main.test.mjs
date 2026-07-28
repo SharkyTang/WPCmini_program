@@ -54,6 +54,14 @@ function loadUserDataFunction(options = {}) {
         APPID: options.appid || "wx351f937287eb5886",
       };
     },
+    async getTempFileURL({ fileList }) {
+      return {
+        fileList: fileList.map((fileID) => ({
+          fileID,
+          tempFileURL: `https://temp/${encodeURIComponent(fileID)}`,
+        })),
+      };
+    },
     openapi: {
       subscribeMessage: {
         async getTemplateList() {
@@ -275,6 +283,57 @@ await test("getProfile only queries the server openid", async () => {
     collectionName: "user_profiles",
     type: "where",
     condition: { openid: "server_openid" },
+  });
+});
+
+await test("getSessionSummary returns profile, avatar and independent admin roles", async () => {
+  const { main, calls } = loadUserDataFunction({
+    openid: "case_admin",
+    env: {
+      ADMIN_OPENIDS: "legacy_admin",
+      INQUIRY_ADMIN_OPENIDS: "inquiry_admin",
+      CASE_ADMIN_OPENIDS: "case_admin",
+      NOTIFICATION_ADMIN_OPENIDS: "notification_admin",
+    },
+    records: [{
+      _id: "profile_1",
+      openid: "case_admin",
+      nickname: "酒友",
+      avatarFileId: "cloud://env/avatar.jpg",
+    }],
+  });
+
+  const result = await main({
+    action: "getSessionSummary",
+    openid: "spoofed",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.openid, "case_admin");
+  assert.equal(result.profile.nickname, "酒友");
+  assert.equal(result.profile.avatarUrl, "https://temp/cloud%3A%2F%2Fenv%2Favatar.jpg");
+  assert.deepEqual(JSON.parse(JSON.stringify(result.roles)), {
+    inquiryAdmin: false,
+    caseAdmin: true,
+    notificationAdmin: false,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].condition)), {
+    openid: "case_admin",
+  });
+});
+
+await test("session role configuration falls back to ADMIN_OPENIDS", async () => {
+  const { main } = loadUserDataFunction({
+    openid: "legacy_admin",
+    env: {
+      ADMIN_OPENIDS: "legacy_admin",
+    },
+  });
+  const result = await main({ action: "getSessionSummary" });
+  assert.deepEqual(JSON.parse(JSON.stringify(result.roles)), {
+    inquiryAdmin: true,
+    caseAdmin: true,
+    notificationAdmin: true,
   });
 });
 

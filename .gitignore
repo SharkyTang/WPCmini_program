@@ -1,4 +1,5 @@
 .DS_Store
+.case-variant-backfill.json
 .env.local
 node_modules/
 export/

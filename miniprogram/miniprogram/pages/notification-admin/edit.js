@@ -3,7 +3,7 @@ const {
   fetchAnnouncementDetail,
   publishAnnouncement,
   updateAnnouncement,
-} = require("../../utils/notificationAdminService");
+} = require("./utils/notificationAdminService");
 
 function createDraft() {
   return {

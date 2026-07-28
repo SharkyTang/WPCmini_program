@@ -3,7 +3,7 @@ const {
   buildInquiryRecord,
   validateInquiryDraft,
 } = require("./inquiryData");
-const { callUserData } = require("./userDataService");
+const { callUserData } = require("../../../utils/userDataService");
 
 function safeCall(fn, fallback) {
   try {

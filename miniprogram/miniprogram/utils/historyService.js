@@ -6,6 +6,7 @@ const {
   normalizeSelectedIds,
 } = require("./historyData");
 const { ensureProfileIdentity, getCachedOpenId } = require("./userService");
+const { fetchUserLibrary } = require("./caseCatalogService");
 
 const HISTORY_COLLECTION = "browse_history";
 const HISTORY_LIMIT = 50;
@@ -184,7 +185,7 @@ async function clearHistory() {
   return removedCount;
 }
 
-async function fetchHistoryCases() {
+async function fetchHistoryCasesLegacy() {
   const openid = await ensureIdentityForHistory();
   if (!openid) return [];
 
@@ -229,6 +230,22 @@ async function fetchHistoryCases() {
   );
 }
 
+async function fetchHistoryCases() {
+  const openid = await ensureIdentityForHistory();
+  if (!openid) return [];
+  try {
+    const items = await fetchUserLibrary("history");
+    return items.map((item) => ({
+      historyId: item.recordId,
+      viewCount: item.viewCount,
+      caseItem: item.caseItem,
+    }));
+  } catch (error) {
+    console.warn("历史聚合接口不可用，使用兼容读取", error);
+    return fetchHistoryCasesLegacy();
+  }
+}
+
 module.exports = {
   HISTORY_COLLECTION,
   HISTORY_LIMIT,
@@ -236,5 +253,6 @@ module.exports = {
   removeHistoryRecords,
   recordCaseView,
   fetchHistoryCases,
+  fetchHistoryCasesLegacy,
   trimHistoryLimit,
 };

@@ -28,7 +28,7 @@ const caseDataPath = resolve(
 const caseData = loadCommonJsModule(caseDataPath);
 const inquiryDataPath = resolve(
   __dirname,
-  "../miniprogram/miniprogram/utils/inquiryData.js"
+  "../miniprogram/miniprogram/pages/inquiry/utils/inquiryData.js"
 );
 const inquiryWxmlPath = resolve(
   __dirname,
@@ -39,7 +39,7 @@ const inquiryJsonPath = resolve(
   "../miniprogram/miniprogram/pages/inquiry/index.json"
 );
 const inquiryData = loadCommonJsModule(inquiryDataPath, {
-  "./caseData": caseData,
+  "../../../utils/caseData": caseData,
 });
 
 const {

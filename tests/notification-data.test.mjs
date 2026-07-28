@@ -7,7 +7,7 @@ import vm from "node:vm";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const modulePath = resolve(
   __dirname,
-  "../miniprogram/miniprogram/utils/notificationData.js"
+  "../miniprogram/miniprogram/pages/notifications/utils/notificationData.js"
 );
 const source = readFileSync(modulePath, "utf8");
 const sandbox = {

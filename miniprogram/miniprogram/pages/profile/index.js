@@ -1,28 +1,18 @@
 const {
   DEFAULT_NICKNAME,
   cacheProfile,
-  fetchProfile,
+  fetchSessionSummary,
   getLegacyProfile,
   hasCompletedProfile,
 } = require("../../utils/profileService");
 const {
   cacheCompletedProfileIdentity,
-  fetchOpenId,
+  cacheOpenId,
 } = require("../../utils/userService");
 const {
   CUSTOMER_SERVICE_SOURCE,
   buildCustomerSessionFrom,
 } = require("../../utils/customerServiceData");
-const {
-  checkInquiryAdminAccess,
-} = require("../../utils/inquiryAdminService");
-const {
-  checkCaseAdminAccess,
-} = require("../../utils/caseAdminService");
-const {
-  checkNotificationAdminAccess,
-} = require("../../utils/notificationAdminService");
-
 const DEFAULT_PROFILE_INFO = {
   nickname: DEFAULT_NICKNAME,
   avatarUrl: "",
@@ -82,13 +72,10 @@ Page({
 
   onShow() {
     this.loadProfileInfo();
-    this.refreshInquiryAdminAccess();
-    this.refreshCaseAdminAccess();
-    this.refreshNotificationAdminAccess();
   },
 
   onPullDownRefresh() {
-    this.loadProfileInfo({ stopRefresh: true });
+    this.loadProfileInfo({ stopRefresh: true, forceRefresh: true });
   },
 
   async loadProfileInfo(options = {}) {
@@ -103,15 +90,22 @@ Page({
     });
 
     try {
-      const profile = await fetchProfile();
+      const summary = await fetchSessionSummary({
+        forceRefresh: options.forceRefresh === true,
+      });
+      const profile = summary.profile;
+      cacheOpenId(summary.openid);
+      this.setData({
+        hasInquiryAdminAccess: summary.roles.inquiryAdmin,
+        hasCaseAdminAccess: summary.roles.caseAdmin,
+        hasNotificationAdminAccess: summary.roles.notificationAdmin,
+        checkingInquiryAdminAccess: false,
+        checkingCaseAdminAccess: false,
+        checkingNotificationAdminAccess: false,
+      });
       if (profile && hasCompletedProfile(profile)) {
         cacheProfile(profile);
-        try {
-          const openid = await fetchOpenId();
-          cacheCompletedProfileIdentity(openid, profile);
-        } catch (identityError) {
-          console.warn("个人资料已读取，但身份缓存恢复失败", identityError);
-        }
+        cacheCompletedProfileIdentity(summary.openid, profile);
         this.setData({
           profileInfo: toProfileInfo(profile),
           hasCompletedProfile: true,
@@ -165,42 +159,12 @@ Page({
     wx.navigateTo({ url: "/pages/inquiry/index?source=profile" });
   },
 
-  async refreshInquiryAdminAccess() {
-    if (this.data.checkingInquiryAdminAccess) return;
-    this.setData({ checkingInquiryAdminAccess: true });
-    const hasInquiryAdminAccess = await checkInquiryAdminAccess();
-    this.setData({
-      hasInquiryAdminAccess,
-      checkingInquiryAdminAccess: false,
-    });
-  },
-
   openInquiryAdmin() {
     wx.navigateTo({ url: "/pages/inquiry-admin/index" });
   },
 
-  async refreshCaseAdminAccess() {
-    if (this.data.checkingCaseAdminAccess) return;
-    this.setData({ checkingCaseAdminAccess: true });
-    const hasCaseAdminAccess = await checkCaseAdminAccess();
-    this.setData({
-      hasCaseAdminAccess,
-      checkingCaseAdminAccess: false,
-    });
-  },
-
   openCaseAdmin() {
     wx.navigateTo({ url: "/pages/case-admin/index" });
-  },
-
-  async refreshNotificationAdminAccess() {
-    if (this.data.checkingNotificationAdminAccess) return;
-    this.setData({ checkingNotificationAdminAccess: true });
-    const hasNotificationAdminAccess = await checkNotificationAdminAccess();
-    this.setData({
-      hasNotificationAdminAccess,
-      checkingNotificationAdminAccess: false,
-    });
   },
 
   openNotificationAdmin() {

@@ -23,7 +23,7 @@ function loadCaseAdminPage(options = {}) {
       pageConfig = config;
     },
     require(moduleName) {
-      if (moduleName === "../../utils/caseAdminService") {
+      if (moduleName === "./utils/caseAdminService") {
         return {
           CASE_ADMIN_VIEW_OPTIONS: [
             { value: "all", label: "全部" },

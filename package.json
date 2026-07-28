@@ -5,11 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "node server.mjs",
-    "test": "node tests/case-classifier.test.mjs && node tests/ai-style.test.mjs && node tests/miniprogram-data.test.mjs && node tests/cloud-data.test.mjs && node tests/case-refresh.test.mjs && node tests/favorite-data.test.mjs && node tests/favorite-service.test.mjs && node tests/history-data.test.mjs && node tests/history-service.test.mjs && node tests/notification-data.test.mjs && node tests/notification-page.test.mjs && node tests/notification-admin.test.mjs && node tests/notification-cases-page.test.mjs && node tests/feedback-data.test.mjs && node tests/inquiry-data.test.mjs && node tests/quickstart-functions.test.mjs && node tests/user-data-cloudfunction.test.mjs && node tests/user-data-cloudfunction-main.test.mjs && node tests/inquiry-admin-data.test.mjs && node tests/case-admin-data.test.mjs && node tests/case-admin-cloudfunction.test.mjs && node tests/case-admin-cloudfunction-main.test.mjs && node tests/case-admin-page.test.mjs && node tests/customer-service-data.test.mjs && node tests/home-page.test.mjs && node tests/category-page.test.mjs && node tests/profile-page.test.mjs && node tests/profile-edit-page.test.mjs && node tests/user-service.test.mjs && node tests/detail-page.test.mjs && node tests/ui-closure-page.test.mjs && node tests/import-wine-packaging.test.mjs",
+    "test": "node tests/case-classifier.test.mjs && node tests/ai-style.test.mjs && node tests/miniprogram-data.test.mjs && node tests/cloud-data.test.mjs && node tests/case-refresh.test.mjs && node tests/case-catalog-logic.test.mjs && node tests/case-catalog-cloudfunction-main.test.mjs && node tests/catalog-cache.test.mjs && node tests/favorite-data.test.mjs && node tests/favorite-service.test.mjs && node tests/history-data.test.mjs && node tests/history-service.test.mjs && node tests/notification-data.test.mjs && node tests/notification-page.test.mjs && node tests/notification-admin.test.mjs && node tests/notification-cases-page.test.mjs && node tests/feedback-data.test.mjs && node tests/inquiry-data.test.mjs && node tests/quickstart-functions.test.mjs && node tests/user-data-cloudfunction.test.mjs && node tests/user-data-cloudfunction-main.test.mjs && node tests/inquiry-admin-data.test.mjs && node tests/case-admin-data.test.mjs && node tests/case-admin-cloudfunction.test.mjs && node tests/case-admin-cloudfunction-main.test.mjs && node tests/case-admin-page.test.mjs && node tests/image-processor-logic.test.mjs && node tests/backfill-image-variants.test.mjs && node tests/customer-service-data.test.mjs && node tests/home-page.test.mjs && node tests/category-page.test.mjs && node tests/profile-page.test.mjs && node tests/profile-edit-page.test.mjs && node tests/user-service.test.mjs && node tests/detail-page.test.mjs && node tests/ui-closure-page.test.mjs && node tests/performance-config.test.mjs && node tests/import-wine-packaging.test.mjs",
     "import:cases:dry": "node scripts/import-wine-packaging.mjs --dry-run",
-    "import:cases": "node scripts/import-wine-packaging.mjs"
+    "import:cases": "node scripts/import-wine-packaging.mjs",
+    "backfill:image-variants:dry": "node scripts/backfill-case-image-variants.mjs --dry-run --limit 5",
+    "backfill:image-variants": "node scripts/backfill-case-image-variants.mjs --resume"
   },
   "dependencies": {
     "@cloudbase/node-sdk": "^3.18.1"
+  },
+  "devDependencies": {
+    "sharp": "0.33.5"
   }
 }

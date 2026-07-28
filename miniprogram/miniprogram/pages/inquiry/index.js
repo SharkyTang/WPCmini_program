@@ -6,8 +6,8 @@ const {
   getInquiryOptionGroups,
   normalizeInquiryDraft,
   validateInquiryDraft,
-} = require("../../utils/inquiryData");
-const { submitInquiry } = require("../../utils/inquiryService");
+} = require("./utils/inquiryData");
+const { submitInquiry } = require("./utils/inquiryService");
 
 const SOURCE_PAGE_MAP = {
   profile: "pages/profile/index",

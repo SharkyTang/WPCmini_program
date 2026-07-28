@@ -41,6 +41,21 @@ function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function parseOpenidSet(value) {
+  return new Set(
+    trimText(value)
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+  );
+}
+
+function resolveAdminRole(openid, roleEnvKey) {
+  const roleValue = process.env[roleEnvKey];
+  const fallbackValue = process.env.ADMIN_OPENIDS;
+  return parseOpenidSet(roleValue || fallbackValue).has(openid);
+}
+
 function getRequestContext(event, openid) {
   return {
     source: event.source,
@@ -284,6 +299,40 @@ async function getUserProfile(openid) {
   });
 }
 
+async function getAvatarUrl(avatarFileId) {
+  if (!avatarFileId || avatarFileId.indexOf("cloud://") !== 0) return "";
+  try {
+    const response = await cloud.getTempFileURL({
+      fileList: [avatarFileId],
+    });
+    const item = response && response.fileList && response.fileList[0];
+    return (item && item.tempFileURL) || "";
+  } catch (error) {
+    console.warn("profile avatar url resolve failed", error);
+    return "";
+  }
+}
+
+async function getSessionSummary(openid) {
+  const profileRecord = await findUserProfile(openid);
+  const profile = toProfileResponse(profileRecord);
+  const avatarUrl = profile ? await getAvatarUrl(profile.avatarFileId) : "";
+  return ok({
+    openid,
+    profile: profile
+      ? {
+        ...profile,
+        avatarUrl,
+      }
+      : null,
+    roles: {
+      inquiryAdmin: resolveAdminRole(openid, "INQUIRY_ADMIN_OPENIDS"),
+      caseAdmin: resolveAdminRole(openid, "CASE_ADMIN_OPENIDS"),
+      notificationAdmin: resolveAdminRole(openid, "NOTIFICATION_ADMIN_OPENIDS"),
+    },
+  });
+}
+
 async function saveUserProfile(event, openid) {
   const validation = validateUserProfileDraft(event.profile || event.data || {});
   if (!validation.valid) return fail(validation.code, validation.message);
@@ -330,6 +379,7 @@ exports.main = async (event = {}) => {
     }
     if (action === "saveSubscriptionGrant") return saveSubscriptionGrant(event, OPENID);
     if (action === "getProfile") return getUserProfile(OPENID);
+    if (action === "getSessionSummary") return getSessionSummary(OPENID);
     if (action === "saveProfile") return saveUserProfile(event, OPENID);
     return fail("UNKNOWN_ACTION", "未知用户数据操作");
   } catch (error) {

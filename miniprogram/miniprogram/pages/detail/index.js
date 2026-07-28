@@ -1,4 +1,5 @@
 const { fetchCaseById } = require("../../utils/cloudData");
+const { fetchCaseDetail } = require("../../utils/caseCatalogService");
 const { formatJoined } = require("../../utils/caseData");
 const {
   CUSTOMER_SERVICE_SOURCE,
@@ -54,9 +55,12 @@ function buildGalleryItems(caseItem = {}) {
     ? caseItem.gallery
     : [{ fileID: caseItem.coverImage, url: caseItem.coverImageUrl }];
   return gallery
-    .filter((item) => item && item.url)
+    .filter((item) => item && (item.url || item.displayUrl))
     .map((item, index) => ({
       ...item,
+      url: item.url || item.displayUrl || "",
+      thumbnailUrl: item.thumbnailUrl || item.url || item.displayUrl || "",
+      downloadUrl: item.downloadUrl || item.url || item.displayUrl || "",
       index,
       positionLabel: `第 ${index + 1} 张`,
     }));
@@ -77,6 +81,7 @@ Page({
     galleryItems: [],
     currentImageIndex: 0,
     currentImageUrl: "",
+    currentDownloadUrl: "",
     customerServiceSessionFrom: buildCustomerSessionFrom({
       source: CUSTOMER_SERVICE_SOURCE.DETAIL,
     }),
@@ -101,7 +106,14 @@ Page({
     });
 
     try {
-      const caseItem = await fetchCaseById(decodeURIComponent(id));
+      const decodedId = decodeURIComponent(id);
+      let caseItem;
+      try {
+        caseItem = await fetchCaseDetail(decodedId);
+      } catch (catalogError) {
+        console.warn("详情聚合接口不可用，使用兼容读取", catalogError);
+        caseItem = await fetchCaseById(decodedId);
+      }
       const galleryItems = buildGalleryItems(caseItem);
       this.setData({
         loading: false,
@@ -112,6 +124,7 @@ Page({
         galleryItems,
         currentImageIndex: 0,
         currentImageUrl: galleryItems[0] ? galleryItems[0].url : "",
+        currentDownloadUrl: galleryItems[0] ? galleryItems[0].downloadUrl : "",
         customerServiceSessionFrom: buildCustomerSessionFrom({
           source: CUSTOMER_SERVICE_SOURCE.DETAIL,
           caseItem,
@@ -224,6 +237,7 @@ Page({
     this.setData({
       currentImageIndex,
       currentImageUrl: current ? current.url : "",
+      currentDownloadUrl: current ? current.downloadUrl : "",
     });
   },
 
@@ -233,13 +247,14 @@ Page({
     this.setData({
       currentImageIndex,
       currentImageUrl: current ? current.url : "",
+      currentDownloadUrl: current ? current.downloadUrl : "",
     });
   },
 
   noop() {},
 
   downloadImage() {
-    const imageUrl = this.data.currentImageUrl;
+    const imageUrl = this.data.currentDownloadUrl || this.data.currentImageUrl;
     if (!imageUrl) {
       wx.showToast({
         title: "暂无图片可下载",

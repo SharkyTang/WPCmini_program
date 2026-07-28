@@ -11,7 +11,7 @@
     "newFeature": true,
     "coverView": true,
     "nodeModules": false,
-    "autoAudits": false,
+    "autoAudits": true,
     "showShadowRootInWxmlPanel": true,
     "scopeDataCheck": false,
     "uglifyFileName": false,
@@ -46,7 +46,7 @@
   },
   "appid": "wx351f937287eb5886",
   "projectname": "quickstart-wx-cloud",
-  "libVersion": "2.21.2",
+  "libVersion": "3.8.12",
   "cloudfunctionTemplateRoot": "cloudfunctionTemplate/",
   "condition": {
     "search": {
@@ -74,7 +74,12 @@
   "compileType": "miniprogram",
   "srcMiniprogramRoot": "miniprogram/",
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      {
+        "type": "glob",
+        "value": "**/.DS_Store"
+      }
+    ],
     "include": []
   },
   "editorSetting": {

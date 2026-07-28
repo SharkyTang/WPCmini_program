@@ -6,6 +6,7 @@ const {
   normalizeSelectedFavoriteIds,
 } = require("./favoriteData");
 const { ensureProfileIdentity } = require("./userService");
+const { fetchUserLibrary } = require("./caseCatalogService");
 
 const FAVORITE_COLLECTION = "favorites";
 const FAVORITE_LIMIT = 100;
@@ -182,7 +183,7 @@ async function toggleFavorite(caseItem, currentFavorite) {
   };
 }
 
-async function fetchFavoriteCases() {
+async function fetchFavoriteCasesLegacy() {
   const openid = await ensureIdentityForRead({ silentIdentity: true });
   if (!openid) return [];
 
@@ -227,6 +228,21 @@ async function fetchFavoriteCases() {
   );
 }
 
+async function fetchFavoriteCases() {
+  const openid = await ensureIdentityForRead({ silentIdentity: true });
+  if (!openid) return [];
+  try {
+    const items = await fetchUserLibrary("favorites");
+    return items.map((item) => ({
+      favoriteId: item.recordId,
+      caseItem: item.caseItem,
+    }));
+  } catch (error) {
+    console.warn("收藏聚合接口不可用，使用兼容读取", error);
+    return fetchFavoriteCasesLegacy();
+  }
+}
+
 module.exports = {
   FAVORITE_COLLECTION,
   FAVORITE_LIMIT,
@@ -237,4 +253,5 @@ module.exports = {
   clearFavorites,
   toggleFavorite,
   fetchFavoriteCases,
+  fetchFavoriteCasesLegacy,
 };

@@ -21,6 +21,15 @@ function loadUserService(options = {}) {
       if (moduleName !== "./profileService") throw new Error(`Unexpected require: ${moduleName}`);
       return {
         fetchProfileRecord: options.fetchProfile || (async () => ({ nickname: "酒友", avatarFileId: "cloud://avatar" })),
+        fetchSessionSummary:
+          options.fetchSessionSummary ||
+          (async () => ({
+            openid: "openid_1",
+            profile: options.fetchProfile
+              ? await options.fetchProfile()
+              : { nickname: "酒友", avatarFileId: "cloud://avatar" },
+            roles: {},
+          })),
         hasCompletedProfile: options.hasCompletedProfile || ((profile) => Boolean(profile && profile.nickname && profile.avatarFileId)),
       };
     },

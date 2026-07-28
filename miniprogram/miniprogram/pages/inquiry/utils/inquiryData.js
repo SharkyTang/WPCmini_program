@@ -1,4 +1,4 @@
-const { DEFAULT_FILTERS, normalizeValues } = require("./caseData");
+const { DEFAULT_FILTERS, normalizeValues } = require("../../../utils/caseData");
 
 const INQUIRY_COLLECTION = "inquiries";
 const CONTENT_MIN_LENGTH = 5;

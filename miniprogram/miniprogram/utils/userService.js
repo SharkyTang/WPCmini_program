@@ -1,5 +1,5 @@
 const {
-  fetchProfileRecord,
+  fetchSessionSummary,
   hasCompletedProfile,
 } = require("./profileService");
 
@@ -88,14 +88,16 @@ async function verifyProfileIdentity() {
 
   if (!profileVerificationPromise) {
     profileVerificationPromise = (async () => {
-      const openid = getCachedOpenId() || await fetchOpenId();
-      let profile;
+      let summary;
       try {
-        profile = await fetchProfileRecord();
+        summary = await fetchSessionSummary();
       } catch (firstError) {
         await wait(250);
-        profile = await fetchProfileRecord();
+        summary = await fetchSessionSummary({ forceRefresh: true });
       }
+      const openid = summary.openid || getCachedOpenId() || await fetchOpenId();
+      const profile = summary.profile || null;
+      cacheOpenId(openid);
       const identity = {
         openid,
         profile,

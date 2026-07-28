@@ -13,7 +13,7 @@ const caseEditPagePath = resolve(__dirname, "../miniprogram/miniprogram/pages/ca
 function loadNotificationData() {
   const module = { exports: {} };
   vm.runInNewContext(
-    readFileSync(resolve(__dirname, "../miniprogram/miniprogram/utils/notificationData.js"), "utf8"),
+    readFileSync(resolve(__dirname, "../miniprogram/miniprogram/pages/notifications/utils/notificationData.js"), "utf8"),
     { module, exports: module.exports, Date },
     { filename: "notificationData.js" }
   );
@@ -58,8 +58,8 @@ function loadNotificationPage(options = {}) {
       page = config;
     },
     require(moduleName) {
-      if (moduleName === "../../utils/notificationData") return notificationData;
-      if (moduleName === "../../utils/notificationService") {
+      if (moduleName === "./utils/notificationData") return notificationData;
+      if (moduleName === "./utils/notificationService") {
         return {
           fetchPublicNotifications: async () => options.notifications || [],
           fetchSubscriptionStatus: async () => subscriptionResult,
@@ -177,7 +177,7 @@ function loadCaseEditPage(options = {}) {
       page = config;
     },
     require(moduleName) {
-      if (moduleName === "../../utils/caseAdminData") {
+      if (moduleName === "./utils/caseAdminData") {
         return {
           CASE_ADMIN_FORM_OPTIONS: {},
           buildCaseAdminImagePath: () => "path",
@@ -188,18 +188,19 @@ function loadCaseEditPage(options = {}) {
           validateCaseAdminForm: () => ({ valid: true }),
         };
       }
-      if (moduleName === "../../utils/caseAdminService") {
+      if (moduleName === "./utils/caseAdminService") {
         return {
           createCaseAdmin: async (payload) => {
             calls.creates.push(payload);
             return { id: "case_doc_1" };
           },
           fetchCaseAdminDetail: async () => null,
+          generateCaseImageVariants: async () => [],
           updateCaseAdmin: async () => ({}),
           uploadCaseCoverImage: async () => "cloud://env/image.jpg",
         };
       }
-      if (moduleName === "../../utils/notificationAdminService") {
+      if (moduleName === "./utils/notificationAdminService") {
         return {
           publishProductAnnouncement: async (payload) => {
             calls.publishes.push(payload);

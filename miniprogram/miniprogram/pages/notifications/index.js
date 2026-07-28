@@ -3,13 +3,13 @@ const {
   getNotificationTypeLabel,
   isValidSubscriptionTemplateId,
   normalizeSubscriptionState,
-} = require("../../utils/notificationData");
+} = require("./utils/notificationData");
 const {
   fetchPublicNotifications,
   fetchSubscriptionStatus,
   saveSubscriptionGrant,
   verifySubscriptionTemplates,
-} = require("../../utils/notificationService");
+} = require("./utils/notificationService");
 
 const TAB_ITEMS = [
   { key: "all", label: "全部" },

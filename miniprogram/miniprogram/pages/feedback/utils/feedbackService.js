@@ -1,5 +1,5 @@
 const { buildFeedbackRecord, validateFeedbackDraft } = require("./feedbackData");
-const { callUserData } = require("./userDataService");
+const { callUserData } = require("../../../utils/userDataService");
 
 const FEEDBACK_COLLECTION = "feedback";
 

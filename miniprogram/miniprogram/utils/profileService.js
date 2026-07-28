@@ -2,6 +2,8 @@ const { callUserData } = require("./userDataService");
 
 const PROFILE_STORAGE_KEY = "wineProfileInfo";
 const DEFAULT_NICKNAME = "微信名称";
+let sessionSummaryCache = null;
+let sessionSummaryPromise = null;
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -66,6 +68,49 @@ async function fetchProfile() {
   return hydrateProfile(profile);
 }
 
+function normalizeRoles(roles = {}) {
+  return {
+    inquiryAdmin: roles.inquiryAdmin === true,
+    caseAdmin: roles.caseAdmin === true,
+    notificationAdmin: roles.notificationAdmin === true,
+  };
+}
+
+async function fetchSessionSummary(options = {}) {
+  if (!options.forceRefresh && sessionSummaryCache) {
+    return sessionSummaryCache;
+  }
+  if (!sessionSummaryPromise || options.forceRefresh) {
+    sessionSummaryPromise = callUserData("getSessionSummary")
+      .then((result) => {
+        const rawProfile = result.profile
+          ? normalizeStoredProfile(result.profile)
+          : null;
+        const profile = rawProfile
+          ? {
+            ...rawProfile,
+            avatarUrl: result.profile.avatarUrl || rawProfile.avatarUrl || "",
+          }
+          : null;
+        sessionSummaryCache = {
+          openid: trimText(result.openid),
+          profile,
+          roles: normalizeRoles(result.roles),
+        };
+        return sessionSummaryCache;
+      })
+      .finally(() => {
+        sessionSummaryPromise = null;
+      });
+  }
+  return sessionSummaryPromise;
+}
+
+function clearSessionSummaryCache() {
+  sessionSummaryCache = null;
+  sessionSummaryPromise = null;
+}
+
 async function uploadProfileAvatar(filePath) {
   if (!wx.cloud || !wx.cloud.uploadFile) {
     throw new Error("当前基础库不支持头像上传");
@@ -93,6 +138,7 @@ async function saveProfile(profile = {}) {
       avatarFileId: profile.avatarFileId,
     },
   });
+  clearSessionSummaryCache();
   return hydrateProfile(result.profile || profile);
 }
 
@@ -104,8 +150,10 @@ module.exports = {
   DEFAULT_NICKNAME,
   PROFILE_STORAGE_KEY,
   cacheProfile,
+  clearSessionSummaryCache,
   fetchProfile,
   fetchProfileRecord,
+  fetchSessionSummary,
   getLegacyProfile,
   getTemporaryAvatarUrl,
   hasCompletedProfile,

@@ -3,6 +3,12 @@ const {
   fetchVisibleCases,
   fetchVisibleBanners,
 } = require("../../utils/cloudData");
+const { fetchHomeFeed } = require("../../utils/caseCatalogService");
+const {
+  HOME_CACHE_KEY,
+  readCache,
+  writeCache,
+} = require("../../utils/catalogCache");
 const {
   getCaseDataVersion,
   shouldRefreshCaseData,
@@ -27,6 +33,18 @@ function buildProductCard(caseItem, homeBadge) {
     ...caseItem,
     tagSummary: summarizeTags(caseItem),
     homeBadge,
+  };
+}
+
+function decorateHomeFeed(feed = {}) {
+  return {
+    banners: feed.banners || [],
+    popularCases: (feed.popularCases || []).map((item) =>
+      buildProductCard(item, "近期热门")
+    ),
+    latestCases: (feed.latestCases || []).map((item) =>
+      buildProductCard(item, "最近上新")
+    ),
   };
 }
 
@@ -73,7 +91,6 @@ Page({
   data: {
     loading: true,
     errorMessage: "",
-    allCases: [],
     banners: [],
     popularCases: [],
     latestCases: [],
@@ -81,17 +98,34 @@ Page({
   },
 
   onLoad() {
-    this.loadData();
+    this._homeCache = readCache(HOME_CACHE_KEY);
+    if (this._homeCache) {
+      this.applyHomeFeed(this._homeCache.data, {
+        revision: this._homeCache.revision,
+      });
+    }
+    this.loadData({ silent: Boolean(this._homeCache) });
   },
 
   onShow() {
     if (!this.data.loading && shouldRefreshCaseData(this.data.caseDataVersion)) {
-      this.loadData({ silent: true });
+      this.loadData({ silent: true, forceRefresh: true });
     }
   },
 
   onPullDownRefresh() {
-    this.loadData().finally(() => wx.stopPullDownRefresh());
+    this.loadData({ forceRefresh: true }).finally(() => wx.stopPullDownRefresh());
+  },
+
+  applyHomeFeed(feed, options = {}) {
+    const decorated = decorateHomeFeed(feed);
+    this.setData({
+      ...decorated,
+      caseDataVersion: getCaseDataVersion(),
+      catalogRevision: Number(options.revision) || 1,
+      loading: false,
+      errorMessage: "",
+    });
   },
 
   async loadData(options = {}) {
@@ -107,22 +141,57 @@ Page({
     }
 
     try {
-      const cases = await fetchVisibleCases({ includeImageUrls: false });
-      const banners = await fetchVisibleBanners(cases);
-      const { popularCases, latestCases } = await attachHomeSectionImages(
-        buildHomeSections(cases)
-      );
-
-      this.setData({
-        allCases: cases,
-        banners,
-        popularCases,
-        latestCases,
-        caseDataVersion: getCaseDataVersion(),
-        loading: false,
-      });
+      const knownRevision =
+        !options.forceRefresh && this._homeCache && this._homeCache.fresh
+          ? this._homeCache.revision
+          : undefined;
+      let result;
+      try {
+        result = await fetchHomeFeed({ knownRevision });
+      } catch (catalogError) {
+        console.warn("首页聚合接口不可用，使用兼容读取", catalogError);
+        const cases = await fetchVisibleCases({
+          includeImageUrls: false,
+          forceRefresh: options.forceRefresh,
+        });
+        const banners = await fetchVisibleBanners(cases, {
+          forceRefresh: options.forceRefresh,
+        });
+        const sections = await attachHomeSectionImages(buildHomeSections(cases));
+        result = {
+          revision: getCaseDataVersion() || 1,
+          notModified: false,
+          banners,
+          ...sections,
+        };
+      }
+      if (result.notModified && this._homeCache) {
+        this.applyHomeFeed(this._homeCache.data, {
+          revision: result.revision,
+        });
+        return;
+      }
+      const feed = {
+        banners: result.banners || [],
+        popularCases: result.popularCases || [],
+        latestCases: result.latestCases || [],
+      };
+      this._homeCache = {
+        revision: result.revision,
+        cachedAt: Date.now(),
+        fresh: true,
+        data: feed,
+      };
+      writeCache(HOME_CACHE_KEY, result.revision, feed);
+      this.applyHomeFeed(feed, { revision: result.revision });
     } catch (error) {
       console.error("首页数据读取失败", error);
+      if (this._homeCache) {
+        this.applyHomeFeed(this._homeCache.data, {
+          revision: this._homeCache.revision,
+        });
+        return;
+      }
       this.setData({
         loading: false,
         errorMessage: "暂时读取不到案例数据，请检查云环境和数据库权限。",

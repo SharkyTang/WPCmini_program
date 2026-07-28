@@ -92,13 +92,13 @@ function loadInquiryDetailPage(serviceOverrides = {}) {
       pageConfig = config;
     },
     require(moduleName) {
-      if (moduleName === "../../utils/inquiryAdminData") {
+      if (moduleName === "./utils/inquiryAdminData") {
         return {
           INQUIRY_STATUS_OPTIONS: statusOptions,
           validateAdminNote: (note) => ({ valid: true, adminNote: note }),
         };
       }
-      if (moduleName === "../../utils/inquiryAdminService") return service;
+      if (moduleName === "./utils/inquiryAdminService") return service;
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     console,

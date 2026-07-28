@@ -5,10 +5,11 @@ const {
   normalizeCaseAdminHomepageDisplayItem,
   normalizeCaseAdminKeyword,
 } = require("./caseAdminData");
-const { clearCloudDataCache } = require("./cloudData");
-const { markCaseDataStale } = require("./caseRefresh");
+const { clearCloudDataCache } = require("../../../utils/cloudData");
+const { markCaseDataStale } = require("../../../utils/caseRefresh");
 
 const CASE_ADMIN_FUNCTION = "caseAdmin";
+const IMAGE_PROCESSOR_FUNCTION = "imageProcessor";
 const DEFAULT_PAGE_SIZE = 20;
 const TEMP_FILE_URL_BATCH_SIZE = 50;
 
@@ -277,6 +278,26 @@ async function uploadCaseCoverImage(input, maybeCloudPath) {
   return response.fileID;
 }
 
+async function generateCaseImageVariants(fileIDs = []) {
+  if (!wx.cloud || !fileIDs.length) {
+    throw new Error("缺少待处理的案例图片");
+  }
+  const response = await wx.cloud.callFunction({
+    name: IMAGE_PROCESSOR_FUNCTION,
+    data: {
+      action: "generateCaseVariants",
+      files: fileIDs,
+    },
+  });
+  const result = (response && response.result) || {};
+  if (result.ok === false) {
+    const error = new Error(result.message || "图片处理失败");
+    error.code = result.code || "IMAGE_PROCESSING_FAILED";
+    throw error;
+  }
+  return result.variants || [];
+}
+
 module.exports = {
   CASE_ADMIN_VIEW_OPTIONS,
   CASE_ADMIN_VISIBILITY_OPTIONS,
@@ -288,6 +309,7 @@ module.exports = {
   fetchCaseAdminHomepageDisplay,
   fetchCaseAdminList,
   fetchRecentCaseAdminList,
+  generateCaseImageVariants,
   attachCaseGalleryUrls,
   setCaseVisibility,
   updateCaseAdmin,

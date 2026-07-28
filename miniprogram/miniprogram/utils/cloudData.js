@@ -193,17 +193,38 @@ async function attachCaseImageUrls(cases, options = {}) {
 }
 
 async function attachCaseDetailImageUrls(cases) {
-  const imageFileIds = cases.flatMap((item) => getCaseGalleryImages(item));
+  const imageFileIds = cases.flatMap((item) => [
+    ...getCaseGalleryImages(item),
+    ...(item.sourceGalleryImages || []),
+    ...(item.galleryThumbnails || []),
+    item.coverThumbnail,
+  ].filter(Boolean));
   const tempUrlMap = await getTempUrlMap(imageFileIds);
   return cases.map((item) => {
     const galleryImages = getCaseGalleryImages(item);
-    const gallery = galleryImages.map((fileID) => ({
-      fileID,
-      url: resolveImageUrl(fileID, tempUrlMap),
-    }));
+    const sourceGalleryImages =
+      Array.isArray(item.sourceGalleryImages) && item.sourceGalleryImages.length
+        ? item.sourceGalleryImages
+        : galleryImages;
+    const galleryThumbnails =
+      Array.isArray(item.galleryThumbnails) ? item.galleryThumbnails : [];
+    const gallery = galleryImages.map((fileID, index) => {
+      const thumbnailFileID =
+        galleryThumbnails[index] || item.coverThumbnail || fileID;
+      const sourceFileID = sourceGalleryImages[index] || fileID;
+      const url = resolveImageUrl(fileID, tempUrlMap);
+      return {
+        fileID,
+        url,
+        thumbnailUrl: resolveImageUrl(thumbnailFileID, tempUrlMap) || url,
+        downloadUrl: resolveImageUrl(sourceFileID, tempUrlMap) || url,
+      };
+    });
     return {
       ...item,
       galleryImages,
+      sourceGalleryImages,
+      galleryThumbnails,
       gallery,
       coverImage: galleryImages[0] || item.coverImage,
       coverImageUrl: gallery[0] ? gallery[0].url : "",

@@ -28,7 +28,17 @@ function loadProfilePage(wxMock = {}, options = {}) {
         return {
           DEFAULT_NICKNAME: "微信名称",
           cacheProfile: options.cacheProfile || (() => {}),
-          fetchProfile: options.fetchProfile || (async () => null),
+          fetchSessionSummary:
+            options.fetchSessionSummary ||
+            (async () => ({
+              openid: "openid_1",
+              profile: options.fetchProfile ? await options.fetchProfile() : null,
+              roles: options.roles || {
+                inquiryAdmin: false,
+                caseAdmin: false,
+                notificationAdmin: false,
+              },
+            })),
           getLegacyProfile: options.getLegacyProfile || (() => ({})),
           hasCompletedProfile: options.hasCompletedProfile || completed,
         };
@@ -37,19 +47,7 @@ function loadProfilePage(wxMock = {}, options = {}) {
       if (moduleName === "../../utils/userService") {
         return {
           cacheCompletedProfileIdentity: options.cacheCompletedProfileIdentity || (() => {}),
-          fetchOpenId: options.fetchOpenId || (async () => "openid_1"),
-        };
-      }
-      if (moduleName === "../../utils/inquiryAdminService") {
-        return { checkInquiryAdminAccess: options.checkInquiryAdminAccess || (async () => false) };
-      }
-      if (moduleName === "../../utils/caseAdminService") {
-        return { checkCaseAdminAccess: options.checkCaseAdminAccess || (async () => false) };
-      }
-      if (moduleName === "../../utils/notificationAdminService") {
-        return {
-          checkNotificationAdminAccess:
-            options.checkNotificationAdminAccess || (async () => false),
+          cacheOpenId: options.cacheOpenId || (() => {}),
         };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
@@ -99,7 +97,6 @@ await test("configured cloud profile opens the independent edit page", async () 
     {
       fetchProfile: async () => ({ nickname: "墨韵 ovo", avatarFileId: "cloud://avatar", avatarUrl: "https://avatar" }),
       cacheProfile(profile) { cachedProfile = profile; },
-      fetchOpenId: async () => "openid_1",
       cacheCompletedProfileIdentity(openid, profile) { cachedIdentity = { openid, profile }; },
     }
   );
@@ -170,14 +167,14 @@ await test("profile shows admin entries only when access is granted", async () =
   const page = loadProfilePage(
     { navigateTo(options) { navigatedUrl = options.url; } },
     {
-      checkCaseAdminAccess: async () => true,
-      checkInquiryAdminAccess: async () => true,
-      checkNotificationAdminAccess: async () => true,
+      roles: {
+        inquiryAdmin: true,
+        caseAdmin: true,
+        notificationAdmin: true,
+      },
     }
   );
-  await page.refreshCaseAdminAccess();
-  await page.refreshInquiryAdminAccess();
-  await page.refreshNotificationAdminAccess();
+  await page.loadProfileInfo();
   page.openCaseAdmin();
   assert.equal(page.data.hasCaseAdminAccess, true);
   assert.equal(page.data.hasInquiryAdminAccess, true);

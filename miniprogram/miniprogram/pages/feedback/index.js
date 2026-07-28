@@ -2,8 +2,8 @@ const {
   CONTENT_MAX_LENGTH,
   FEEDBACK_TYPES,
   validateFeedbackDraft,
-} = require("../../utils/feedbackData");
-const { submitFeedback } = require("../../utils/feedbackService");
+} = require("./utils/feedbackData");
+const { submitFeedback } = require("./utils/feedbackService");
 
 const SOURCE_PAGE_MAP = {
   profile: "pages/profile/index",

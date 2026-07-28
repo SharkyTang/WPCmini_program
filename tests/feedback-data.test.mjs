@@ -7,7 +7,7 @@ import vm from "node:vm";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const modulePath = resolve(
   __dirname,
-  "../miniprogram/miniprogram/utils/feedbackData.js"
+  "../miniprogram/miniprogram/pages/feedback/utils/feedbackData.js"
 );
 const feedbackWxmlPath = resolve(
   __dirname,

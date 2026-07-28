@@ -170,7 +170,7 @@ function loadNotificationAdminPage() {
       page = config;
     },
     require(moduleName) {
-      if (moduleName === "../../utils/notificationAdminService") {
+      if (moduleName === "./utils/notificationAdminService") {
         return {
           DEFAULT_PAGE_SIZE: 20,
           checkNotificationAdminAccess: async () => true,
