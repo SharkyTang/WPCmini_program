@@ -49,6 +49,20 @@ function getMediaPaths(result = {}) {
     .filter(Boolean);
 }
 
+function alignGalleryFiles(fileIDs = [], fallbackFileIDs = []) {
+  return fallbackFileIDs.map((fallbackFileID, index) => {
+    return fileIDs[index] || fallbackFileID;
+  });
+}
+
+function buildOriginalImageFallbackVariants(fileIDs = []) {
+  return fileIDs.map((fileID) => ({
+    sourceFileID: fileID,
+    displayFileID: fileID,
+    thumbnailFileID: fileID,
+  }));
+}
+
 Page({
   data: {
     id: "",
@@ -249,10 +263,14 @@ Page({
 
     try {
       const galleryImages = [...this.data.form.galleryImages];
-      const sourceGalleryImages = [
-        ...(this.data.form.sourceGalleryImages || this.data.form.galleryImages),
-      ];
-      const galleryThumbnails = [...(this.data.form.galleryThumbnails || [])];
+      const sourceGalleryImages = alignGalleryFiles(
+        this.data.form.sourceGalleryImages || [],
+        galleryImages
+      );
+      const galleryThumbnails = alignGalleryFiles(
+        this.data.form.galleryThumbnails || [],
+        galleryImages
+      );
       const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
       const selectedPaths = filePaths.slice(
         0,
@@ -273,10 +291,34 @@ Page({
       if (!uploadedSources.length) {
         throw new Error("图片上传失败");
       }
-      const variants = await generateCaseImageVariants(uploadedSources);
-      if (variants.length !== uploadedSources.length) {
-        throw new Error("图片处理结果不完整，请重试");
+
+      let variants;
+      let usedOriginalFallback = false;
+      try {
+        variants = await generateCaseImageVariants(uploadedSources);
+        const variantsAreComplete =
+          variants.length === uploadedSources.length &&
+          variants.every((variant) => {
+            return Boolean(
+              variant &&
+              variant.sourceFileID &&
+              variant.displayFileID &&
+              variant.thumbnailFileID
+            );
+          });
+        if (!variantsAreComplete) {
+          throw new Error("图片处理结果不完整");
+        }
+      } catch (processingError) {
+        usedOriginalFallback = true;
+        variants = buildOriginalImageFallbackVariants(uploadedSources);
+        console.warn(
+          "图片变体处理失败，已使用原图继续保存",
+          processingError && processingError.code,
+          processingError && processingError.message
+        );
       }
+
       variants.forEach((variant, index) => {
         sourceGalleryImages.push(variant.sourceFileID);
         galleryImages.push(variant.displayFileID);
@@ -299,7 +341,7 @@ Page({
         optionViews: buildCaseAdminOptionViews(form, this.data.formOptions),
       });
       wx.showToast({
-        title: `已上传 ${variants.length} 张`,
+        title: usedOriginalFallback ? "原图已上传" : `已上传 ${variants.length} 张`,
         icon: "none",
       });
     } catch (error) {

@@ -1,5 +1,4 @@
 const cloud = require("wx-server-sdk");
-const sharp = require("sharp");
 const {
   buildVariantPaths,
   generateVariantBuffers,
@@ -20,6 +19,15 @@ function fail(code, message) {
   return { ok: false, code, message };
 }
 
+function loadSharp() {
+  try {
+    return require("sharp");
+  } catch (error) {
+    error.code = "IMAGE_PROCESSOR_UNAVAILABLE";
+    throw error;
+  }
+}
+
 async function uploadVariant(cloudPath, fileContent) {
   const response = await cloud.uploadFile({
     cloudPath,
@@ -28,10 +36,10 @@ async function uploadVariant(cloudPath, fileContent) {
   return response.fileID || response.fileId || "";
 }
 
-async function processFile(fileID) {
+async function processFile(fileID, sharpFactory) {
   const paths = buildVariantPaths(fileID);
   const response = await cloud.downloadFile({ fileID });
-  const buffers = await generateVariantBuffers(sharp, response.fileContent);
+  const buffers = await generateVariantBuffers(sharpFactory, response.fileContent);
   const [displayFileID, thumbnailFileID] = await Promise.all([
     uploadVariant(paths.displayPath, buffers.displayBuffer),
     uploadVariant(paths.thumbnailPath, buffers.thumbnailBuffer),
@@ -47,7 +55,7 @@ async function processFile(fileID) {
   };
 }
 
-async function generateCaseVariants(event) {
+async function generateCaseVariants(event, sharpFactory) {
   const requested = Array.isArray(event.files) ? event.files : event.fileIDs;
   const fileIDs = normalizeSourceFiles(requested);
   if (!fileIDs.length) return fail("INVALID_FILES", "缺少有效的云存储图片");
@@ -56,7 +64,7 @@ async function generateCaseVariants(event) {
   }
   const variants = [];
   for (const fileID of fileIDs) {
-    variants.push(await processFile(fileID));
+    variants.push(await processFile(fileID, sharpFactory));
   }
   return ok({ variants });
 }
@@ -68,10 +76,21 @@ exports.main = async (event = {}) => {
   }
   try {
     const action = trimText(event.action);
-    if (action === "generateCaseVariants") return generateCaseVariants(event);
+    if (action === "healthCheck") {
+      const sharpFactory = loadSharp();
+      return ok({
+        sharpVersion: sharpFactory.versions && sharpFactory.versions.sharp,
+      });
+    }
+    if (action === "generateCaseVariants") {
+      return generateCaseVariants(event, loadSharp());
+    }
     return fail("UNKNOWN_ACTION", "未知图片处理操作");
   } catch (error) {
     console.error("imageProcessor error", error);
-    return fail("IMAGE_PROCESSING_FAILED", error.message || "图片处理失败");
+    return fail(
+      error.code || "IMAGE_PROCESSING_FAILED",
+      error.message || "图片处理失败"
+    );
   }
 };

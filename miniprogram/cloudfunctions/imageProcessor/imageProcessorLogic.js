@@ -54,7 +54,7 @@ async function buildThumbnailBuffer(sharpFactory, sourceBuffer) {
   let quality = 68;
   let buffer = null;
   while (quality >= 48) {
-    buffer = await sharpFactory(sourceBuffer)
+    buffer = await sharpFactory(sourceBuffer, { failOn: "none" })
       .rotate()
       .toColorspace("srgb")
       .resize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, {
@@ -81,9 +81,9 @@ async function generateVariantBuffers(sharpFactory, sourceBuffer) {
     throw new Error("单张原图不能超过 20MB");
   }
 
-  const source = sharpFactory(sourceBuffer, { failOn: "warning" }).rotate();
+  const source = sharpFactory(sourceBuffer, { failOn: "none" }).rotate();
   const metadata = await source.metadata();
-  const displayBuffer = await sharpFactory(sourceBuffer)
+  const displayBuffer = await sharpFactory(sourceBuffer, { failOn: "none" })
     .rotate()
     .toColorspace("srgb")
     .resize({
