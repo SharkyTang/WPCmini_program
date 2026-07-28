@@ -1,7 +1,6 @@
 const INQUIRY_COLLECTION = "inquiries";
 const FEEDBACK_COLLECTION = "feedback";
-const CUSTOMER_NOTIFICATION_COLLECTION = "customer_notifications";
-const NOTIFICATION_PREFERENCE_COLLECTION = "notification_preferences";
+const NOTIFICATION_SUBSCRIPTION_COLLECTION = "notification_subscriptions";
 const USER_PROFILE_NICKNAME_MAX_LENGTH = 14;
 
 const INQUIRY_CONTENT_MIN_LENGTH = 5;
@@ -21,8 +20,8 @@ const FEEDBACK_TYPE_LABELS = {
 const NOTIFICATION_TYPE_KEYS = [
   "version_update",
   "product_new",
-  "customer_reply",
 ];
+const SUBSCRIPTION_STATUS_KEYS = ["accept", "reject", "ban"];
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -166,10 +165,37 @@ function buildFeedbackRecord(draft = {}, context = {}) {
   };
 }
 
-function normalizeDisabledTypes(disabledTypes = []) {
-  return Array.from(
-    new Set((disabledTypes || []).filter((type) => NOTIFICATION_TYPE_KEYS.includes(type)))
-  );
+function normalizeNotificationType(value) {
+  return NOTIFICATION_TYPE_KEYS.includes(value) ? value : "";
+}
+
+function normalizeSubscriptionStatus(value) {
+  if (value === "accept") return "granted";
+  if (value === "reject") return "rejected";
+  if (value === "ban") return "banned";
+  return "";
+}
+
+function validateSubscriptionGrant(input = {}, templateIds = {}) {
+  const type = normalizeNotificationType(trimText(input.type));
+  const templateId = trimText(input.templateId);
+  const rawStatus = trimText(input.status);
+  const status = normalizeSubscriptionStatus(rawStatus);
+
+  if (!type || !templateId || !SUBSCRIPTION_STATUS_KEYS.includes(rawStatus) || !status) {
+    return { valid: false, code: "INVALID_SUBSCRIPTION", message: "订阅状态无效" };
+  }
+  if (!templateIds[type] || templateIds[type] !== templateId) {
+    return { valid: false, code: "INVALID_TEMPLATE", message: "订阅模板配置不匹配" };
+  }
+  return {
+    valid: true,
+    data: {
+      type,
+      templateId,
+      status,
+    },
+  };
 }
 
 function normalizeUserProfileDraft(profile = {}) {
@@ -205,16 +231,18 @@ function pickPreferenceRecord(records = []) {
 }
 
 module.exports = {
-  CUSTOMER_NOTIFICATION_COLLECTION,
   FEEDBACK_COLLECTION,
   INQUIRY_COLLECTION,
-  NOTIFICATION_PREFERENCE_COLLECTION,
+  NOTIFICATION_SUBSCRIPTION_COLLECTION,
+  NOTIFICATION_TYPE_KEYS,
   buildFeedbackRecord,
   buildInquiryRecord,
   USER_PROFILE_NICKNAME_MAX_LENGTH,
-  normalizeDisabledTypes,
+  normalizeNotificationType,
+  normalizeSubscriptionStatus,
   normalizeUserProfileDraft,
   pickPreferenceRecord,
+  validateSubscriptionGrant,
   validateUserProfileDraft,
   validateFeedbackDraft,
   validateInquiryDraft,

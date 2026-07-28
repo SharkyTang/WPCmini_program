@@ -7,6 +7,8 @@
     "pages/favorites/index",
     "pages/history/index",
     "pages/notifications/index",
+    "pages/notification-admin/index",
+    "pages/notification-admin/edit",
     "pages/feedback/index",
     "pages/inquiry/index",
     "pages/inquiry-admin/index",

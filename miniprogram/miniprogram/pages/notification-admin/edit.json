@@ -1,0 +1,6 @@
+{
+  "navigationBarTitleText": "新建通知",
+  "usingComponents": {
+    "mp-toptips": "weui-miniprogram/toptips/toptips"
+  }
+}

@@ -1,35 +1,51 @@
 const {
   NOTIFICATION_TYPE_KEYS,
   getNotificationTypeLabel,
-  isNotificationTypeDisabled,
+  normalizeSubscriptionState,
 } = require("../../utils/notificationData");
 const {
-  fetchCustomerNotifications,
-  fetchNotificationPreferences,
   fetchPublicNotifications,
-  toggleNotificationPreference,
+  fetchSubscriptionStatus,
+  saveSubscriptionGrant,
 } = require("../../utils/notificationService");
-const { ensureProfileIdentity, getCachedOpenId } = require("../../utils/userService");
 
 const TAB_ITEMS = [
   { key: "all", label: "全部" },
   { key: "version_update", label: "版本更新" },
   { key: "product_new", label: "产品上新" },
-  { key: "customer_reply", label: "客服回复" },
   { key: "settings", label: "通知设置" },
 ];
-
-function buildSettingItems(disabledTypes = []) {
-  return NOTIFICATION_TYPE_KEYS.map((type) => ({
-    type,
-    label: `${getNotificationTypeLabel(type)}提醒`,
-    disabled: isNotificationTypeDisabled(disabledTypes, type),
-  }));
-}
 
 function filterNotifications(notifications, activeTab) {
   if (activeTab === "all") return notifications;
   return notifications.filter((item) => item.type === activeTab);
+}
+
+function getSubscriptionActionLabel(item = {}) {
+  if (!item.templateId) return "暂未配置";
+  if (item.status === "granted") return "已订阅下一次";
+  if (item.status === "banned") return "检查微信设置";
+  return "订阅下一次";
+}
+
+function buildSubscriptionItems(subscriptions = {}, templateIds = {}) {
+  const state = normalizeSubscriptionState(subscriptions);
+  return NOTIFICATION_TYPE_KEYS.map((type) => {
+    const item = {
+      ...state[type],
+      templateId: templateIds[type] || state[type].templateId || "",
+    };
+    return {
+      ...item,
+      label: `${getNotificationTypeLabel(type)}提醒`,
+      actionLabel: getSubscriptionActionLabel(item),
+      actionDisabled: !item.templateId || item.status === "granted",
+      stateText:
+        item.status === "granted"
+          ? "已授权，发布下一条消息后需要重新订阅"
+          : "由你主动授权，仅用于下一条对应通知",
+    };
+  });
 }
 
 Page({
@@ -37,14 +53,13 @@ Page({
     tabs: TAB_ITEMS,
     activeTab: "all",
     loading: false,
+    subscribingType: "",
     errorMessage: "",
-    needCustomerIdentity: false,
-    hasProfileIdentity: false,
     publicNotifications: [],
-    customerNotifications: [],
     displayNotifications: [],
-    disabledTypes: [],
-    settingItems: buildSettingItems([]),
+    subscriptions: normalizeSubscriptionState({}),
+    templateIds: {},
+    subscriptionItems: buildSubscriptionItems(),
   },
 
   onShow() {
@@ -58,21 +73,19 @@ Page({
     });
 
     try {
-      const [publicNotifications, preferences] = await Promise.all([
+      const [publicNotifications, subscriptionResult] = await Promise.all([
         fetchPublicNotifications(),
-        fetchNotificationPreferences(),
+        fetchSubscriptionStatus(),
       ]);
-      const customerNotifications = this.data.activeTab === "customer_reply" && getCachedOpenId()
-        ? await fetchCustomerNotifications()
-        : [];
-
       this.setData({
         loading: false,
         publicNotifications,
-        customerNotifications,
-        hasProfileIdentity: Boolean(preferences.hasIdentity),
-        disabledTypes: preferences.disabledTypes || [],
-        settingItems: buildSettingItems(preferences.disabledTypes || []),
+        subscriptions: subscriptionResult.subscriptions,
+        templateIds: subscriptionResult.templateIds,
+        subscriptionItems: buildSubscriptionItems(
+          subscriptionResult.subscriptions,
+          subscriptionResult.templateIds
+        ),
       });
       this.refreshDisplayNotifications();
     } catch (error) {
@@ -85,109 +98,85 @@ Page({
   },
 
   refreshDisplayNotifications() {
-    const allNotifications = [
-      ...this.data.publicNotifications,
-      ...this.data.customerNotifications,
-    ].sort((left, right) => right.timestamp - left.timestamp);
-
     this.setData({
-      displayNotifications: filterNotifications(allNotifications, this.data.activeTab),
-      needCustomerIdentity:
-        this.data.activeTab === "customer_reply" && !this.data.hasProfileIdentity,
+      displayNotifications: filterNotifications(
+        this.data.publicNotifications,
+        this.data.activeTab
+      ),
     });
   },
 
-  async switchTab(event) {
+  switchTab(event) {
     const key = event.currentTarget.dataset.key;
     if (!key) return;
-
     this.setData({
       activeTab: key,
       errorMessage: "",
     });
-
-    if (key === "customer_reply") {
-      const identity = await ensureProfileIdentity();
-      if (!identity.ready) {
-        this.setData({ hasProfileIdentity: false });
-        this.refreshDisplayNotifications();
-        return;
-      }
-      this.loginAndLoadCustomer();
-      return;
-    }
-
     this.refreshDisplayNotifications();
   },
 
-  async loginAndLoadCustomer() {
-    this.setData({
-      loading: true,
-      errorMessage: "",
-    });
-
-    try {
-      const identity = await ensureProfileIdentity();
-      if (!identity.ready) {
-        this.setData({ loading: false, hasProfileIdentity: false });
-        this.refreshDisplayNotifications();
-        return;
-      }
-
-      const customerNotifications = await fetchCustomerNotifications();
-      const preferences = await fetchNotificationPreferences();
-      this.setData({
-        loading: false,
-        customerNotifications,
-        hasProfileIdentity: true,
-        disabledTypes: preferences.disabledTypes || [],
-        settingItems: buildSettingItems(preferences.disabledTypes || []),
-      });
-      this.refreshDisplayNotifications();
-    } catch (error) {
-      console.error("客服回复读取失败", error);
-      this.setData({
-        loading: false,
-        errorMessage: "暂时读取不到客服回复，请稍后重试。",
-      });
-    }
-  },
-
-  async toggleSetting(event) {
+  async subscribeNext(event) {
     const type = event.currentTarget.dataset.type;
-    if (!type) return;
+    const templateId = this.data.templateIds[type];
+    const subscription = this.data.subscriptions[type] || {};
+    if (!type || !templateId || this.data.subscribingType) return;
 
-    const identity = await ensureProfileIdentity({
-      resume: () => this.applyNotificationSetting(type),
-    });
-    if (!identity.ready) return;
+    if (subscription.status === "banned") {
+      wx.openSetting({
+        withSubscriptions: true,
+        fail() {
+          wx.showToast({ title: "请在微信设置中检查订阅消息权限", icon: "none" });
+        },
+      });
+      return;
+    }
 
-    return this.applyNotificationSetting(type);
+    this.setData({ subscribingType: type });
+    try {
+      const response = await new Promise((resolve, reject) => {
+        wx.requestSubscribeMessage({
+          tmplIds: [templateId],
+          success: resolve,
+          fail: reject,
+        });
+      });
+      const status = response[templateId] || "reject";
+      const result = await saveSubscriptionGrant(type, templateId, status);
+      this.setData({
+        subscriptions: result.subscriptions,
+        templateIds: result.templateIds,
+        subscriptionItems: buildSubscriptionItems(
+          result.subscriptions,
+          result.templateIds
+        ),
+      });
+
+      const title = status === "accept"
+        ? "已订阅下一次提醒"
+        : status === "ban"
+          ? "请检查微信订阅设置"
+          : "已取消，可稍后再订阅";
+      wx.showToast({ title, icon: "none" });
+    } catch (error) {
+      console.error("订阅消息授权失败", error);
+      wx.showToast({
+        title: "订阅失败，请稍后重试",
+        icon: "none",
+      });
+    } finally {
+      this.setData({ subscribingType: "" });
+    }
   },
 
-  async applyNotificationSetting(type) {
-    try {
-      const preferences = await toggleNotificationPreference(type);
-      if (!preferences.hasIdentity) return;
-
-      const disabledTypes = preferences.disabledTypes || [];
-      this.setData({
-        disabledTypes,
-        settingItems: buildSettingItems(disabledTypes),
-      });
-
-      wx.showToast({
-        title: isNotificationTypeDisabled(disabledTypes, type)
-          ? "已关闭提醒"
-          : "已开启提醒",
-        icon: "none",
-      });
-    } catch (error) {
-      console.error("通知设置保存失败", error);
-      wx.showToast({
-        title: "设置保存失败",
-        icon: "none",
-      });
-    }
+  openNotification(event) {
+    const targetPage = event.currentTarget.dataset.target;
+    if (!targetPage || targetPage.indexOf("/pages/notifications/index") === 0) return;
+    wx.navigateTo({
+      url: targetPage,
+      fail() {
+        wx.showToast({ title: "对应内容暂时无法打开", icon: "none" });
+      },
+    });
   },
 });

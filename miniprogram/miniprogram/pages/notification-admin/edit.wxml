@@ -1,0 +1,56 @@
+<view class="page">
+  <mp-toptips
+    msg="{{topTips.message}}"
+    type="{{topTips.type}}"
+    show="{{topTips.show}}"
+    bindhide="hideTopTips"
+  />
+
+  <view class="hero">
+    <view class="page-title">{{isEdit ? '编辑通知草稿' : '新建通知'}}</view>
+    <view class="page-subtitle">站内公告所有用户可见，微信提醒仅发送给已授权用户</view>
+  </view>
+
+  <view class="form-card">
+    <view class="field">
+      <view class="field-label">通知类型</view>
+      <view class="type-row">
+        <view class="type-chip {{draft.type === 'version_update' ? 'type-chip-active' : ''}}" data-type="version_update" bindtap="selectType">版本更新</view>
+        <view class="type-chip {{draft.type === 'product_new' ? 'type-chip-active' : ''}}" data-type="product_new" bindtap="selectType">产品上新</view>
+      </view>
+    </view>
+
+    <view class="field">
+      <view class="field-label">标题 *</view>
+      <input class="text-input" maxlength="80" value="{{draft.title}}" placeholder="例如：1.1.0 版本更新" bindinput="onTitleInput" />
+    </view>
+
+    <view class="field">
+      <view class="field-label">内容 *</view>
+      <textarea class="textarea-input" maxlength="500" value="{{draft.content}}" placeholder="填写本次更新或上新内容" bindinput="onContentInput" />
+    </view>
+
+    <view wx:if="{{draft.type === 'version_update'}}" class="field">
+      <view class="field-label">版本号</view>
+      <input class="text-input" maxlength="30" value="{{draft.version}}" placeholder="例如：1.1.0" bindinput="onVersionInput" />
+    </view>
+
+    <view wx:if="{{draft.type === 'product_new'}}" class="field">
+      <view class="field-label">关联案例文档 ID *</view>
+      <input class="text-input" value="{{draft.caseDocId}}" placeholder="填写 wine_packaging 文档 ID" bindinput="onCaseIdInput" />
+    </view>
+
+    <view class="send-row">
+      <view>
+        <view class="field-label">发送微信订阅提醒</view>
+        <view class="field-hint">未授权用户仍可在消息页查看公告</view>
+      </view>
+      <switch checked="{{draft.sendSubscription}}" color="#285f42" bindchange="onSendChange" />
+    </view>
+
+    <view class="button-row">
+      <button class="secondary-button" loading="{{saving}}" disabled="{{saving}}" bindtap="saveDraft">保存草稿</button>
+      <button class="primary-button" loading="{{saving}}" disabled="{{saving}}" bindtap="publishNow">立即发布</button>
+    </view>
+  </view>
+</view>

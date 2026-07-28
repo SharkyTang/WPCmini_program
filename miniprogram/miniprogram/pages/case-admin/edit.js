@@ -13,6 +13,22 @@ const {
   updateCaseAdmin,
   uploadCaseCoverImage,
 } = require("../../utils/caseAdminService");
+const {
+  publishProductAnnouncement,
+} = require("../../utils/notificationAdminService");
+
+function buildProductNotificationDraft(form = {}) {
+  const summary = [
+    ...(form.packageTypes || []).slice(0, 2),
+    ...(form.styles || []).slice(0, 1),
+    ...(form.scenes || []).slice(0, 1),
+  ].filter(Boolean).join(" / ");
+  return {
+    title: `新品案例上新｜${String(form.title || "").trim() || "新案例"}`,
+    content: summary ? `新案例已上线：${summary}` : "新案例已上线，欢迎查看包装设计详情。",
+    sendSubscription: true,
+  };
+}
 
 function toggleValue(values = [], value) {
   if (!value) return values;
@@ -43,6 +59,8 @@ Page({
     coverImageUrl: "",
     galleryPreviewUrls: [],
     galleryMax: CASE_ADMIN_GALLERY_MAX,
+    publishProductNotification: false,
+    productNotificationDraft: buildProductNotificationDraft(),
     topTips: {
       show: false,
       message: "",
@@ -141,6 +159,28 @@ Page({
 
   onPinnedChange(event) {
     this.updateFormField("isPinned", event.detail.value === true);
+  },
+
+  onPublishNotificationChange(event) {
+    const publishProductNotification = event.detail.value === true;
+    this.setData({
+      publishProductNotification,
+      ...(publishProductNotification
+        ? { productNotificationDraft: buildProductNotificationDraft(this.data.form) }
+        : {}),
+    });
+  },
+
+  onNotificationTitleInput(event) {
+    this.setData({
+      "productNotificationDraft.title": event.detail.value || "",
+    });
+  },
+
+  onNotificationContentInput(event) {
+    this.setData({
+      "productNotificationDraft.content": event.detail.value || "",
+    });
   },
 
   showTopTips(message, type = "error") {
@@ -349,6 +389,20 @@ Page({
       });
       return;
     }
+    if (!this.data.isEdit && this.data.publishProductNotification) {
+      if (!this.data.form.isVisible) {
+        this.showTopTips("发布产品上新通知前，请先打开前台显示");
+        return;
+      }
+      if (!this.data.productNotificationDraft.title.trim()) {
+        this.showTopTips("请填写产品上新通知标题");
+        return;
+      }
+      if (!this.data.productNotificationDraft.content.trim()) {
+        this.showTopTips("请填写产品上新通知内容");
+        return;
+      }
+    }
 
     this.setData({
       saving: true,
@@ -356,10 +410,30 @@ Page({
 
     try {
       const payload = buildCaseAdminPayload(this.data.form);
+      let saveResult;
       if (this.data.isEdit) {
         await updateCaseAdmin(this.data.id, payload);
       } else {
-        await createCaseAdmin(payload);
+        saveResult = await createCaseAdmin(payload);
+        if (this.data.publishProductNotification) {
+          try {
+            await publishProductAnnouncement({
+              caseDocId: saveResult.id,
+              title: this.data.productNotificationDraft.title,
+              content: this.data.productNotificationDraft.content,
+              sendSubscription: this.data.productNotificationDraft.sendSubscription,
+            });
+          } catch (notificationError) {
+            console.warn("案例已保存，但产品上新通知发布失败", notificationError);
+            wx.showModal({
+              title: "案例已保存",
+              content: "产品上新通知发布失败，可稍后在通知管理中补发。",
+              showCancel: false,
+              success: () => wx.navigateBack({ delta: 1 }),
+            });
+            return;
+          }
+        }
       }
       wx.showToast({
         title: "已保存",

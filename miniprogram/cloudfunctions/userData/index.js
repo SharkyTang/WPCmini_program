@@ -1,13 +1,13 @@
 const cloud = require("wx-server-sdk");
 const {
-  CUSTOMER_NOTIFICATION_COLLECTION,
   FEEDBACK_COLLECTION,
   INQUIRY_COLLECTION,
-  NOTIFICATION_PREFERENCE_COLLECTION,
+  NOTIFICATION_SUBSCRIPTION_COLLECTION,
+  NOTIFICATION_TYPE_KEYS,
   buildFeedbackRecord,
   buildInquiryRecord,
-  normalizeDisabledTypes,
   pickPreferenceRecord,
+  validateSubscriptionGrant,
   validateUserProfileDraft,
   validateFeedbackDraft,
   validateInquiryDraft,
@@ -87,72 +87,72 @@ async function submitFeedback(event, openid) {
   });
 }
 
-async function fetchCustomerNotifications(openid) {
+function getSubscriptionTemplateIds() {
+  return {
+    version_update: trimText(process.env.VERSION_UPDATE_TEMPLATE_ID),
+    product_new: trimText(process.env.PRODUCT_NEW_TEMPLATE_ID),
+  };
+}
+
+async function findSubscription(openid, type) {
   const response = await db
-    .collection(CUSTOMER_NOTIFICATION_COLLECTION)
-    .where({
-      targetOpenId: openid,
-      isVisible: true,
-    })
-    .orderBy("createdAt", "desc")
-    .limit(100)
+    .collection(NOTIFICATION_SUBSCRIPTION_COLLECTION)
+    .where({ openid, type })
+    .limit(1)
     .get();
-
-  return ok({
-    items: response.data || [],
-  });
+  return pickPreferenceRecord(response.data);
 }
 
-async function findNotificationPreference(openid) {
-  const byOpenid = await db
-    .collection(NOTIFICATION_PREFERENCE_COLLECTION)
+async function fetchSubscriptionStatus(openid) {
+  const response = await db
+    .collection(NOTIFICATION_SUBSCRIPTION_COLLECTION)
     .where({ openid })
-    .limit(1)
+    .limit(NOTIFICATION_TYPE_KEYS.length)
     .get();
-  const openidRecord = pickPreferenceRecord(byOpenid.data);
-  if (openidRecord) return openidRecord;
-
-  const byOwner = await db
-    .collection(NOTIFICATION_PREFERENCE_COLLECTION)
-    .where({ _openid: openid })
-    .limit(1)
-    .get();
-  return pickPreferenceRecord(byOwner.data);
-}
-
-async function fetchNotificationPreferences(openid) {
-  const preference = await findNotificationPreference(openid);
+  const subscriptions = (response.data || []).reduce((result, item) => {
+    result[item.type] = {
+      templateId: item.templateId || "",
+      status: item.status || "idle",
+    };
+    return result;
+  }, {});
   return ok({
-    preferenceId: preference ? preference._id || preference.id || "" : "",
-    disabledTypes: normalizeDisabledTypes(preference ? preference.disabledTypes : []),
+    subscriptions,
+    templateIds: getSubscriptionTemplateIds(),
   });
 }
 
-async function saveNotificationPreferences(event, openid) {
-  const preference = await findNotificationPreference(openid);
+async function saveSubscriptionGrant(event, openid) {
+  const templateIds = getSubscriptionTemplateIds();
+  const validation = validateSubscriptionGrant(event, templateIds);
+  if (!validation.valid) return fail(validation.code, validation.message);
+
+  const { type, templateId, status } = validation.data;
+  const subscription = await findSubscription(openid, type);
   const data = {
     openid,
-    disabledTypes: normalizeDisabledTypes(event.disabledTypes || []),
+    type,
+    templateId,
+    status,
+    grantedAt: status === "granted" ? db.serverDate() : null,
+    consumedAt: null,
     updatedAt: db.serverDate(),
   };
 
-  if (preference && (preference._id || preference.id)) {
-    const preferenceId = preference._id || preference.id;
-    await db.collection(NOTIFICATION_PREFERENCE_COLLECTION).doc(preferenceId).update({
+  if (subscription && (subscription._id || subscription.id)) {
+    const subscriptionId = subscription._id || subscription.id;
+    await db.collection(NOTIFICATION_SUBSCRIPTION_COLLECTION).doc(subscriptionId).update({
       data,
     });
-    return ok({ preferenceId });
+  } else {
+    await db.collection(NOTIFICATION_SUBSCRIPTION_COLLECTION).add({
+      data: {
+        ...data,
+        createdAt: db.serverDate(),
+      },
+    });
   }
-
-  const response = await db.collection(NOTIFICATION_PREFERENCE_COLLECTION).add({
-    data: {
-      ...data,
-      createdAt: db.serverDate(),
-    },
-  });
-  return ok({
-    preferenceId: response._id || "",
-  });
+  return fetchSubscriptionStatus(openid);
 }
 
 function toProfileResponse(profile) {
@@ -219,11 +219,8 @@ exports.main = async (event = {}) => {
   try {
     if (action === "submitInquiry") return submitInquiry(event, OPENID);
     if (action === "submitFeedback") return submitFeedback(event, OPENID);
-    if (action === "fetchCustomerNotifications") return fetchCustomerNotifications(OPENID);
-    if (action === "fetchNotificationPreferences") return fetchNotificationPreferences(OPENID);
-    if (action === "saveNotificationPreferences") {
-      return saveNotificationPreferences(event, OPENID);
-    }
+    if (action === "fetchSubscriptionStatus") return fetchSubscriptionStatus(OPENID);
+    if (action === "saveSubscriptionGrant") return saveSubscriptionGrant(event, OPENID);
     if (action === "getProfile") return getUserProfile(OPENID);
     if (action === "saveProfile") return saveUserProfile(event, OPENID);
     return fail("UNKNOWN_ACTION", "未知用户数据操作");

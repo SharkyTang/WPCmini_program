@@ -57,8 +57,35 @@ page {
 
 .field + .form-section-title,
 .visible-row + .form-section-title,
-.home-section-field + .form-section-title {
+.home-section-field + .form-section-title,
+.notification-publish-card + .form-section-title {
   margin-top: 42rpx;
+}
+
+.notification-publish-card {
+  margin: 34rpx 0;
+  padding: 8rpx 24rpx 24rpx;
+  border: 2rpx solid #d8c39f;
+  border-radius: 8rpx;
+  background: #fff8eb;
+}
+
+.notification-toggle-row {
+  padding-bottom: 0;
+}
+
+.notification-draft {
+  margin-top: 20rpx;
+  padding-top: 24rpx;
+  border-top: 2rpx solid #eadcc6;
+}
+
+.notification-draft .field:last-of-type {
+  margin-bottom: 12rpx;
+}
+
+.notification-textarea {
+  min-height: 150rpx;
 }
 
 .state-card {

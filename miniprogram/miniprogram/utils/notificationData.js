@@ -5,12 +5,10 @@ const NOTIFICATION_TYPES = {
   product_new: {
     label: "产品上新",
   },
-  customer_reply: {
-    label: "客服回复",
-  },
 };
 
 const NOTIFICATION_TYPE_KEYS = Object.keys(NOTIFICATION_TYPES);
+const SUBSCRIPTION_STATUSES = ["idle", "granted", "consumed", "rejected", "banned"];
 
 function getNotificationTypeLabel(type) {
   return (NOTIFICATION_TYPES[type] && NOTIFICATION_TYPES[type].label) || "通知";
@@ -56,6 +54,10 @@ function normalizeNotification(record = {}, fallbackType = "") {
     typeLabel: getNotificationTypeLabel(type),
     title: record.title || "消息通知",
     content: record.content || "",
+    version: record.version || "",
+    caseDocId: record.caseDocId || "",
+    targetPage: record.targetPage || "",
+    publishStatus: record.publishStatus || (record.isVisible === false ? "hidden" : "published"),
     createdAt,
     timestamp: getNotificationTimestamp(createdAt),
     timeText: formatNotificationTime(createdAt),
@@ -76,35 +78,30 @@ function normalizeNotifications(records = [], fallbackType = "") {
     });
 }
 
-function normalizeDisabledTypes(disabledTypes = []) {
-  return Array.from(
-    new Set((disabledTypes || []).filter((type) => isKnownNotificationType(type)))
-  );
+function normalizeSubscriptionStatus(status) {
+  return SUBSCRIPTION_STATUSES.includes(status) ? status : "idle";
 }
 
-function isNotificationTypeDisabled(disabledTypes = [], type) {
-  return normalizeDisabledTypes(disabledTypes).includes(type);
-}
-
-function toggleDisabledType(disabledTypes = [], type) {
-  if (!isKnownNotificationType(type)) {
-    return normalizeDisabledTypes(disabledTypes);
-  }
-
-  const normalized = normalizeDisabledTypes(disabledTypes);
-  if (normalized.includes(type)) {
-    return normalized.filter((item) => item !== type);
-  }
-  return [...normalized, type];
+function normalizeSubscriptionState(value = {}) {
+  return NOTIFICATION_TYPE_KEYS.reduce((state, type) => {
+    const item = value[type] || {};
+    state[type] = {
+      type,
+      templateId: item.templateId || "",
+      status: normalizeSubscriptionStatus(item.status),
+      granted: item.status === "granted",
+    };
+    return state;
+  }, {});
 }
 
 module.exports = {
   NOTIFICATION_TYPES,
   NOTIFICATION_TYPE_KEYS,
+  SUBSCRIPTION_STATUSES,
   getNotificationTypeLabel,
   normalizeNotification,
   normalizeNotifications,
-  normalizeDisabledTypes,
-  isNotificationTypeDisabled,
-  toggleDisabledType,
+  normalizeSubscriptionStatus,
+  normalizeSubscriptionState,
 };

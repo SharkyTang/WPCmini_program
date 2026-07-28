@@ -187,6 +187,37 @@
       </view>
     </view>
 
+    <view wx:if="{{!isEdit}}" class="notification-publish-card">
+      <view class="visible-row notification-toggle-row">
+        <view>
+          <view class="field-label">同时发布产品上新通知</view>
+          <view class="field-hint">默认关闭。打开后，站内公告对所有用户可见，并提醒已授权订阅的用户。</view>
+        </view>
+        <switch checked="{{publishProductNotification}}" color="#285f42" bindchange="onPublishNotificationChange" />
+      </view>
+      <view wx:if="{{publishProductNotification}}" class="notification-draft">
+        <view class="field">
+          <view class="field-label">通知标题</view>
+          <input
+            class="text-input"
+            maxlength="80"
+            value="{{productNotificationDraft.title}}"
+            bindinput="onNotificationTitleInput"
+          />
+        </view>
+        <view class="field">
+          <view class="field-label">通知内容</view>
+          <textarea
+            class="textarea-input notification-textarea"
+            maxlength="500"
+            value="{{productNotificationDraft.content}}"
+            bindinput="onNotificationContentInput"
+          />
+        </view>
+        <view class="field-hint">案例会先保存；通知失败不会删除已保存的案例。</view>
+      </view>
+    </view>
+
     <button
       class="save-button"
       loading="{{saving}}"

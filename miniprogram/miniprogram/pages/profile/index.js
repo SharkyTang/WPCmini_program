@@ -19,6 +19,9 @@ const {
 const {
   checkCaseAdminAccess,
 } = require("../../utils/caseAdminService");
+const {
+  checkNotificationAdminAccess,
+} = require("../../utils/notificationAdminService");
 
 const DEFAULT_PROFILE_INFO = {
   nickname: DEFAULT_NICKNAME,
@@ -47,6 +50,8 @@ Page({
     checkingInquiryAdminAccess: false,
     hasCaseAdminAccess: false,
     checkingCaseAdminAccess: false,
+    hasNotificationAdminAccess: false,
+    checkingNotificationAdminAccess: false,
     quickActions: [
       { key: "favorites", iconSrc: "/assets/profile/icon-favorite.png", title: "我的收藏" },
       { key: "history", iconSrc: "/assets/profile/icon-history.png", title: "浏览记录" },
@@ -79,6 +84,7 @@ Page({
     this.loadProfileInfo();
     this.refreshInquiryAdminAccess();
     this.refreshCaseAdminAccess();
+    this.refreshNotificationAdminAccess();
   },
 
   onPullDownRefresh() {
@@ -185,6 +191,20 @@ Page({
 
   openCaseAdmin() {
     wx.navigateTo({ url: "/pages/case-admin/index" });
+  },
+
+  async refreshNotificationAdminAccess() {
+    if (this.data.checkingNotificationAdminAccess) return;
+    this.setData({ checkingNotificationAdminAccess: true });
+    const hasNotificationAdminAccess = await checkNotificationAdminAccess();
+    this.setData({
+      hasNotificationAdminAccess,
+      checkingNotificationAdminAccess: false,
+    });
+  },
+
+  openNotificationAdmin() {
+    wx.navigateTo({ url: "/pages/notification-admin/index" });
   },
 
   handleContact(event) {

@@ -100,11 +100,16 @@ page {
 }
 
 .setting-row {
-  min-height: 78rpx;
+  min-height: 96rpx;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24rpx;
+}
+
+.setting-copy {
+  flex: 1;
+  min-width: 0;
 }
 
 .setting-name {
@@ -119,6 +124,40 @@ page {
   color: #8c6a3f;
   font-size: 22rpx;
   line-height: 1.35;
+}
+
+.subscribe-button {
+  flex: 0 0 192rpx;
+  width: 192rpx;
+  height: 64rpx;
+  margin: 0;
+  padding: 0 12rpx;
+  border-radius: 8rpx;
+  background: #241d16;
+  color: #fffdf9;
+  font-size: 22rpx;
+  line-height: 64rpx;
+  font-weight: 800;
+}
+
+.subscribe-button::after {
+  border: 0;
+}
+
+.subscribe-button[disabled],
+.subscribe-button-done {
+  background: #e5eee8;
+  color: #285f42;
+  opacity: 1;
+}
+
+.settings-footnote {
+  margin-top: 26rpx;
+  padding-top: 22rpx;
+  border-top: 2rpx solid #eee3d4;
+  color: #8c8176;
+  font-size: 21rpx;
+  line-height: 1.5;
 }
 
 .state-shell {
@@ -173,10 +212,6 @@ page {
   background: var(--brand-green);
 }
 
-.notification-customer_reply::before {
-  background: var(--brand-red);
-}
-
 .notification-meta {
   display: flex;
   align-items: center;
@@ -204,11 +239,6 @@ page {
   color: var(--brand-green);
 }
 
-.notification-customer_reply .notification-type {
-  background: var(--brand-red-soft);
-  color: var(--brand-red);
-}
-
 .notification-time {
   color: #a3978a;
   font-size: 20rpx;
@@ -228,4 +258,16 @@ page {
   color: #766b60;
   font-size: 24rpx;
   line-height: 1.55;
+}
+
+.notification-card-link {
+  cursor: pointer;
+}
+
+.notification-link {
+  margin-top: 16rpx;
+  color: #285f42;
+  font-size: 22rpx;
+  line-height: 1.4;
+  font-weight: 800;
 }

@@ -1,15 +1,10 @@
 const {
-  NOTIFICATION_TYPE_KEYS,
-  normalizeDisabledTypes,
   normalizeNotifications,
-  toggleDisabledType,
+  normalizeSubscriptionState,
 } = require("./notificationData");
-const { ensureProfileIdentity } = require("./userService");
 const { callUserData } = require("./userDataService");
 
 const APP_NOTIFICATION_COLLECTION = "app_notifications";
-const CUSTOMER_NOTIFICATION_COLLECTION = "customer_notifications";
-const NOTIFICATION_PREFERENCE_COLLECTION = "notification_preferences";
 
 function getDb() {
   if (!wx.cloud) {
@@ -46,92 +41,29 @@ async function fetchPublicNotifications() {
   }
 }
 
-async function fetchCustomerNotifications() {
-  const identity = await ensureProfileIdentity({
-    redirectToSetup: false,
-    showError: false,
-  });
-  if (!identity.ready) return [];
-
-  try {
-    const result = await callUserData("fetchCustomerNotifications");
-    return normalizeNotifications(result.items || [], "customer_reply");
-  } catch (error) {
-    if (shouldIgnoreMissingCollection(error)) {
-      console.warn("客服回复通知集合未创建", error);
-      return [];
-    }
-    throw error;
-  }
-}
-
-async function fetchNotificationPreferences() {
-  const identity = await ensureProfileIdentity({
-    redirectToSetup: false,
-    showError: false,
-  });
-  if (!identity.ready) {
-    return {
-      hasIdentity: false,
-      preferenceId: "",
-      disabledTypes: [],
-    };
-  }
-
-  try {
-    const preference = await callUserData("fetchNotificationPreferences");
-    return {
-      hasIdentity: true,
-      preferenceId: preference.preferenceId || "",
-      disabledTypes: normalizeDisabledTypes(preference.disabledTypes || []),
-    };
-  } catch (error) {
-    if (shouldIgnoreMissingCollection(error)) {
-      console.warn("通知设置集合未创建", error);
-      return {
-        hasIdentity: true,
-        preferenceId: "",
-        disabledTypes: [],
-      };
-    }
-    throw error;
-  }
-}
-
-async function saveNotificationPreferences(preferenceId, disabledTypes) {
-  const result = await callUserData("saveNotificationPreferences", {
-    disabledTypes: normalizeDisabledTypes(disabledTypes),
-  });
-  return result.preferenceId || preferenceId || "";
-}
-
-async function toggleNotificationPreference(type) {
-  if (!NOTIFICATION_TYPE_KEYS.includes(type)) {
-    return fetchNotificationPreferences();
-  }
-
-  const preferences = await fetchNotificationPreferences({ requireIdentity: true });
-  if (!preferences.hasIdentity) return preferences;
-
-  const nextDisabledTypes = toggleDisabledType(preferences.disabledTypes, type);
-  const preferenceId = await saveNotificationPreferences(
-    preferences.preferenceId,
-    nextDisabledTypes
-  );
-
+async function fetchSubscriptionStatus() {
+  const result = await callUserData("fetchSubscriptionStatus");
   return {
-    hasIdentity: true,
-    preferenceId,
-    disabledTypes: nextDisabledTypes,
+    subscriptions: normalizeSubscriptionState(result.subscriptions || {}),
+    templateIds: result.templateIds || {},
+  };
+}
+
+async function saveSubscriptionGrant(type, templateId, status) {
+  const result = await callUserData("saveSubscriptionGrant", {
+    type,
+    templateId,
+    status,
+  });
+  return {
+    subscriptions: normalizeSubscriptionState(result.subscriptions || {}),
+    templateIds: result.templateIds || {},
   };
 }
 
 module.exports = {
   APP_NOTIFICATION_COLLECTION,
-  CUSTOMER_NOTIFICATION_COLLECTION,
-  NOTIFICATION_PREFERENCE_COLLECTION,
   fetchPublicNotifications,
-  fetchCustomerNotifications,
-  fetchNotificationPreferences,
-  toggleNotificationPreference,
+  fetchSubscriptionStatus,
+  saveSubscriptionGrant,
 };

@@ -46,6 +46,12 @@ function loadProfilePage(wxMock = {}, options = {}) {
       if (moduleName === "../../utils/caseAdminService") {
         return { checkCaseAdminAccess: options.checkCaseAdminAccess || (async () => false) };
       }
+      if (moduleName === "../../utils/notificationAdminService") {
+        return {
+          checkNotificationAdminAccess:
+            options.checkNotificationAdminAccess || (async () => false),
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     console,
@@ -163,12 +169,18 @@ await test("profile shows admin entries only when access is granted", async () =
   let navigatedUrl = "";
   const page = loadProfilePage(
     { navigateTo(options) { navigatedUrl = options.url; } },
-    { checkCaseAdminAccess: async () => true, checkInquiryAdminAccess: async () => true }
+    {
+      checkCaseAdminAccess: async () => true,
+      checkInquiryAdminAccess: async () => true,
+      checkNotificationAdminAccess: async () => true,
+    }
   );
   await page.refreshCaseAdminAccess();
   await page.refreshInquiryAdminAccess();
+  await page.refreshNotificationAdminAccess();
   page.openCaseAdmin();
   assert.equal(page.data.hasCaseAdminAccess, true);
   assert.equal(page.data.hasInquiryAdminAccess, true);
+  assert.equal(page.data.hasNotificationAdminAccess, true);
   assert.equal(navigatedUrl, "/pages/case-admin/index");
 });

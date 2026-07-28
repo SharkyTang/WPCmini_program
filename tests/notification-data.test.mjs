@@ -21,9 +21,7 @@ vm.runInNewContext(source, sandbox, { filename: modulePath });
 const {
   getNotificationTypeLabel,
   normalizeNotifications,
-  normalizeDisabledTypes,
-  isNotificationTypeDisabled,
-  toggleDisabledType,
+  normalizeSubscriptionState,
 } = sandbox.module.exports;
 
 function test(name, fn) {
@@ -43,7 +41,7 @@ function plain(value) {
 test("maps notification type labels", () => {
   assert.equal(getNotificationTypeLabel("version_update"), "版本更新");
   assert.equal(getNotificationTypeLabel("product_new"), "产品上新");
-  assert.equal(getNotificationTypeLabel("customer_reply"), "客服回复");
+  assert.equal(getNotificationTypeLabel("customer_reply"), "通知");
   assert.equal(getNotificationTypeLabel("unknown"), "通知");
 });
 
@@ -71,25 +69,34 @@ test("sorts notifications by created time descending", () => {
   ]);
 });
 
-test("normalizes disabled types and ignores invalid values", () => {
-  const disabled = normalizeDisabledTypes([
-    "product_new",
-    "",
-    "unknown",
-    "product_new",
-    "customer_reply",
-  ]);
+test("normalizes one-time subscription states for public notification types", () => {
+  const state = normalizeSubscriptionState({
+    product_new: {
+      templateId: "product_template",
+      status: "granted",
+    },
+    version_update: {
+      templateId: "version_template",
+      status: "unknown",
+    },
+    customer_reply: {
+      templateId: "legacy",
+      status: "granted",
+    },
+  });
 
-  assert.deepEqual(plain(disabled), ["product_new", "customer_reply"]);
-});
-
-test("detects and toggles disabled notification types", () => {
-  assert.equal(isNotificationTypeDisabled(["product_new"], "product_new"), true);
-  assert.equal(isNotificationTypeDisabled(["product_new"], "version_update"), false);
-
-  assert.deepEqual(plain(toggleDisabledType(["product_new"], "product_new")), []);
-  assert.deepEqual(plain(toggleDisabledType(["product_new"], "customer_reply")), [
-    "product_new",
-    "customer_reply",
-  ]);
+  assert.deepEqual(plain(state), {
+    version_update: {
+      type: "version_update",
+      templateId: "version_template",
+      status: "idle",
+      granted: false,
+    },
+    product_new: {
+      type: "product_new",
+      templateId: "product_template",
+      status: "granted",
+      granted: true,
+    },
+  });
 });

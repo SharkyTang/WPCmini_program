@@ -39,6 +39,12 @@ function createQuery(collectionName, calls, records = []) {
 function loadUserDataFunction(options = {}) {
   const calls = [];
   const added = [];
+  const recordsByCollection = {
+    ...(options.recordsByCollection || {}),
+  };
+  if (options.records) {
+    recordsByCollection.user_profiles = options.records;
+  }
   const mockCloud = {
     DYNAMIC_CURRENT_ENV: "dynamic-env",
     init() {},
@@ -53,16 +59,24 @@ function loadUserDataFunction(options = {}) {
           return "server-date";
         },
         collection(collectionName) {
+          const records = recordsByCollection[collectionName] || [];
+          recordsByCollection[collectionName] = records;
           return {
-            ...createQuery(collectionName, calls, options.records || []),
+            ...createQuery(collectionName, calls, records),
             async add(payload) {
               added.push({ collectionName, payload });
+              records.push({
+                _id: `${collectionName}_new`,
+                ...(payload.data || {}),
+              });
               return { _id: `${collectionName}_new` };
             },
             doc(id) {
               return {
                 async update(payload) {
                   calls.push({ collectionName, type: "update", id, payload });
+                  const record = records.find((item) => item._id === id);
+                  if (record) Object.assign(record, payload.data || {});
                   return {};
                 },
               };
@@ -76,6 +90,12 @@ function loadUserDataFunction(options = {}) {
     module: { exports: {} },
     exports: {},
     console,
+    process: {
+      env: {
+        VERSION_UPDATE_TEMPLATE_ID: "version_template",
+        PRODUCT_NEW_TEMPLATE_ID: "product_template",
+      },
+    },
     require(moduleName) {
       if (moduleName === "wx-server-sdk") return mockCloud;
       if (moduleName === "./userDataLogic") return logic;
@@ -103,25 +123,54 @@ async function test(name, fn) {
   }
 }
 
-await test("fetchCustomerNotifications uses server openid as targetOpenId", async () => {
+await test("fetchSubscriptionStatus uses server openid and returns configured templates", async () => {
   const { main, calls } = loadUserDataFunction({
     openid: "server_openid",
+    recordsByCollection: {
+      notification_subscriptions: [{
+        _id: "subscription_1",
+        openid: "server_openid",
+        type: "product_new",
+        templateId: "product_template",
+        status: "granted",
+      }],
+    },
   });
 
   const result = await main({
-    action: "fetchCustomerNotifications",
+    action: "fetchSubscriptionStatus",
     openid: "spoofed",
   });
 
   assert.equal(result.ok, true);
   assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), {
-    collectionName: "customer_notifications",
+    collectionName: "notification_subscriptions",
     type: "where",
     condition: {
-      targetOpenId: "server_openid",
-      isVisible: true,
+      openid: "server_openid",
     },
   });
+  assert.equal(result.subscriptions.product_new.status, "granted");
+  assert.equal(result.templateIds.version_update, "version_template");
+});
+
+await test("saveSubscriptionGrant stores server openid and normalized status", async () => {
+  const { main, added } = loadUserDataFunction({
+    openid: "server_openid",
+  });
+
+  const result = await main({
+    action: "saveSubscriptionGrant",
+    type: "product_new",
+    templateId: "product_template",
+    status: "accept",
+    openid: "spoofed",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(added[0].collectionName, "notification_subscriptions");
+  assert.equal(added[0].payload.data.openid, "server_openid");
+  assert.equal(added[0].payload.data.status, "granted");
 });
 
 await test("submitInquiry stores server openid and sanitized fields", async () => {

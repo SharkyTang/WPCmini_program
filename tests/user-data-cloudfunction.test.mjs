@@ -13,7 +13,7 @@ const logic = require(resolve(
 const {
   buildFeedbackRecord,
   buildInquiryRecord,
-  normalizeDisabledTypes,
+  validateSubscriptionGrant,
   validateUserProfileDraft,
   validateFeedbackDraft,
   validateInquiryDraft,
@@ -84,10 +84,41 @@ test("builds feedback records without trusting client identity fields", () => {
   assert.deepEqual(plain(record.systemInfo), {});
 });
 
-test("normalizes notification preference disabled types", () => {
+test("validates subscription grants against the configured template", () => {
+  const templates = {
+    version_update: "version_template",
+    product_new: "product_template",
+  };
   assert.deepEqual(
-    plain(normalizeDisabledTypes(["product_new", "unknown", "product_new", "customer_reply"])),
-    ["product_new", "customer_reply"]
+    plain(validateSubscriptionGrant({
+      type: "product_new",
+      templateId: "product_template",
+      status: "accept",
+    }, templates)),
+    {
+      valid: true,
+      data: {
+        type: "product_new",
+        templateId: "product_template",
+        status: "granted",
+      },
+    }
+  );
+  assert.equal(
+    validateSubscriptionGrant({
+      type: "customer_reply",
+      templateId: "legacy",
+      status: "accept",
+    }, templates).code,
+    "INVALID_SUBSCRIPTION"
+  );
+  assert.equal(
+    validateSubscriptionGrant({
+      type: "product_new",
+      templateId: "wrong",
+      status: "accept",
+    }, templates).code,
+    "INVALID_TEMPLATE"
   );
 });
 

@@ -213,8 +213,16 @@ await test("notification and inquiry admin pages import planned WeUI components"
     readFileSync(resolve(miniRoot, "pages/inquiry-admin/detail.json"), "utf8")
   );
   const detailWxml = readFileSync(resolve(miniRoot, "pages/inquiry-admin/detail.wxml"), "utf8");
+  const notificationAdminJson = JSON.parse(
+    readFileSync(resolve(miniRoot, "pages/notification-admin/index.json"), "utf8")
+  );
+  const notificationEditJson = JSON.parse(
+    readFileSync(resolve(miniRoot, "pages/notification-admin/edit.json"), "utf8")
+  );
 
   assert.equal(notificationsJson.usingComponents["mp-msg"], "weui-miniprogram/msg/msg");
+  assert.equal(notificationAdminJson.usingComponents["mp-dialog"], "weui-miniprogram/dialog/dialog");
+  assert.equal(notificationEditJson.usingComponents["mp-toptips"], "weui-miniprogram/toptips/toptips");
   assert.equal(detailJson.usingComponents["mp-dialog"], "weui-miniprogram/dialog/dialog");
   assert.equal(detailJson.usingComponents["mp-toptips"], "weui-miniprogram/toptips/toptips");
   assert.equal(detailWxml.includes("<mp-dialog"), true);

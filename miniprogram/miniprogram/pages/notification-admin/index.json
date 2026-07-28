@@ -1,0 +1,7 @@
+{
+  "navigationBarTitleText": "通知管理",
+  "enablePullDownRefresh": true,
+  "usingComponents": {
+    "mp-dialog": "weui-miniprogram/dialog/dialog"
+  }
+}
