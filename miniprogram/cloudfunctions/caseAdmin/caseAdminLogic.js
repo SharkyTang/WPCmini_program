@@ -157,6 +157,18 @@ function getHomepageDisplayLimit(slot) {
   return HOME_DISPLAY_LIMITS[normalizeHomepageDisplaySlot(slot)] || 0;
 }
 
+function getActiveHomepageSlots(item = {}) {
+  if (!item || item.isVisible !== true) return [];
+  return uniqueValues(normalizeValues(item.homeSections))
+    .map(normalizeHomepageDisplaySlot)
+    .filter(Boolean);
+}
+
+function getActivatedHomepageSlots(existing, nextItem = {}) {
+  const previousSlots = new Set(getActiveHomepageSlots(existing));
+  return getActiveHomepageSlots(nextItem).filter((slot) => !previousSlots.has(slot));
+}
+
 function generateCaseId(now = Date.now()) {
   return `${CASE_ID_PREFIX}${now}`;
 }
@@ -429,7 +441,8 @@ function buildHomepageDisplayItems(cases = [], banners = [], options = {}) {
     );
   }
 
-  const displayedItems = items.slice(0, limit).map((item, index) => {
+  const limitedItems = options.applyLimit === false ? items : items.slice(0, limit);
+  const displayedItems = limitedItems.map((item, index) => {
     const displayOrder = index + 1;
     return {
       ...item,
@@ -438,6 +451,47 @@ function buildHomepageDisplayItems(cases = [], banners = [], options = {}) {
     };
   });
   return filterHomepageDisplayItems(displayedItems, options.keyword);
+}
+
+function validateHomepageDisplayCapacity(cases = [], banners = [], candidate = {}, options = {}) {
+  const excludedId = trimText(options.excludedId);
+  const candidateId = trimText(candidate._id || candidate.id);
+  const slots = uniqueValues(
+    options.slots === undefined ? getActiveHomepageSlots(candidate) : normalizeValues(options.slots)
+  )
+    .map(normalizeHomepageDisplaySlot)
+    .filter(Boolean);
+  if (!slots.length) return { valid: true };
+
+  const nextCases = cases
+    .filter((item) => {
+      const itemId = trimText(item && (item._id || item.id));
+      return !excludedId || itemId !== excludedId;
+    })
+    .concat(candidate && candidate.isVisible === true
+      ? [{ ...candidate, _id: candidateId || excludedId || candidate._id }]
+      : []);
+
+  for (const slot of slots) {
+    const limit = getHomepageDisplayLimit(slot);
+    const items = buildHomepageDisplayItems(nextCases, banners, {
+      slot,
+      applyLimit: false,
+    });
+    if (items.length > limit) {
+      const label = HOME_DISPLAY_LABELS[slot];
+      const unit = slot === "banner" ? "张" : "个";
+      return {
+        valid: false,
+        code: "HOME_DISPLAY_LIMIT_REACHED",
+        slot,
+        limit,
+        message: `${label}最多展示 ${limit} ${unit}，请先取消其他案例${slot === "banner" ? "或轮播图" : ""}的${label}显示`,
+      };
+    }
+  }
+
+  return { valid: true };
 }
 
 module.exports = {
@@ -462,6 +516,8 @@ module.exports = {
   filterHomepageDisplayItems,
   generateCaseId,
   generateSequentialCaseId,
+  getActivatedHomepageSlots,
+  getActiveHomepageSlots,
   getAdminOpenidsFromEnv,
   getCaseIdNumber,
   isAdminOpenid,
@@ -475,4 +531,5 @@ module.exports = {
   pickAllowedCaseFields,
   sanitizeCasePayload,
   trimText,
+  validateHomepageDisplayCapacity,
 };

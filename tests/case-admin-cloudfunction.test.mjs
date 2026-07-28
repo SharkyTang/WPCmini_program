@@ -18,12 +18,14 @@ const {
   buildHomepageDisplayItems,
   filterCaseItems,
   generateSequentialCaseId,
+  getActivatedHomepageSlots,
   getAdminOpenidsFromEnv,
   getCaseIdNumber,
   isAdminOpenid,
   normalizeCloudFileIds,
   pickAllowedCaseFields,
   sanitizeCasePayload,
+  validateHomepageDisplayCapacity,
 } = logic;
 
 function test(name, fn) {
@@ -141,6 +143,54 @@ test("new cases stay hidden unless visible flag is explicitly enabled", () => {
   assert.deepEqual(plain(omitted.data.homeSections), { values: [] });
   assert.equal(disabled.valid, true);
   assert.equal(disabled.data.isVisible, false);
+});
+
+test("detects homepage slots that become active", () => {
+  assert.deepEqual(
+    plain(getActivatedHomepageSlots(
+      { isVisible: true, homeSections: { values: ["latest"] } },
+      { isVisible: true, homeSections: { values: ["popular", "latest"] } }
+    )),
+    ["popular"]
+  );
+  assert.deepEqual(
+    plain(getActivatedHomepageSlots(
+      { isVisible: false, homeSections: { values: ["banner", "popular"] } },
+      { isVisible: true, homeSections: { values: ["banner", "popular"] } }
+    )),
+    ["banner", "popular"]
+  );
+});
+
+test("rejects homepage selections beyond their visible limits", () => {
+  const popularCases = Array.from({ length: HOME_DISPLAY_LIMITS.popular }, (_, index) => ({
+    _id: `popular_${index}`,
+    caseId: `case_popular_${index}`,
+    isVisible: true,
+    sortOrder: index,
+    homeSections: { values: ["popular"] },
+  }));
+  const candidate = {
+    _id: "candidate",
+    caseId: "case_candidate",
+    isVisible: true,
+    sortOrder: 99,
+    homeSections: { values: ["popular", "latest"] },
+  };
+
+  const result = validateHomepageDisplayCapacity(popularCases, [], candidate, {
+    slots: ["popular"],
+  });
+  assert.equal(result.valid, false);
+  assert.equal(result.code, "HOME_DISPLAY_LIMIT_REACHED");
+  assert.equal(result.slot, "popular");
+  assert.equal(result.limit, HOME_DISPLAY_LIMITS.popular);
+
+  const hiddenResult = validateHomepageDisplayCapacity(popularCases, [], {
+    ...candidate,
+    isVisible: false,
+  });
+  assert.equal(hiddenResult.valid, true);
 });
 
 test("keeps manual sort order when creating cases", () => {

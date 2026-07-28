@@ -119,6 +119,7 @@ test("case admin edit form shows home section controls after visibility switch",
   assert.ok(homeSectionIndex > visibleIndex);
   assert.equal(wxml.includes("optionViews.homeSections"), true);
   assert.equal(wxml.includes("不勾选仍可在分类页显示"), true);
+  assert.equal(wxml.includes("轮播最多 5 张、热门最多 4 个、最新最多 6 个"), true);
 });
 
 test("builds selected option view models for case admin form chips", () => {

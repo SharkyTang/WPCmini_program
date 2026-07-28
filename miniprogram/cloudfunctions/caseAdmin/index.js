@@ -9,6 +9,7 @@ const {
   buildHomepageDisplayItems,
   filterCaseItems,
   generateSequentialCaseId,
+  getActivatedHomepageSlots,
   getCaseIdNumber,
   isAdminOpenid,
   normalizeCloudFileIds,
@@ -18,6 +19,7 @@ const {
   normalizeVisibilityFilter,
   sanitizeCasePayload,
   trimText,
+  validateHomepageDisplayCapacity,
 } = require("./caseAdminLogic");
 
 cloud.init({
@@ -137,6 +139,31 @@ async function getCreateCaseDefaults() {
   };
 }
 
+async function validateHomepageCapacity(nextCase, slots, excludedId = "") {
+  if (!slots.length) return null;
+  const [caseResponse, bannerResponse] = await Promise.all([
+    db
+      .collection(CASE_COLLECTION)
+      .where({ isVisible: true })
+      .field({ _id: true, caseId: true, homeSections: true, sortOrder: true, isVisible: true })
+      .limit(SEARCH_FETCH_LIMIT)
+      .get(),
+    db
+      .collection(BANNER_COLLECTION)
+      .where({ isVisible: true })
+      .field({ _id: true, caseId: true, image: true, sortOrder: true, isVisible: true })
+      .limit(SEARCH_FETCH_LIMIT)
+      .get(),
+  ]);
+  const validation = validateHomepageDisplayCapacity(
+    caseResponse.data || [],
+    bannerResponse.data || [],
+    nextCase,
+    { slots, excludedId }
+  );
+  return validation.valid ? null : fail(validation.code, validation.message);
+}
+
 function buildFileIdSet(records = [], field) {
   return new Set(
     records
@@ -230,6 +257,11 @@ async function createCase(event, openid) {
   if (!result.valid) return fail(result.code, result.message);
   const pinnedError = await validatePinnedCapacity(result.data.isPinned);
   if (pinnedError) return pinnedError;
+  const homepageError = await validateHomepageCapacity(
+    result.data,
+    getActivatedHomepageSlots(null, result.data)
+  );
+  if (homepageError) return homepageError;
 
   const response = await db.collection(CASE_COLLECTION).add({
     data: {
@@ -261,6 +293,17 @@ async function updateCase(event, openid) {
     : existing.isPinned === true;
   const pinnedError = await validatePinnedCapacity(nextPinned, id);
   if (pinnedError) return pinnedError;
+  const nextCase = {
+    ...existing,
+    ...result.data,
+    _id: id,
+  };
+  const homepageError = await validateHomepageCapacity(
+    nextCase,
+    getActivatedHomepageSlots(existing, nextCase),
+    id
+  );
+  if (homepageError) return homepageError;
 
   await db.collection(CASE_COLLECTION).doc(id).update({
     data: {
@@ -279,6 +322,19 @@ async function updateCase(event, openid) {
 async function setCaseVisibility(event, openid) {
   const id = trimText(event.id);
   if (!id) return fail("INVALID_ID", "缺少案例 ID");
+  const existing = await getCaseById(id);
+  if (!existing) return fail("CASE_NOT_FOUND", "案例不存在或已删除");
+  const nextCase = {
+    ...existing,
+    _id: id,
+    isVisible: event.isVisible === true,
+  };
+  const homepageError = await validateHomepageCapacity(
+    nextCase,
+    getActivatedHomepageSlots(existing, nextCase),
+    id
+  );
+  if (homepageError) return homepageError;
 
   await db.collection(CASE_COLLECTION).doc(id).update({
     data: {

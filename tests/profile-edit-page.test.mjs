@@ -55,6 +55,7 @@ async function test(name, fn) {
 
 await test("setup page exposes the native avatar chooser and nickname input", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
+  const wxss = readFileSync(resolve(__dirname, "../miniprogram/miniprogram/pages/profile/edit/index.wxss"), "utf8");
   const pageJson = JSON.parse(readFileSync(jsonPath, "utf8"));
   assert.equal(wxml.includes("profile-header"), true);
   assert.equal(wxml.includes("profile-card-shell"), true);
@@ -67,6 +68,14 @@ await test("setup page exposes the native avatar chooser and nickname input", ()
   assert.equal(pageJson.usingComponents["mp-toptips"], "weui-miniprogram/toptips/toptips");
   assert.equal(wxml.includes("<mp-toptips"), true);
   assert.equal(wxml.includes("nickname-count"), true);
+  assert.match(
+    wxss,
+    /\.profile-row-nickname\s*\{[\s\S]*?grid-template-columns:\s*100rpx minmax\(0,\s*1fr\);[\s\S]*?align-items:\s*start;/
+  );
+  assert.match(
+    wxss,
+    /\.profile-row-nickname \.profile-label\s*\{[\s\S]*?height:\s*80rpx;[\s\S]*?line-height:\s*80rpx;/
+  );
 });
 
 await test("setup mode uses a legacy nickname as a draft without treating it as completed", async () => {

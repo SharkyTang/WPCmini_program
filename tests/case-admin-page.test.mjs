@@ -15,6 +15,7 @@ function loadCaseAdminPage(options = {}) {
     deletes: [],
     fetches: [],
     homepageFetches: [],
+    modals: [],
     toasts: [],
   };
   const sandbox = {
@@ -58,7 +59,10 @@ function loadCaseAdminPage(options = {}) {
             calls.homepageFetches.push(query);
             return { items: [], slot: query.slot };
           },
-          setCaseVisibility: async () => ({}),
+          setCaseVisibility: async () => {
+            if (options.visibilityError) throw options.visibilityError;
+            return {};
+          },
         };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
@@ -71,6 +75,7 @@ function loadCaseAdminPage(options = {}) {
       : console,
     wx: {
       showModal(modalOptions) {
+        calls.modals.push(modalOptions);
         options.onShowModal && options.onShowModal(modalOptions);
       },
       showToast(toastOptions) {
@@ -201,4 +206,21 @@ await test("delete failure shows a clear toast", async () => {
   assert.deepEqual(calls.deletes, ["case_doc_1"]);
   assert.equal(calls.toasts[0].title, "删除失败，请稍后重试");
   assert.deepEqual(calls.fetches, []);
+});
+
+await test("homepage capacity errors explain why visibility cannot be restored", async () => {
+  const error = new Error("热门产品最多展示 4 个，请先取消其他案例的热门产品显示");
+  error.code = "HOME_DISPLAY_LIMIT_REACHED";
+  const { page, calls } = loadCaseAdminPage({
+    visibilityError: error,
+    silentConsole: true,
+  });
+
+  await page.performCaseVisibility("hidden_cat", true);
+
+  assert.equal(calls.modals.length, 1);
+  assert.equal(calls.modals[0].title, "首页展示名额已满");
+  assert.equal(calls.modals[0].content, error.message);
+  assert.equal(calls.modals[0].showCancel, false);
+  assert.deepEqual(calls.toasts, []);
 });

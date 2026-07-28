@@ -100,6 +100,12 @@ function loadCaseAdminFunction(options = {}) {
           const records = collections[collectionName] || [];
           return {
             ...createQuery(collectionName, records, calls),
+            async add(payload) {
+              const id = `created_${records.length + 1}`;
+              records.push({ _id: id, ...clone(payload.data || {}) });
+              calls.push({ collectionName, type: "add", id, payload });
+              return { _id: id };
+            },
             doc(id) {
               return {
                 async get() {
@@ -264,6 +270,89 @@ await test("createCase rejects the twenty-first configured pinned case", async (
 
   assert.equal(result.ok, false);
   assert.equal(result.code, "PINNED_LIMIT_REACHED");
+});
+
+await test("createCase reports when the homepage popular slot is full", async () => {
+  const cases = Array.from({ length: logic.HOME_DISPLAY_LIMITS.popular }, (_, index) => ({
+    _id: `popular_${index}`,
+    caseId: `case_00${index + 1}`,
+    coverImage: `cloud://env/popular-${index}.jpg`,
+    isVisible: true,
+    sortOrder: index + 1,
+    homeSections: { values: ["popular"] },
+  }));
+  const { main, collections } = loadCaseAdminFunction({ cases });
+
+  const result = await main({
+    action: "createCase",
+    case: {
+      title: "小猫案例",
+      galleryImages: ["cloud://env/cat.jpg"],
+      packageTypes: ["礼盒"],
+      homeSections: ["popular"],
+      isVisible: true,
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "HOME_DISPLAY_LIMIT_REACHED");
+  assert.equal(result.message.includes("热门产品最多展示 4 个"), true);
+  assert.equal(collections.wine_packaging.length, logic.HOME_DISPLAY_LIMITS.popular);
+});
+
+await test("hidden cases can reserve homepage selections without using display capacity", async () => {
+  const cases = Array.from({ length: logic.HOME_DISPLAY_LIMITS.popular }, (_, index) => ({
+    _id: `popular_${index}`,
+    caseId: `case_00${index + 1}`,
+    isVisible: true,
+    homeSections: { values: ["popular"] },
+  }));
+  const { main, collections } = loadCaseAdminFunction({ cases });
+
+  const result = await main({
+    action: "createCase",
+    case: {
+      title: "隐藏小猫案例",
+      galleryImages: ["cloud://env/cat.jpg"],
+      packageTypes: ["礼盒"],
+      homeSections: ["popular"],
+      isVisible: false,
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(collections.wine_packaging.length, logic.HOME_DISPLAY_LIMITS.popular + 1);
+});
+
+await test("restoring a hidden case reports when its homepage slot is full", async () => {
+  const cases = [
+    ...Array.from({ length: logic.HOME_DISPLAY_LIMITS.popular }, (_, index) => ({
+      _id: `popular_${index}`,
+      caseId: `case_00${index + 1}`,
+      isVisible: true,
+      homeSections: { values: ["popular"] },
+    })),
+    {
+      _id: "hidden_cat",
+      caseId: "case_099",
+      isVisible: false,
+      homeSections: { values: ["popular"] },
+    },
+  ];
+  const { main, calls } = loadCaseAdminFunction({ cases });
+
+  const result = await main({
+    action: "setCaseVisibility",
+    id: "hidden_cat",
+    isVisible: true,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "HOME_DISPLAY_LIMIT_REACHED");
+  assert.equal(
+    calls.some((call) => call.type === "update" && call.id === "hidden_cat"),
+    false
+  );
 });
 
 await test("homepage display endpoint is admin-only and returns the active homepage slot", async () => {

@@ -255,6 +255,15 @@ Page({
       this.loadCases({ reset: true });
     } catch (error) {
       console.warn("更新案例显示状态失败", error);
+      if (error.code === "HOME_DISPLAY_LIMIT_REACHED") {
+        wx.showModal({
+          title: "首页展示名额已满",
+          content: error.message || "请先取消其他案例的对应首页展示位置",
+          showCancel: false,
+          confirmText: "知道了",
+        });
+        return;
+      }
       wx.showToast({
         title: "操作失败，请稍后重试",
         icon: "none",

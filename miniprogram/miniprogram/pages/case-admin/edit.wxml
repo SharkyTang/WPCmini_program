@@ -172,7 +172,7 @@
 
     <view class="field home-section-field">
       <view class="field-label">首页展示位置</view>
-      <view class="field-hint">打开前台显示后，勾选才会出现在首页对应位置；不勾选仍可在分类页显示。</view>
+      <view class="field-hint">不勾选仍可在分类页显示。轮播最多 5 张、热门最多 4 个、最新最多 6 个；名额已满时需先取消其他案例的对应展示。</view>
       <view class="chip-grid">
         <view
           wx:for="{{optionViews.homeSections}}"

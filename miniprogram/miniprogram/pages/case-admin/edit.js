@@ -372,9 +372,10 @@ Page({
       }, 350);
     } catch (error) {
       console.warn("保存案例失败", error);
-      this.showTopTips("保存失败，请稍后重试");
+      const message = error.message || "保存失败，请稍后重试";
+      this.showTopTips(message);
       wx.showToast({
-        title: "保存失败，请稍后重试",
+        title: error.code === "HOME_DISPLAY_LIMIT_REACHED" ? "首页展示名额已满" : "保存失败，请稍后重试",
         icon: "none",
       });
     } finally {
