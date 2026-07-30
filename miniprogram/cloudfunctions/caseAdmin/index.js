@@ -342,14 +342,26 @@ async function listCases(event) {
 }
 
 async function getAdminConfig(actor) {
-  const cases = await fetchAllCases();
-  const homeSectionOrders = Object.keys(HOME_DISPLAY_LIMITS).reduce((orders, slot) => {
-    orders[slot] = buildHomepageDisplayItems(cases, [], {
-      slot,
-      applyLimit: false,
-    }).map((item) => item.id);
+  const emptyHomeSectionOrders = Object.keys(HOME_DISPLAY_LIMITS).reduce((orders, slot) => {
+    orders[slot] = [];
     return orders;
   }, {});
+  let homeSectionOrders = emptyHomeSectionOrders;
+  try {
+    const cases = await fetchAllCases();
+    homeSectionOrders = Object.keys(HOME_DISPLAY_LIMITS).reduce((orders, slot) => {
+      orders[slot] = buildHomepageDisplayItems(cases, [], {
+        slot,
+        applyLimit: false,
+      }).map((item) => item.id);
+      return orders;
+    }, {});
+  } catch (error) {
+    // Configuration and the write gate must remain observable even while the
+    // case collection is unavailable. The list endpoint reports the database
+    // failure separately instead of misleading the operator with read-only UI.
+    console.error("caseAdmin config case scan error", error);
+  }
   const writeEnabled = actor && actor.type === "cloudbase_uid"
     ? isWebWriteEnabled(process.env.ADMIN_WEB_WRITE_ENABLED)
     : true;
@@ -1692,22 +1704,24 @@ exports.main = async (event = {}) => {
 
   try {
     if (action === "getAdminConfig") return await getAdminConfig(actor);
-    if (action === "listCases") return listCases(event);
-    if (action === "listCasesV2") return listCasesV2(event);
-    if (action === "listRecentCases") return listRecentCases(event);
-    if (action === "listHomepageDisplay") return listHomepageDisplay(event);
-    if (action === "getCase") return getCase(event);
-    if (action === "getCaseImageUrls") return getCaseImageUrls(event);
-    if (action === "createCase") return createCase(event, actor);
-    if (action === "updateCase") return updateCase(event, actor);
-    if (action === "batchPatchCases") return batchPatchCases(event, actor);
-    if (action === "moveCasesToTrash") return moveCasesToTrash(event, actor);
-    if (action === "restoreCases") return restoreCases(event, actor);
-    if (action === "reorderCases") return reorderCases(event, actor);
-    if (action === "setHomeSectionOrder") return setHomeSectionOrder(event, actor);
-    if (action === "setCaseVisibility") return setCaseVisibility(event, actor);
-    if (action === "deleteCase") return deleteCase(event, actor);
-    if (action === "cleanupUnreferencedFiles") return cleanupUnreferencedFiles(event, actor);
+    if (action === "listCases") return await listCases(event);
+    if (action === "listCasesV2") return await listCasesV2(event);
+    if (action === "listRecentCases") return await listRecentCases(event);
+    if (action === "listHomepageDisplay") return await listHomepageDisplay(event);
+    if (action === "getCase") return await getCase(event);
+    if (action === "getCaseImageUrls") return await getCaseImageUrls(event);
+    if (action === "createCase") return await createCase(event, actor);
+    if (action === "updateCase") return await updateCase(event, actor);
+    if (action === "batchPatchCases") return await batchPatchCases(event, actor);
+    if (action === "moveCasesToTrash") return await moveCasesToTrash(event, actor);
+    if (action === "restoreCases") return await restoreCases(event, actor);
+    if (action === "reorderCases") return await reorderCases(event, actor);
+    if (action === "setHomeSectionOrder") return await setHomeSectionOrder(event, actor);
+    if (action === "setCaseVisibility") return await setCaseVisibility(event, actor);
+    if (action === "deleteCase") return await deleteCase(event, actor);
+    if (action === "cleanupUnreferencedFiles") {
+      return await cleanupUnreferencedFiles(event, actor);
+    }
     return fail("UNKNOWN_ACTION", "未知案例管理操作");
   } catch (error) {
     console.error("caseAdmin error", error);

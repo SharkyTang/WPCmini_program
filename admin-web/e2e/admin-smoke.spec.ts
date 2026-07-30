@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 async function signIn(page: import("@playwright/test").Page) {
-  await page.goto("/login");
+  await page.goto("/#/login");
   await page.getByRole("button", { name: "进入管理后台" }).click();
-  await expect(page).toHaveURL(/\/cases$/);
+  await expect(page).toHaveURL(/\/#\/cases$/);
   await expect(page.getByRole("heading", { name: "案例管理" })).toBeVisible();
 }
 
@@ -34,7 +34,7 @@ test("管理员可浏览全部首版路由并筛选案例", async ({ page }) => 
 
 test("编辑深链刷新可恢复，离开未保存内容会被拦截", async ({ page }) => {
   await signIn(page);
-  await page.goto("/cases/mock-001/edit");
+  await page.goto("/#/cases/mock-001/edit");
   await expect(page.getByRole("heading", { name: "编辑案例" })).toBeVisible();
   await page.reload();
   await expect(page.getByLabel("案例标题")).toHaveValue("山河酿·典藏礼盒");
@@ -45,16 +45,16 @@ test("编辑深链刷新可恢复，离开未保存内容会被拦截", async ({
     "离开并放弃未保存的修改？",
   );
   await page.getByRole("button", { name: "继续编辑" }).click();
-  await expect(page).toHaveURL(/\/cases\/mock-001\/edit$/);
+  await expect(page).toHaveURL(/\/#\/cases\/mock-001\/edit$/);
 
   await page.getByRole("menuitem", { name: "批量上传" }).click();
   await page.getByRole("button", { name: "放弃并离开" }).click();
-  await expect(page).toHaveURL(/\/cases\/upload$/);
+  await expect(page).toHaveURL(/\/#\/cases\/upload$/);
 });
 
 test("上传文件刷新后仍可继续，并可安全退出登录", async ({ page }) => {
   await signIn(page);
-  await page.goto("/cases/upload");
+  await page.goto("/#/cases/upload");
 
   await page.locator('input[type="file"]').setInputFiles({
     name: "刷新恢复案例.png",
@@ -78,5 +78,5 @@ test("上传文件刷新后仍可继续，并可安全退出登录", async ({ pa
 
   await page.getByRole("button", { name: "管理员账户菜单" }).click();
   await page.getByText("退出登录", { exact: true }).click();
-  await expect(page).toHaveURL(/\/login$/);
+  await expect(page).toHaveURL(/\/#\/login$/);
 });

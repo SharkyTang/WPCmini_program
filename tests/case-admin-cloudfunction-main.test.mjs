@@ -50,13 +50,25 @@ function matchesCondition(record, condition = {}) {
   });
 }
 
-function createQuery(collectionName, records, calls, condition = {}) {
+function createQuery(
+  collectionName,
+  records,
+  calls,
+  condition = {},
+  queryGetError = null
+) {
   const query = {
     limitValue: null,
     skipValue: 0,
     where(nextCondition) {
       calls.push({ collectionName, type: "where", condition: nextCondition });
-      return createQuery(collectionName, records, calls, nextCondition);
+      return createQuery(
+        collectionName,
+        records,
+        calls,
+        nextCondition,
+        queryGetError
+      );
     },
     field(fields) {
       calls.push({ collectionName, type: "field", fields });
@@ -77,6 +89,13 @@ function createQuery(collectionName, records, calls, condition = {}) {
       return this;
     },
     async get() {
+      if (
+        queryGetError &&
+        (!queryGetError.collectionName ||
+          queryGetError.collectionName === collectionName)
+      ) {
+        throw new Error(queryGetError.message || "database unavailable");
+      }
       let data = records.filter((record) => matchesCondition(record, condition));
       data = data.slice(this.skipValue);
       if (this.limitValue !== null) data = data.slice(0, this.limitValue);
@@ -137,7 +156,13 @@ function loadCaseAdminFunction(options = {}) {
         collection(collectionName) {
           const records = collections[collectionName] || [];
           return {
-            ...createQuery(collectionName, records, calls),
+            ...createQuery(
+              collectionName,
+              records,
+              calls,
+              {},
+              options.queryGetError
+            ),
             async add(payload) {
               const id = `created_${records.length + 1}`;
               records.push({ _id: id, ...clone(payload.data || {}) });
@@ -550,6 +575,34 @@ await test("identity service failures are not reported as permission denials", a
   const result = await loaded.main({ action: "listCasesV2" });
   assert.equal(result.code, "SERVER_ERROR");
   assert.notEqual(result.code, "FORBIDDEN");
+});
+
+await test("database failures are caught while admin config keeps the write gate observable", async () => {
+  const uid = "web-admin-1";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    queryGetError: {
+      collectionName: "wine_packaging",
+      message: "wine_packaging unavailable",
+    },
+  });
+
+  const config = await loaded.main({ action: "getAdminConfig" });
+  assert.equal(config.ok, true);
+  assert.equal(config.config.writeEnabled, true);
+  assert.deepEqual(clone(config.config.homeSectionOrders), {
+    banner: [],
+    popular: [],
+    latest: [],
+  });
+
+  const list = await loaded.main({ action: "listCasesV2" });
+  assert.equal(list.ok, false);
+  assert.equal(list.code, "SERVER_ERROR");
+  assert.equal(list.message, "wine_packaging unavailable");
 });
 
 await test("web cleanup cannot target another administrator upload directory", async () => {

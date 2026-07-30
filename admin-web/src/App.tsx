@@ -1,7 +1,7 @@
 import { ConfigProvider, Result, Spin } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import {
-  createBrowserRouter,
+  createHashRouter,
   Navigate,
   Outlet,
   RouterProvider,
@@ -91,7 +91,11 @@ export default function App() {
   );
 }
 
-const router = createBrowserRouter([
+// CloudBase default static-hosting domains do not provide a reliable history
+// fallback: rewriting a missing route to index.html can recurse into the same
+// 404 rule. Hash routing keeps every refresh on the real root document while
+// preserving the app's internal route paths and deep-link behavior.
+const router = createHashRouter([
   {
     path: "/login",
     element: <LoginRoute />,

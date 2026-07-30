@@ -56,7 +56,8 @@ type CloudbaseAppLike = {
   callFunction: (input: {
     name: string;
     data: Record<string, unknown>;
-  }) => Promise<{ result?: unknown }>;
+    parse?: boolean;
+  }) => Promise<Record<string, unknown>>;
   storage: {
     from: () => StorageLike;
   };
@@ -80,6 +81,90 @@ function userFromRaw(raw: Record<string, unknown> | undefined): AuthSession {
       label: username || email || "管理员",
     },
   };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function parseFunctionValue(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function cloudFunctionError(
+  value: unknown,
+  fallbackCode = "FUNCTIONS_INVOCATION_FAILED",
+  fallbackMessage = "云函数调用失败",
+): AdminApiError {
+  const raw = asRecord(value) || {};
+  return new AdminApiError(
+    String(raw.code || raw.error || fallbackCode),
+    String(raw.message || raw.error_description || fallbackMessage),
+    raw,
+  );
+}
+
+function unwrapFunctionResponse(response: unknown): ResultEnvelope {
+  const wrapper = asRecord(response);
+  if (!wrapper) {
+    throw new AdminApiError("INVALID_RESPONSE", "云函数返回格式无效", response);
+  }
+
+  if (wrapper.error) throw cloudFunctionError(wrapper.error);
+
+  const topLevelCode = String(wrapper.code ?? "").trim();
+  if (
+    topLevelCode &&
+    !["0", "OK", "SUCCESS"].includes(topLevelCode.toUpperCase())
+  ) {
+    throw cloudFunctionError(wrapper);
+  }
+
+  let candidate: unknown;
+  if (Object.prototype.hasOwnProperty.call(wrapper, "result")) {
+    candidate = wrapper.result;
+  } else if (Object.prototype.hasOwnProperty.call(wrapper, "data")) {
+    const data = asRecord(wrapper.data);
+    if (data?.error) throw cloudFunctionError(data.error);
+    candidate = data && Object.prototype.hasOwnProperty.call(data, "result")
+      ? data.result
+      : wrapper.data;
+  } else if (Object.prototype.hasOwnProperty.call(wrapper, "ok")) {
+    candidate = wrapper;
+  }
+
+  const result = asRecord(parseFunctionValue(candidate));
+  if (!result) {
+    throw new AdminApiError(
+      "INVALID_RESPONSE",
+      "云函数未返回可识别的数据",
+      {
+        responseKeys: Object.keys(wrapper),
+        requestId: wrapper.requestId,
+      },
+    );
+  }
+  if (!Object.prototype.hasOwnProperty.call(result, "ok")) {
+    if (result.code || result.message) throw cloudFunctionError(result);
+    throw new AdminApiError(
+      "INVALID_RESPONSE",
+      "云函数返回内容不完整",
+      {
+        resultKeys: Object.keys(result),
+        requestId: wrapper.requestId,
+      },
+    );
+  }
+  return result as ResultEnvelope;
 }
 
 export class CloudbaseAdminApi implements AdminApi {
@@ -113,14 +198,51 @@ export class CloudbaseAdminApi implements AdminApi {
     functionName: string,
     data: Record<string, unknown>,
   ): Promise<T> {
-    let response: { result?: unknown };
+    let response: Record<string, unknown>;
     try {
-      response = await this.getApp().callFunction({ name: functionName, data });
+      response = await this.getApp().callFunction({
+        name: functionName,
+        data,
+        // Publishable Key requests use CloudBase's gateway endpoint. Without
+        // parse=true, object return values can be exposed as an empty/raw
+        // response and the admin config silently falls back to read-only.
+        parse: true,
+      });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "网络连接失败";
+      if (error instanceof AdminApiError) throw error;
+      const raw = error && typeof error === "object"
+        ? error as Record<string, unknown>
+        : {};
+      const message = error instanceof Error
+        ? error.message
+        : String(raw.message || raw.error_description || "网络连接失败");
+      console.error(
+        `[case-admin] cloud function request failed ${JSON.stringify({
+          functionName,
+          action: String(data.action || ""),
+          code: String(raw.code || raw.error || "NETWORK_ERROR"),
+          message,
+        })}`,
+      );
       throw new AdminApiError("NETWORK_ERROR", message, error);
     }
-    const result = (response.result || {}) as T;
+    let result: ResultEnvelope;
+    try {
+      result = unwrapFunctionResponse(response);
+    } catch (error) {
+      const normalized = error instanceof AdminApiError
+        ? error
+        : cloudFunctionError(error);
+      console.error(
+        `[case-admin] cloud function response failed ${JSON.stringify({
+          functionName,
+          action: String(data.action || ""),
+          code: normalized.code,
+          message: normalized.message,
+        })}`,
+      );
+      throw normalized;
+    }
     if (result.ok === false) {
       throw new AdminApiError(
         String(result.code || "SERVER_ERROR"),
@@ -128,7 +250,7 @@ export class CloudbaseAdminApi implements AdminApi {
         result,
       );
     }
-    return result;
+    return result as T;
   }
 
   private callAdmin<T extends ResultEnvelope>(
@@ -200,7 +322,20 @@ export class CloudbaseAdminApi implements AdminApi {
     const result = await this.callAdmin<ResultEnvelope>({
       action: "getAdminConfig",
     });
-    return normalizeAdminConfig(result.config || result);
+    const rawConfig = result.config || result;
+    const config = normalizeAdminConfig(rawConfig);
+    console.info(
+      `[case-admin] admin config loaded ${JSON.stringify({
+        resultKeys: Object.keys(result).slice(0, 12),
+        rawWriteEnabled:
+          rawConfig && typeof rawConfig === "object"
+            ? (rawConfig as Record<string, unknown>).writeEnabled
+            : undefined,
+        aliasWriteEnabled: result.webWriteEnabled,
+        normalizedWriteEnabled: config.writeEnabled,
+      })}`,
+    );
+    return config;
   }
 
   private async hydrate(items: CaseRecord[], includeGallery = false): Promise<CaseRecord[]> {
