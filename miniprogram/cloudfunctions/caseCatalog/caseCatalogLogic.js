@@ -197,8 +197,12 @@ function buildHomeFeed(caseRecords = [], bannerRecords = [], urlMap = {}) {
   const groups = buildHomeCaseGroups(caseRecords);
   return {
     banners: buildBanners(bannerRecords, groups.fallbackBanners, urlMap),
-    popularCases: groups.popularCases.map((item) => buildCard(item, urlMap)),
-    latestCases: groups.latestCases.map((item) => buildCard(item, urlMap)),
+    popularCases: groups.popularCases.map((item) =>
+      buildCard(item, urlMap, { preferBanner: true })
+    ),
+    latestCases: groups.latestCases.map((item) =>
+      buildCard(item, urlMap, { preferBanner: true })
+    ),
   };
 }
 
@@ -207,8 +211,12 @@ function collectHomeImageFileIds(caseRecords = [], bannerRecords = []) {
   return Array.from(
     new Set(
       [
-        ...groups.popularCases.map(getCardImageFileId),
-        ...groups.latestCases.map(getCardImageFileId),
+        ...groups.popularCases.map((item) =>
+          getCardImageFileId(item, { preferBanner: true })
+        ),
+        ...groups.latestCases.map((item) =>
+          getCardImageFileId(item, { preferBanner: true })
+        ),
         ...bannerRecords.map((item) => normalizeBanner(item).image),
         ...groups.fallbackBanners.map((item) => item.image),
       ].filter(Boolean)

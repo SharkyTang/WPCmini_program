@@ -69,7 +69,7 @@ function buildHomeSections(cases) {
 
 async function attachHomeSectionImages(sections) {
   const cards = [...sections.popularCases, ...sections.latestCases];
-  const cardsWithImages = await attachCaseImageUrls(cards);
+  const cardsWithImages = await attachCaseImageUrls(cards, { preferBanner: true });
   const imageById = cardsWithImages.reduce((map, card) => {
     map[card.id] = card.coverImageUrl;
     return map;

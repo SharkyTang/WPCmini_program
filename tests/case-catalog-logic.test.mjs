@@ -121,7 +121,7 @@ test("catalog cards prefer the aspect-preserving banner cover", () => {
   assert.equal(result[0].thumbnailUrl, "https://temp/banner");
 });
 
-test("home cards keep using compact thumbnails", () => {
+test("home cards use the same aspect-preserving covers as category", () => {
   const banner = "cloud://env/banner.jpg";
   const thumbnail = "cloud://env/thumbnail.jpg";
   const result = buildHomeFeed([
@@ -135,8 +135,8 @@ test("home cards keep using compact thumbnails", () => {
     [thumbnail]: "https://temp/thumbnail",
   });
 
-  assert.equal(result.popularCases[0].imageFileId, thumbnail);
-  assert.equal(result.popularCases[0].thumbnailUrl, "https://temp/thumbnail");
+  assert.equal(result.popularCases[0].imageFileId, banner);
+  assert.equal(result.popularCases[0].thumbnailUrl, "https://temp/banner");
 });
 
 test("user library preserves record order and identifies stale records", () => {
