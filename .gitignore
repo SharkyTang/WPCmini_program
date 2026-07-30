@@ -2,6 +2,8 @@
 .case-variant-backfill.json
 .case-variant-v2-backfill.json
 .env.local
+.env
+.env.*.local
 node_modules/
 export/
 optimized-images/

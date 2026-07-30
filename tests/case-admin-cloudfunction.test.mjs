@@ -15,18 +15,30 @@ const {
   CASE_GALLERY_MAX,
   HOME_DISPLAY_LIMITS,
   VALID_CASE_ADMIN_ACTIONS,
+  buildBatchCasePatch,
   buildCaseSearchText,
+  buildExpectedVariantPaths,
   buildHomepageDisplayItems,
   filterCaseItems,
+  filterCaseItemsV2,
   generateSequentialCaseId,
   getActivatedHomepageSlots,
   getAdminOpenidsFromEnv,
   getCaseIdNumber,
+  hasCaseImageChanges,
   isAdminOpenid,
+  isAdminActor,
+  isWebAdminUploadFile,
+  normalizeClientMutationId,
   normalizeCloudFileIds,
   pickAllowedCaseFields,
   sanitizeCasePayload,
+  sortCaseItemsV2,
+  resolveAdminActor,
+  validateExpectedVersion,
+  validateHomepageOrders,
   validateHomepageDisplayCapacity,
+  validateWebImageVariants,
 } = logic;
 
 function test(name, fn) {
@@ -47,6 +59,71 @@ test("checks admin openid from comma separated env value", () => {
   assert.deepEqual(plain(getAdminOpenidsFromEnv(" a, b ,, c ")), ["a", "b", "c"]);
   assert.equal(isAdminOpenid("b", "a,b,c"), true);
   assert.equal(isAdminOpenid("x", "a,b,c"), false);
+});
+
+test("resolves trusted CloudBase UIDs separately from WeChat OPENIDs", () => {
+  const web = resolveAdminActor({ UID: "web-admin-1" }, {});
+  const wechat = resolveAdminActor({ OPENID: "wx-admin-1", UID: "ignored" }, {});
+  const none = resolveAdminActor({}, {});
+  assert.deepEqual(plain(web), {
+    authenticated: true,
+    actor: { type: "cloudbase_uid", id: "web-admin-1" },
+  });
+  assert.deepEqual(plain(wechat.actor), {
+    type: "wechat_openid",
+    id: "wx-admin-1",
+  });
+  assert.equal(none.authenticated, false);
+  assert.equal(isAdminActor(web.actor, { CASE_ADMIN_UIDS: "web-admin-1,web-admin-2" }), true);
+  assert.equal(isAdminActor(web.actor, { CASE_ADMIN_UIDS: "other" }), false);
+});
+
+test("validates web upload ownership and task ids", () => {
+  assert.equal(
+    isWebAdminUploadFile(
+      "cloud://env/wine-packaging/admin-web/web-admin-1/batch-1/source.jpg",
+      "web-admin-1"
+    ),
+    true
+  );
+  assert.equal(
+    isWebAdminUploadFile(
+      "cloud://env/wine-packaging/admin-web/other/batch-1/source.jpg",
+      "web-admin-1"
+    ),
+    false
+  );
+  assert.equal(normalizeClientMutationId("batch:item-1").valid, true);
+  assert.equal(normalizeClientMutationId("../unsafe").valid, false);
+});
+
+test("binds every web image variant to its administrator-owned source", () => {
+  const actor = { type: "cloudbase_uid", id: "web-admin-1" };
+  const source =
+    "cloud://env/wine-packaging/admin-web/web-admin-1/batch-1/source.jpg";
+  const paths = buildExpectedVariantPaths(source);
+  const item = {
+    sourceGalleryImages: [source],
+    galleryImages: [`cloud://env/${paths.displayPath}`],
+    galleryThumbnails: [`cloud://env/${paths.thumbnailPath}`],
+    galleryBanners: [`cloud://env/${paths.bannerPath}`],
+    coverImage: `cloud://env/${paths.displayPath}`,
+    coverThumbnail: `cloud://env/${paths.thumbnailPath}`,
+    coverBanner: `cloud://env/${paths.bannerPath}`,
+  };
+  assert.equal(validateWebImageVariants(item, actor).valid, true);
+  const forged = validateWebImageVariants({
+    ...item,
+    galleryImages: ["cloud://env/private/customer-contract.pdf"],
+    coverImage: "cloud://env/private/customer-contract.pdf",
+  }, actor);
+  assert.equal(forged.valid, false);
+  assert.equal(forged.code, "INVALID_IMAGE_VARIANTS");
+  assert.equal(hasCaseImageChanges(item, { galleryImages: item.galleryImages }), false);
+  assert.equal(
+    hasCaseImageChanges(item, { galleryImages: ["cloud://env/other.jpg"] }),
+    true
+  );
 });
 
 test("declares supported case admin actions", () => {
@@ -392,4 +469,143 @@ test("builds the same limited homepage display snapshots as the homepage", () =>
   const searchedLatest = buildHomepageDisplayItems(cases, banners, { slot: "latest", keyword: "最新案例 3" });
   assert.equal(searchedLatest.length, 1);
   assert.equal(searchedLatest[0].displayOrderLabel, "第 4 个");
+});
+
+test("filters and stably sorts more than the legacy search window", () => {
+  const items = Array.from({ length: 350 }, (_, index) => ({
+    _id: `doc_${index}`,
+    caseId: `case_${String(index + 1).padStart(3, "0")}`,
+    title: index % 2 ? "青花礼盒" : "商务瓶标",
+    packageTypes: { values: [index % 2 ? "礼盒" : "瓶标"] },
+    isVisible: index % 3 !== 0,
+    sortOrder: 350 - index,
+  }));
+  const filtered = filterCaseItemsV2(items, {
+    keyword: "青花",
+    packageTypes: ["礼盒"],
+    visibility: "visible",
+    trash: false,
+  });
+  assert.equal(filtered.length > 50, true);
+  const sorted = sortCaseItemsV2(filtered, { field: "sortOrder", direction: "asc" });
+  assert.equal(sorted[0].sortOrder <= sorted.at(-1).sortOrder, true);
+});
+
+test("applies append, remove and replace tag patches without losing other fields", () => {
+  const existing = {
+    title: "礼盒",
+    caseId: "case_001",
+    packageTypes: { values: ["礼盒"] },
+    styles: { values: ["国风", "简约"] },
+    isVisible: false,
+  };
+  const appended = buildBatchCasePatch(existing, {
+    tags: { styles: ["轻奢"] },
+    tagMode: "append",
+  });
+  const removed = buildBatchCasePatch(existing, {
+    tags: { styles: ["简约"] },
+    tagMode: "remove",
+  });
+  const replaced = buildBatchCasePatch(existing, {
+    tags: { styles: ["时尚"] },
+    tagMode: "replace",
+  });
+  assert.deepEqual(plain(appended.data.styles), { values: ["国风", "简约", "轻奢"] });
+  assert.deepEqual(plain(removed.data.styles), { values: ["国风"] });
+  assert.deepEqual(plain(replaced.data.styles), { values: ["时尚"] });
+});
+
+test("applies single-value price level batch semantics", () => {
+  const filled = { title: "礼盒", priceLevel: "品质款", isVisible: false };
+  const empty = { title: "礼盒", priceLevel: "", isVisible: false };
+
+  assert.equal(
+    buildBatchCasePatch(empty, {
+      tags: { priceLevel: ["高端款"] },
+      tagMode: "append",
+    }).data.priceLevel,
+    "高端款"
+  );
+  assert.equal(
+    buildBatchCasePatch(filled, {
+      tags: { priceLevel: ["高端款"] },
+      tagMode: "append",
+    }).data.priceLevel,
+    "品质款"
+  );
+  assert.equal(
+    buildBatchCasePatch(filled, {
+      tags: { priceLevel: ["高端款"] },
+      tagMode: "remove",
+    }).data.priceLevel,
+    "品质款"
+  );
+  assert.equal(
+    buildBatchCasePatch(filled, {
+      tags: { priceLevel: ["品质款"] },
+      tagMode: "remove",
+    }).data.priceLevel,
+    ""
+  );
+  assert.equal(
+    buildBatchCasePatch(filled, {
+      tags: { priceLevel: ["珍藏款"] },
+      tagMode: "replace",
+    }).data.priceLevel,
+    "珍藏款"
+  );
+  assert.equal(
+    buildBatchCasePatch(filled, {
+      tags: { priceLevel: [] },
+      tagMode: "replace",
+    }).data.priceLevel,
+    ""
+  );
+  assert.equal(
+    buildBatchCasePatch(filled, {
+      tags: { priceLevel: ["基础款", "高端款"] },
+      tagMode: "replace",
+    }).code,
+    "INVALID_BATCH_PATCH"
+  );
+});
+
+test("requires and checks optimistic versions for desktop writes", () => {
+  const item = { version: 4 };
+  assert.equal(validateExpectedVersion(item, undefined, { required: true }).code, "EXPECTED_VERSION_REQUIRED");
+  assert.equal(validateExpectedVersion(item, 3, { required: true }).code, "VERSION_CONFLICT");
+  assert.equal(validateExpectedVersion(item, 4, { required: true }).valid, true);
+  assert.equal(validateExpectedVersion({}, undefined, { required: false }).valid, true);
+});
+
+test("allows one case in multiple homepage sections but rejects duplicates within a section", () => {
+  const accepted = validateHomepageOrders({
+    banner: ["case_1"],
+    popular: ["case_1"],
+    latest: [],
+  });
+  const rejected = validateHomepageOrders({
+    banner: ["case_1", "case_1"],
+    popular: [],
+    latest: [],
+  });
+  assert.equal(accepted.valid, true);
+  assert.equal(rejected.code, "DUPLICATE_HOME_CASE");
+});
+
+test("prefers per-section order and falls back to legacy latest descending order", () => {
+  const cases = [
+    { _id: "a", caseId: "case_001", isVisible: true, sortOrder: 1, homeSections: { values: ["latest"] }, homeSectionOrder: { latest: 2 } },
+    { _id: "b", caseId: "case_002", isVisible: true, sortOrder: 99, homeSections: { values: ["latest"] }, homeSectionOrder: { latest: 1 } },
+  ];
+  assert.deepEqual(
+    plain(buildHomepageDisplayItems(cases, [], { slot: "latest" }).map((item) => item.id)),
+    ["b", "a"]
+  );
+  const legacy = cases.map(({ homeSectionOrder, ...item }) => item);
+  assert.deepEqual(
+    plain(buildHomepageDisplayItems(legacy, [], { slot: "latest" }).map((item) => item.id)),
+    ["b", "a"]
+  );
 });

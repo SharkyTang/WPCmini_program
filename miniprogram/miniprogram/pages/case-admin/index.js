@@ -26,6 +26,7 @@ Page({
   data: {
     isCheckingAccess: true,
     isAdmin: false,
+    accessErrorMessage: "",
     loading: false,
     loadingMore: false,
     errorMessage: "",
@@ -73,17 +74,30 @@ Page({
   async checkAccessAndLoad() {
     this.setData({
       isCheckingAccess: true,
+      accessErrorMessage: "",
       errorMessage: "",
     });
 
-    const isAdmin = await checkCaseAdminAccess();
-    this.setData({
-      isCheckingAccess: false,
-      isAdmin,
-    });
+    try {
+      const isAdmin = await checkCaseAdminAccess();
+      this.setData({
+        isCheckingAccess: false,
+        isAdmin,
+      });
 
-    if (isAdmin) {
-      await this.loadCases({ reset: true });
+      if (isAdmin) {
+        await this.loadCases({ reset: true });
+      }
+    } catch (error) {
+      console.warn("案例管理权限检查失败", error);
+      const isForbidden = error && error.code === "FORBIDDEN";
+      this.setData({
+        isCheckingAccess: false,
+        isAdmin: false,
+        accessErrorMessage: isForbidden
+          ? ""
+          : (error && error.message) || "管理员身份校验失败，请稍后重试",
+      });
     }
   },
 
@@ -201,9 +215,9 @@ Page({
     if (!id) return;
 
     this.openConfirmDialog({
-      title: "删除这个案例？",
-      content: "删除后将从前台和案例管理中移除，无法恢复。",
-      confirmText: "删除",
+      title: "移入回收站？",
+      content: "案例会立即下架并从案例管理列表移除，可在电脑端后台的回收站恢复。",
+      confirmText: "移入回收站",
       action: "delete",
       id,
     });
@@ -275,14 +289,14 @@ Page({
     try {
       await deleteCaseAdmin(id);
       wx.showToast({
-        title: "已删除",
+        title: "已移入回收站",
         icon: "none",
       });
       this.loadCases({ reset: true });
     } catch (error) {
-      console.warn("删除案例失败", error);
+      console.warn("移入回收站失败", error);
       wx.showToast({
-        title: "删除失败，请稍后重试",
+        title: "移入失败，请稍后重试",
         icon: "none",
       });
     }

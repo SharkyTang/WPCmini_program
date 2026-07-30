@@ -40,7 +40,10 @@ function loadCaseAdminPage(options = {}) {
             { value: "hidden", label: "已隐藏" },
           ],
           DEFAULT_PAGE_SIZE: 20,
-          checkCaseAdminAccess: async () => true,
+          checkCaseAdminAccess: async () => {
+            if (options.accessError) throw options.accessError;
+            return options.isAdmin !== false;
+          },
           deleteCaseAdmin: async (id) => {
             calls.deletes.push(id);
             if (options.deleteError) throw new Error("delete failed");
@@ -111,7 +114,7 @@ async function test(name, fn) {
   }
 }
 
-await test("case admin list shows delete after visibility action", () => {
+await test("case admin list shows recycle action after visibility action", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
   const pageJson = JSON.parse(readFileSync(jsonPath, "utf8"));
   const visibilityIndex = wxml.indexOf('bindtap="toggleCaseVisibility"');
@@ -120,7 +123,8 @@ await test("case admin list shows delete after visibility action", () => {
   assert.equal(pageJson.usingComponents["mp-dialog"], "weui-miniprogram/dialog/dialog");
   assert.notEqual(deleteIndex, -1);
   assert.ok(deleteIndex > visibilityIndex);
-  assert.equal(wxml.includes("删除"), true);
+  assert.equal(wxml.includes("回收"), true);
+  assert.equal(wxml.includes("上下架或回收"), true);
   assert.equal(wxml.includes('scroll-x="true"'), true);
   assert.equal(wxml.includes("首页轮播"), false);
   assert.equal(wxml.includes("<mp-dialog"), true);
@@ -160,7 +164,7 @@ await test("canceling delete does not call delete service", async () => {
       },
     },
   });
-  assert.equal(page.data.confirmDialog.title, "删除这个案例？");
+  assert.equal(page.data.confirmDialog.title, "移入回收站？");
   await page.handleConfirmDialogTap({ detail: { index: 0 } });
 
   assert.deepEqual(calls.deletes, []);
@@ -177,18 +181,18 @@ await test("confirming delete calls service and refreshes list", async () => {
       },
     },
   });
-  assert.equal(page.data.confirmDialog.title, "删除这个案例？");
-  assert.equal(page.data.confirmDialog.buttons[1].text, "删除");
+  assert.equal(page.data.confirmDialog.title, "移入回收站？");
+  assert.equal(page.data.confirmDialog.buttons[1].text, "移入回收站");
 
   await page.handleConfirmDialogTap({ detail: { index: 1 } });
 
   assert.deepEqual(calls.deletes, ["case_doc_1"]);
-  assert.equal(calls.toasts[0].title, "已删除");
+  assert.equal(calls.toasts[0].title, "已移入回收站");
   assert.equal(calls.fetches.length, 1);
   assert.equal(calls.fetches[0].page, 1);
 });
 
-await test("delete failure shows a clear toast", async () => {
+await test("recycle failure shows a clear toast", async () => {
   const { page, calls } = loadCaseAdminPage({
     deleteError: true,
     silentConsole: true,
@@ -204,8 +208,38 @@ await test("delete failure shows a clear toast", async () => {
   await page.handleConfirmDialogTap({ detail: { index: 1 } });
 
   assert.deepEqual(calls.deletes, ["case_doc_1"]);
-  assert.equal(calls.toasts[0].title, "删除失败，请稍后重试");
+  assert.equal(calls.toasts[0].title, "移入失败，请稍后重试");
   assert.deepEqual(calls.fetches, []);
+});
+
+await test("access service errors remain retryable instead of looking forbidden", async () => {
+  const accessError = new Error("管理员身份服务异常，请稍后重试");
+  accessError.code = "SERVER_ERROR";
+  const { page, calls } = loadCaseAdminPage({
+    accessError,
+    silentConsole: true,
+  });
+
+  await page.checkAccessAndLoad();
+
+  assert.equal(page.data.isCheckingAccess, false);
+  assert.equal(page.data.isAdmin, false);
+  assert.equal(page.data.accessErrorMessage, accessError.message);
+  assert.deepEqual(calls.fetches, []);
+});
+
+await test("forbidden access still renders the dedicated no-permission state", async () => {
+  const accessError = new Error("无权限管理案例");
+  accessError.code = "FORBIDDEN";
+  const { page } = loadCaseAdminPage({
+    accessError,
+    silentConsole: true,
+  });
+
+  await page.checkAccessAndLoad();
+
+  assert.equal(page.data.isAdmin, false);
+  assert.equal(page.data.accessErrorMessage, "");
 });
 
 await test("homepage capacity errors explain why visibility cannot be restored", async () => {

@@ -2,12 +2,18 @@
   <view class="hero">
     <view>
       <view class="page-title">案例管理</view>
-      <view class="page-subtitle">新增、编辑、隐藏或删除酒包装案例</view>
+      <view class="page-subtitle">新增、编辑、上下架或回收酒包装案例</view>
     </view>
     <view wx:if="{{isAdmin}}" class="primary-action" bindtap="createCase">新增案例</view>
   </view>
 
   <view wx:if="{{isCheckingAccess}}" class="state-card">正在确认管理权限...</view>
+
+  <view wx:elif="{{accessErrorMessage}}" class="state-card">
+    <view class="state-title">权限校验失败</view>
+    <view class="state-desc">{{accessErrorMessage}}</view>
+    <view class="state-button" bindtap="retry">重新检查</view>
+  </view>
 
   <view wx:elif="{{!isAdmin}}" class="state-card">
     <view class="state-title">暂无管理权限</view>
@@ -88,7 +94,7 @@
               data-id="{{item.id}}"
               bindtap="deleteCase"
             >
-              删除
+              回收
             </view>
           </view>
         </view>

@@ -26,10 +26,12 @@ function loadMain(options = {}) {
     DYNAMIC_CURRENT_ENV: Symbol("DYNAMIC_CURRENT_ENV"),
     init() {},
     getWXContext() {
-      return { OPENID: "admin_1" };
+      return options.wxContext || { OPENID: "admin_1" };
     },
     async downloadFile() {
-      return { fileContent: Buffer.from("source") };
+      return {
+        fileContent: options.sourceBuffer || Buffer.from("source"),
+      };
     },
     async uploadFile({ cloudPath }) {
       calls.uploads.push(cloudPath);
@@ -42,6 +44,45 @@ function loadMain(options = {}) {
       calls.deletions.push(fileList);
       return {};
     },
+    ...(options.referencedFileIDs
+      ? {
+        database() {
+          return {
+            command: {
+              in(values) {
+                return { __op: "in", values };
+              },
+            },
+            collection() {
+              return {
+                where(condition) {
+                  const expected = Object.values(condition)[0];
+                  const fileID = expected && expected.__op === "in"
+                    ? expected.values[0]
+                    : expected;
+                  const query = {
+                    field() {
+                      return query;
+                    },
+                    limit() {
+                      return query;
+                    },
+                    async get() {
+                      return {
+                        data: options.referencedFileIDs.includes(fileID)
+                          ? [{ _id: "referencing_case" }]
+                          : [],
+                      };
+                    },
+                  };
+                  return query;
+                },
+              };
+            },
+          };
+        },
+      }
+      : {}),
   };
   const sandbox = {
     Buffer,
@@ -53,6 +94,8 @@ function loadMain(options = {}) {
     process: {
       env: {
         ADMIN_OPENIDS: "admin_1",
+        CASE_ADMIN_UIDS: options.adminUids || "",
+        ADMIN_WEB_WRITE_ENABLED: options.webWriteEnabled || "",
       },
     },
     require(moduleName) {
@@ -79,6 +122,22 @@ function loadMain(options = {}) {
         return {
           ...require(logicPath),
           ...(options.logic || {}),
+        };
+      }
+      if (moduleName === "@cloudbase/node-sdk" && options.userInfo) {
+        return {
+          SYMBOL_CURRENT_ENV: "current-env",
+          init() {
+            return {
+              auth() {
+                return {
+                  getUserInfo() {
+                    return options.userInfo;
+                  },
+                };
+              },
+            };
+          },
         };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
@@ -238,4 +297,86 @@ await test("batch failures clean variants generated for earlier images", async (
   assert.equal(main.calls.deletions.length, 2);
   assert.equal(main.calls.deletions[0].length, 2);
   assert.equal(main.calls.deletions[1].length, 3);
+});
+
+await test("cleanup never deletes deterministic variants already referenced by a case", async () => {
+  const source = "cloud://env/source-retry.jpg";
+  const paths = require(logicPath).buildVariantPaths(source);
+  const referencedDisplay = `cloud://env/${paths.displayPath}`;
+  const main = loadMain({
+    uploadFailureIndex: 3,
+    referencedFileIDs: [referencedDisplay],
+    logic: {
+      async generateVariantBuffers() {
+        return {
+          displayBuffer: Buffer.from("display"),
+          thumbnailBuffer: Buffer.from("thumbnail"),
+          bannerBuffer: Buffer.from("banner"),
+          metadata: { variantVersion: 2 },
+        };
+      },
+    },
+  });
+  const result = await main({
+    action: "generateCaseVariants",
+    files: [source],
+  });
+  assert.equal(result.ok, false);
+  assert.equal(main.calls.deletions.length, 1);
+  assert.equal(main.calls.deletions[0].includes(referencedDisplay), false);
+  assert.equal(main.calls.deletions[0].length, 1);
+});
+
+await test("web image processing verifies official UID, write switch, path and file signature", async () => {
+  const uid = "web-admin-1";
+  const source = `cloud://env/wine-packaging/admin-web/${uid}/batch-1/source.jpg`;
+  const jpegHeader = Buffer.from([
+    0xff, 0xd8, 0xff, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  ]);
+  const base = {
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    sourceBuffer: jpegHeader,
+    logic: {
+      async generateVariantBuffers() {
+        return {
+          displayBuffer: Buffer.from("display"),
+          thumbnailBuffer: Buffer.from("thumbnail"),
+          bannerBuffer: Buffer.from("banner"),
+          metadata: { variantVersion: 2 },
+        };
+      },
+    },
+  };
+  const readonly = loadMain(base);
+  assert.equal((await readonly({
+    action: "generateCaseVariants",
+    files: [source],
+  })).code, "WEB_WRITE_DISABLED");
+
+  const enabled = loadMain({ ...base, webWriteEnabled: "true" });
+  assert.equal((await enabled({
+    action: "generateCaseVariants",
+    files: [
+      "cloud://env/wine-packaging/admin-web/other/batch-1/source.jpg",
+    ],
+  })).code, "INVALID_UPLOAD_PATH");
+  const success = await enabled({
+    action: "generateCaseVariants",
+    files: [source],
+  });
+  assert.equal(success.ok, true);
+  assert.equal(success.variants.length, 1);
+
+  const invalidSignature = loadMain({
+    ...base,
+    webWriteEnabled: "true",
+    sourceBuffer: Buffer.from("not-an-image"),
+  });
+  assert.equal((await invalidSignature({
+    action: "generateCaseVariants",
+    files: [source],
+  })).code, "UNSUPPORTED_IMAGE_TYPE");
 });

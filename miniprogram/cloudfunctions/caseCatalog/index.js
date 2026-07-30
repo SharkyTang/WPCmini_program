@@ -107,6 +107,7 @@ const CARD_FIELDS = {
   scenes: true,
   statuses: true,
   homeSections: true,
+  homeSectionOrder: true,
   sortOrder: true,
   isPinned: true,
   isVisible: true,
@@ -125,7 +126,7 @@ async function getHomeFeed(event) {
     fetchAll(CASE_COLLECTION, {
       where: { isVisible: true },
       field: CARD_FIELDS,
-      orderField: "sortOrder",
+      orderField: "_id",
     }),
     fetchAll(BANNER_COLLECTION, {
       where: { isVisible: true },
@@ -139,7 +140,7 @@ async function getHomeFeed(event) {
         sortOrder: true,
         isVisible: true,
       },
-      orderField: "sortOrder",
+      orderField: "_id",
     }),
   ]);
   const urlMap = await getTempUrlMap(
@@ -160,7 +161,7 @@ async function getCatalogSnapshot(event) {
   const records = await fetchAll(CASE_COLLECTION, {
     where: { isVisible: true },
     field: CARD_FIELDS,
-    orderField: "sortOrder",
+    orderField: "_id",
   });
   const urlMap = await getTempUrlMap(
     records.map((record) =>

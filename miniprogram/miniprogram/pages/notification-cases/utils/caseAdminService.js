@@ -171,13 +171,8 @@ async function attachHomepageDisplayImageUrls(items) {
 }
 
 async function checkCaseAdminAccess() {
-  try {
-    const result = await callCaseAdmin("checkAccess");
-    return Boolean(result.isAdmin);
-  } catch (error) {
-    console.warn("案例管理权限检查失败", error);
-    return false;
-  }
+  const result = await callCaseAdmin("checkAccess");
+  return Boolean(result.isAdmin);
 }
 
 async function fetchCaseAdminList(options = {}) {

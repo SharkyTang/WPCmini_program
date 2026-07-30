@@ -48,6 +48,15 @@ function toNumber(value, fallback = 9999) {
   return Number.isFinite(numberValue) ? numberValue : fallback;
 }
 
+function normalizeHomeSectionOrder(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.values(HOME_SECTION_VALUES).reduce((orders, slot) => {
+    const order = Number(value[slot]);
+    if (Number.isInteger(order) && order > 0) orders[slot] = order;
+    return orders;
+  }, {});
+}
+
 function normalizeCaseRecord(record = {}) {
   const legacyCover = firstImage(record.coverImage || record.image || record.images);
   const galleryImages = normalizeGallery(record.galleryImages, legacyCover);
@@ -75,6 +84,7 @@ function normalizeCaseRecord(record = {}) {
     scenes,
     statuses,
     homeSections,
+    homeSectionOrder: normalizeHomeSectionOrder(record.homeSectionOrder),
     sortOrder: toNumber(record.sortOrder),
     isPinned: record.isPinned === true,
     isVisible: record.isVisible !== false,
@@ -115,6 +125,7 @@ function buildCard(record = {}, urlMap = {}, options = {}) {
     scenes: item.scenes,
     statuses: item.statuses,
     homeSections: item.homeSections,
+    homeSectionOrder: item.homeSectionOrder,
     sortOrder: item.sortOrder,
     isPinned: item.isPinned,
     isVisible: item.isVisible,
@@ -133,21 +144,39 @@ function sortCases(items, direction = "asc") {
   });
 }
 
+function sortHomeCases(items, slot, fallbackDirection = "asc") {
+  const multiplier = fallbackDirection === "desc" ? -1 : 1;
+  return items.slice().sort((left, right) => {
+    const leftOrder = Number(left.homeSectionOrder && left.homeSectionOrder[slot]) || 0;
+    const rightOrder = Number(right.homeSectionOrder && right.homeSectionOrder[slot]) || 0;
+    if (leftOrder && rightOrder && leftOrder !== rightOrder) return leftOrder - rightOrder;
+    if (leftOrder && !rightOrder) return -1;
+    if (!leftOrder && rightOrder) return 1;
+    if (left.sortOrder !== right.sortOrder) {
+      return (left.sortOrder - right.sortOrder) * multiplier;
+    }
+    return String(left.caseId || left.id).localeCompare(String(right.caseId || right.id));
+  });
+}
+
 function buildHomeCaseGroups(records = []) {
   const cases = records.map(normalizeCaseRecord).filter((item) => item.isVisible);
-  const popularCases = sortCases(
-    cases.filter((item) => item.homeSections.includes(HOME_SECTION_VALUES.POPULAR))
+  const popularCases = sortHomeCases(
+    cases.filter((item) => item.homeSections.includes(HOME_SECTION_VALUES.POPULAR)),
+    HOME_SECTION_VALUES.POPULAR
   ).slice(0, 4);
-  const latestCases = sortCases(
+  const latestCases = sortHomeCases(
     cases.filter((item) => item.homeSections.includes(HOME_SECTION_VALUES.LATEST)),
+    HOME_SECTION_VALUES.LATEST,
     "desc"
   ).slice(0, 6);
-  const fallbackBanners = sortCases(
+  const fallbackBanners = sortHomeCases(
     cases.filter(
       (item) =>
         item.homeSections.includes(HOME_SECTION_VALUES.BANNER) &&
         Boolean(item.coverBanner || item.coverImage)
-    )
+    ),
+    HOME_SECTION_VALUES.BANNER
   )
     .slice(0, 5)
     .map((item) => ({
@@ -155,7 +184,9 @@ function buildHomeCaseGroups(records = []) {
       caseId: item.caseId || item.id,
       title: item.title,
       image: item.coverBanner || item.coverImage,
-      sortOrder: item.sortOrder,
+      sortOrder:
+        Number(item.homeSectionOrder && item.homeSectionOrder.banner) ||
+        item.sortOrder,
     }));
   return { popularCases, latestCases, fallbackBanners };
 }

@@ -1,11 +1,15 @@
+const crypto = require("node:crypto");
+
 const CASE_COLLECTION = "wine_packaging";
 const BANNER_COLLECTION = "home_banners";
 const CASE_ADMIN_DEFAULT_SORT_ORDER = 9999;
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 50;
 const SEARCH_FETCH_LIMIT = 300;
+const CASE_SCAN_BATCH_SIZE = 100;
 const IMAGE_URL_BATCH_SIZE = 50;
 const CASE_GALLERY_MAX = 9;
+const CASE_BATCH_MAX = 50;
 const PINNED_CASE_LIMIT = 20;
 const CASE_ID_PREFIX = "case_";
 const CASE_ID_PAD_LENGTH = 3;
@@ -20,10 +24,52 @@ const HOME_DISPLAY_LABELS = {
   popular: "热门产品",
   latest: "最新产品",
 };
+const CASE_ADMIN_OPTIONS = {
+  wineType: ["白酒"],
+  packageTypes: ["整套包装", "瓶标", "瓶子", "礼盒", "桶盒", "卡盒", "手提袋", "外箱"],
+  styles: ["轻奢", "国风", "新中式", "复古", "简约", "商务", "时尚", "喜庆"],
+  priceLevel: ["基础款", "品质款", "高端款", "珍藏款"],
+  scenes: ["婚宴", "送礼", "商务招待", "节庆礼赠", "商超陈列", "电商展示", "企业纪念"],
+  statuses: ["热门产品", "最新产品"],
+  homeSections: [
+    { value: "banner", label: "首页轮播" },
+    { value: "popular", label: "热门产品" },
+    { value: "latest", label: "最新产品" },
+  ],
+};
+const MULTI_TAG_FIELDS = ["packageTypes", "styles", "scenes", "statuses", "homeSections"];
+const BATCH_TAG_FIELDS = [...MULTI_TAG_FIELDS, "priceLevel"];
+const BATCH_PATCH_FIELDS = [
+  "wineType",
+  "packageTypes",
+  "styles",
+  "priceLevel",
+  "scenes",
+  "statuses",
+  "homeSections",
+  "isVisible",
+  "isPinned",
+];
+const LIST_SORT_FIELDS = ["sortOrder", "updatedAt", "createdAt", "caseId", "title"];
+const WEB_UPLOAD_PREFIX = "wine-packaging/admin-web";
+const CASE_IMAGE_ARRAY_FIELDS = [
+  "galleryImages",
+  "sourceGalleryImages",
+  "galleryThumbnails",
+  "galleryBanners",
+];
+const CASE_IMAGE_SCALAR_FIELDS = [
+  "coverImage",
+  "coverThumbnail",
+  "coverBanner",
+  "imageVariantVersion",
+];
 
 const VALID_CASE_ADMIN_ACTIONS = [
   "checkAccess",
+  "getAdminConfig",
   "listCases",
+  "listCasesV2",
   "listRecentCases",
   "getCase",
   "getCaseImageUrls",
@@ -31,6 +77,11 @@ const VALID_CASE_ADMIN_ACTIONS = [
   "listHomepageDisplay",
   "createCase",
   "updateCase",
+  "batchPatchCases",
+  "moveCasesToTrash",
+  "restoreCases",
+  "reorderCases",
+  "setHomeSectionOrder",
   "setCaseVisibility",
   "deleteCase",
   "cleanupUnreferencedFiles",
@@ -54,6 +105,7 @@ const ALLOWED_CASE_FIELDS = [
   "scenes",
   "statuses",
   "homeSections",
+  "homeSectionOrder",
   "sortOrder",
   "notes",
   "isVisible",
@@ -73,6 +125,83 @@ function getAdminOpenidsFromEnv(value) {
 
 function isAdminOpenid(openid, envValue) {
   return Boolean(openid && getAdminOpenidsFromEnv(envValue).includes(openid));
+}
+
+function getEnvList(value) {
+  return getAdminOpenidsFromEnv(value);
+}
+
+function parseCloudbaseContext(value) {
+  if (!value) return {};
+  if (typeof value === "object") return value;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function firstIdentityValue(source = {}, keys = []) {
+  for (const key of keys) {
+    const value = trimText(source && source[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+/**
+ * Resolve only identities asserted by the CloudBase runtime. Event payload fields
+ * are intentionally never accepted here because callers can spoof them.
+ */
+function resolveAdminActor(context = {}, env = {}) {
+  const runtimeContext = parseCloudbaseContext(env.TCB_CONTEXT_CNFG);
+  const openid =
+    firstIdentityValue(context, ["OPENID", "openid"]) ||
+    firstIdentityValue(runtimeContext, ["OPENID", "openid"]);
+  if (openid) {
+    return {
+      authenticated: true,
+      actor: { type: "wechat_openid", id: openid },
+    };
+  }
+
+  const uidKeys = [
+    "UID",
+    "uid",
+    "UUID",
+    "uuid",
+    "TCB_UUID",
+    "CLOUDBASE_UID",
+    "CLOUDBASE_USER_ID",
+    "USER_ID",
+  ];
+  const uid =
+    firstIdentityValue(context, uidKeys) ||
+    firstIdentityValue(runtimeContext, uidKeys) ||
+    firstIdentityValue(env, ["TCB_UUID", "CLOUDBASE_UID", "CLOUDBASE_USER_ID"]);
+  if (uid) {
+    return {
+      authenticated: true,
+      actor: { type: "cloudbase_uid", id: uid },
+    };
+  }
+  return { authenticated: false, actor: null };
+}
+
+function isAdminActor(actor, env = {}) {
+  if (!actor || !trimText(actor.id)) return false;
+  if (actor.type === "wechat_openid") {
+    return isAdminOpenid(actor.id, env.ADMIN_OPENIDS);
+  }
+  if (actor.type === "cloudbase_uid") {
+    return getEnvList(env.CASE_ADMIN_UIDS).includes(actor.id);
+  }
+  return false;
+}
+
+function isWebWriteEnabled(value) {
+  return ["1", "true", "yes", "on"].includes(trimText(value).toLowerCase());
 }
 
 function normalizeValues(value) {
@@ -166,6 +295,41 @@ function normalizeHomepageDisplaySlot(value) {
 
 function getHomepageDisplayLimit(slot) {
   return HOME_DISPLAY_LIMITS[normalizeHomepageDisplaySlot(slot)] || 0;
+}
+
+function normalizeHomeSectionOrder(value) {
+  if (value === undefined || value === null) {
+    return { valid: true, value: {} };
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return {
+      valid: false,
+      code: "INVALID_HOME_SECTION_ORDER",
+      message: "首页展示顺序格式无效",
+    };
+  }
+  const normalized = {};
+  for (const slot of Object.keys(HOME_DISPLAY_LIMITS)) {
+    if (!Object.prototype.hasOwnProperty.call(value, slot)) continue;
+    const order = Number(value[slot]);
+    if (!Number.isInteger(order) || order <= 0 || order > HOME_DISPLAY_LIMITS[slot]) {
+      return {
+        valid: false,
+        code: "INVALID_HOME_SECTION_ORDER",
+        message: `${HOME_DISPLAY_LABELS[slot]}顺序必须在 1-${HOME_DISPLAY_LIMITS[slot]} 之间`,
+      };
+    }
+    normalized[slot] = order;
+  }
+  return { valid: true, value: normalized };
+}
+
+function getHomeSectionOrder(item = {}, slot) {
+  const normalizedSlot = normalizeHomepageDisplaySlot(slot);
+  if (!normalizedSlot) return 0;
+  const value = item && item.homeSectionOrder && item.homeSectionOrder[normalizedSlot];
+  const order = Number(value);
+  return Number.isInteger(order) && order > 0 ? order : 0;
 }
 
 function getActiveHomepageSlots(item = {}) {
@@ -336,7 +500,10 @@ function sanitizeCasePayload(input = {}, options = {}) {
 
   if (isCreate || Object.prototype.hasOwnProperty.call(picked, "packageTypes")) {
     data.packageTypes = valuesObject(picked.packageTypes);
-    if (!data.packageTypes.values.length) {
+    const mayStayIncomplete =
+      options.allowIncompleteHidden === true &&
+      picked.isVisible !== true;
+    if (!data.packageTypes.values.length && !mayStayIncomplete) {
       return { valid: false, code: "INVALID_PACKAGE_TYPES", message: "请选择包装内容" };
     }
   }
@@ -378,6 +545,13 @@ function sanitizeCasePayload(input = {}, options = {}) {
     data.homeSections = valuesObject(picked.homeSections);
   } else if (isCreate) {
     data.homeSections = { values: [] };
+  }
+  if (Object.prototype.hasOwnProperty.call(picked, "homeSectionOrder")) {
+    const orderResult = normalizeHomeSectionOrder(picked.homeSectionOrder);
+    if (!orderResult.valid) return orderResult;
+    data.homeSectionOrder = orderResult.value;
+  } else if (isCreate) {
+    data.homeSectionOrder = {};
   }
   if (Object.prototype.hasOwnProperty.call(picked, "sortOrder") || isCreate) {
     data.sortOrder = isCreate
@@ -427,6 +601,489 @@ function filterCaseItems(items = [], options = {}) {
   });
 }
 
+function normalizeFilterValues(value) {
+  return uniqueValues(normalizeValues(value));
+}
+
+function normalizeListCaseFilters(value = {}) {
+  const filters = value && typeof value === "object" ? value : {};
+  const trashValue = filters.trash === "all"
+    ? "all"
+    : filters.trash === true || filters.trash === "trash" || filters.visibility === "trashed";
+  return {
+    keyword: trimText(filters.keyword),
+    wineType: normalizeFilterValues(filters.wineType),
+    packageTypes: normalizeFilterValues(filters.packageTypes),
+    styles: normalizeFilterValues(filters.styles),
+    priceLevel: normalizeFilterValues(filters.priceLevel || filters.priceLevels),
+    scenes: normalizeFilterValues(filters.scenes),
+    statuses: normalizeFilterValues(filters.statuses || filters.operationTags),
+    homeSections: normalizeFilterValues(filters.homeSections || filters.homeSection),
+    visibility: normalizeVisibilityFilter(filters.visibility),
+    isPinned: typeof filters.isPinned === "boolean"
+      ? filters.isPinned
+      : filters.isPinned === "pinned"
+        ? true
+        : filters.isPinned === "unpinned"
+          ? false
+          : null,
+    trash: trashValue,
+  };
+}
+
+function hasAnyValue(itemValue, selectedValues) {
+  if (!selectedValues.length) return true;
+  const itemValues = new Set(normalizeValues(itemValue));
+  return selectedValues.some((value) => itemValues.has(value));
+}
+
+function filterCaseItemsV2(items = [], inputFilters = {}) {
+  const filters = normalizeListCaseFilters(inputFilters);
+  const keyword = filters.keyword.toLowerCase();
+  return items.filter((item) => {
+    const isTrashed = Boolean(item && item.deletedAt);
+    if (filters.trash === true && !isTrashed) return false;
+    if (filters.trash === false && isTrashed) return false;
+    if (filters.visibility === "visible" && item.isVisible !== true) return false;
+    if (filters.visibility === "hidden" && item.isVisible === true) return false;
+    if (filters.visibility === "pinned" && item.isPinned !== true) return false;
+    if (filters.isPinned !== null && (item.isPinned === true) !== filters.isPinned) return false;
+    if (!hasAnyValue(item.wineType, filters.wineType)) return false;
+    if (!hasAnyValue(item.packageTypes, filters.packageTypes)) return false;
+    if (!hasAnyValue(item.styles, filters.styles)) return false;
+    if (!hasAnyValue(item.priceLevel, filters.priceLevel)) return false;
+    if (!hasAnyValue(item.scenes, filters.scenes)) return false;
+    if (!hasAnyValue(item.statuses, filters.statuses)) return false;
+    if (!hasAnyValue(item.homeSections, filters.homeSections)) return false;
+    return !keyword || buildCaseSearchText(item).includes(keyword);
+  });
+}
+
+function normalizeListSort(value = {}) {
+  const sort = value && typeof value === "object" ? value : {};
+  return {
+    field: LIST_SORT_FIELDS.includes(sort.field) ? sort.field : "sortOrder",
+    direction: sort.direction === "desc" ? "desc" : "asc",
+  };
+}
+
+function comparableValue(value, field) {
+  if (field === "sortOrder") return normalizeSortOrder(value);
+  if (field === "createdAt" || field === "updatedAt") {
+    if (value instanceof Date) return value.getTime();
+    if (value && typeof value.getTime === "function") return value.getTime();
+    const timestamp = new Date(value || 0).getTime();
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  }
+  return trimText(value).toLocaleLowerCase("zh-CN");
+}
+
+function compareCaseItems(left = {}, right = {}, sortInput = {}) {
+  const sort = normalizeListSort(sortInput);
+  const leftValue = comparableValue(left[sort.field], sort.field);
+  const rightValue = comparableValue(right[sort.field], sort.field);
+  let difference = 0;
+  if (typeof leftValue === "number" && typeof rightValue === "number") {
+    difference = leftValue - rightValue;
+  } else {
+    difference = String(leftValue).localeCompare(String(rightValue), "zh-CN");
+  }
+  if (difference !== 0) return sort.direction === "desc" ? -difference : difference;
+  const caseIdDifference = trimText(left.caseId).localeCompare(trimText(right.caseId), "zh-CN");
+  if (caseIdDifference !== 0) return caseIdDifference;
+  return trimText(left._id || left.id).localeCompare(trimText(right._id || right.id), "zh-CN");
+}
+
+function sortCaseItemsV2(items = [], sort = {}) {
+  return items.slice().sort((left, right) => compareCaseItems(left, right, sort));
+}
+
+function paginateCaseItems(items = [], pageValue, pageSizeValue) {
+  const page = normalizePage(pageValue);
+  const pageSize = normalizePageSize(pageSizeValue);
+  const total = items.length;
+  const start = (page - 1) * pageSize;
+  return {
+    items: items.slice(start, start + pageSize),
+    page,
+    pageSize,
+    total,
+    totalPages: total ? Math.ceil(total / pageSize) : 0,
+    hasMore: start + pageSize < total,
+  };
+}
+
+function normalizeCaseIds(value, limit = CASE_BATCH_MAX) {
+  const source = Array.isArray(value) ? value : [];
+  const ids = uniqueValues(source);
+  if (!ids.length) {
+    return { valid: false, code: "INVALID_IDS", message: "请选择案例", ids: [] };
+  }
+  if (source.length !== ids.length) {
+    return { valid: false, code: "DUPLICATE_IDS", message: "案例列表不能包含重复项", ids };
+  }
+  if (ids.length > limit) {
+    return {
+      valid: false,
+      code: "BATCH_LIMIT_EXCEEDED",
+      message: `一次最多操作 ${limit} 个案例`,
+      ids,
+    };
+  }
+  return { valid: true, ids };
+}
+
+function normalizeTagMode(value) {
+  return ["append", "remove", "replace"].includes(value) ? value : "append";
+}
+
+function mergeTagValues(existingValue, requestedValue, mode) {
+  const existing = uniqueValues(normalizeValues(existingValue));
+  const requested = uniqueValues(normalizeValues(requestedValue));
+  if (mode === "replace") return requested;
+  if (mode === "remove") {
+    const removed = new Set(requested);
+    return existing.filter((value) => !removed.has(value));
+  }
+  return uniqueValues([...existing, ...requested]);
+}
+
+function buildBatchCasePatch(existing = {}, input = {}) {
+  const patch = input.patch && typeof input.patch === "object" ? input.patch : {};
+  const tags = input.tags && typeof input.tags === "object" ? input.tags : {};
+  const unsupported = Object.keys(patch).filter((field) => !BATCH_PATCH_FIELDS.includes(field));
+  const unsupportedTags = Object.keys(tags).filter((field) => !BATCH_TAG_FIELDS.includes(field));
+  if (unsupported.length || unsupportedTags.length) {
+    return {
+      valid: false,
+      code: "INVALID_BATCH_PATCH",
+      message: "批量修改包含不支持的字段",
+    };
+  }
+
+  const next = {};
+  for (const field of BATCH_PATCH_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(patch, field)) continue;
+    if (MULTI_TAG_FIELDS.includes(field)) {
+      next[field] = valuesObject(patch[field]);
+    } else if (field === "isVisible" || field === "isPinned") {
+      next[field] = patch[field] === true;
+    } else {
+      next[field] = trimText(patch[field]);
+    }
+  }
+
+  const tagMode = normalizeTagMode(input.tagMode);
+  for (const field of MULTI_TAG_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(tags, field)) continue;
+    next[field] = valuesObject(mergeTagValues(existing[field], tags[field], tagMode));
+  }
+  if (Object.prototype.hasOwnProperty.call(tags, "priceLevel")) {
+    const requested = uniqueValues(normalizeValues(tags.priceLevel));
+    if (requested.length > 1) {
+      return {
+        valid: false,
+        code: "INVALID_BATCH_PATCH",
+        message: "价位每次只能选择一个值",
+      };
+    }
+    const current = trimText(existing.priceLevel);
+    const value = trimText(requested[0]);
+    if (tagMode === "replace") {
+      next.priceLevel = value;
+    } else if (tagMode === "remove") {
+      next.priceLevel = value && current === value ? "" : current;
+    } else {
+      next.priceLevel = current || value;
+    }
+  }
+
+  const merged = { ...existing, ...next };
+  if (Object.prototype.hasOwnProperty.call(next, "homeSections")) {
+    const activeSlots = new Set(normalizeValues(next.homeSections));
+    next.homeSectionOrder = Object.keys(existing.homeSectionOrder || {}).reduce(
+      (orders, slot) => {
+        if (activeSlots.has(slot)) orders[slot] = existing.homeSectionOrder[slot];
+        return orders;
+      },
+      {}
+    );
+    merged.homeSectionOrder = next.homeSectionOrder;
+  }
+  if (merged.isVisible === true && !normalizeValues(merged.packageTypes).length) {
+    return {
+      valid: false,
+      code: "CASE_NOT_READY",
+      message: "案例缺少包装标签，补充后才能上架",
+    };
+  }
+  next.keywords = buildCaseKeywords(merged);
+  return { valid: true, data: next, tagMode };
+}
+
+function getRecordVersion(item = {}) {
+  const value = Number(item && item.version);
+  return Number.isInteger(value) && value > 0 ? value : 1;
+}
+
+function validateExpectedVersion(item, expectedVersion, options = {}) {
+  if (expectedVersion === undefined || expectedVersion === null || expectedVersion === "") {
+    return options.required === true
+      ? {
+        valid: false,
+        code: "EXPECTED_VERSION_REQUIRED",
+        message: "缺少案例版本，请刷新后重试",
+        currentVersion: getRecordVersion(item),
+      }
+      : { valid: true, currentVersion: getRecordVersion(item) };
+  }
+  const expected = Number(expectedVersion);
+  const currentVersion = getRecordVersion(item);
+  if (!Number.isInteger(expected) || expected <= 0) {
+    return {
+      valid: false,
+      code: "INVALID_VERSION",
+      message: "案例版本无效",
+      currentVersion,
+    };
+  }
+  if (expected !== currentVersion) {
+    return {
+      valid: false,
+      code: "VERSION_CONFLICT",
+      message: "案例已被其他管理员修改，请刷新后重试",
+      currentVersion,
+    };
+  }
+  return { valid: true, currentVersion };
+}
+
+function normalizeClientMutationId(value) {
+  const id = trimText(value);
+  if (!id) return { valid: true, value: "" };
+  if (id.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(id)) {
+    return {
+      valid: false,
+      code: "INVALID_MUTATION_ID",
+      message: "任务编号格式无效",
+      value: "",
+    };
+  }
+  return { valid: true, value: id };
+}
+
+function getCloudFilePath(fileID) {
+  const value = trimText(fileID);
+  if (!isCloudFileId(value)) return "";
+  const withoutScheme = value.slice("cloud://".length);
+  const slashIndex = withoutScheme.indexOf("/");
+  return slashIndex === -1 ? "" : withoutScheme.slice(slashIndex + 1);
+}
+
+function isSupportedSourceFileName(path) {
+  return /\.(?:jpe?g|png|webp)$/i.test(trimText(path));
+}
+
+function isWebAdminUploadFile(fileID, uid) {
+  const path = getCloudFilePath(fileID);
+  const normalizedUid = trimText(uid);
+  if (!path || !normalizedUid || path.includes("..")) return false;
+  const parts = path.split("/").filter(Boolean);
+  if (
+    parts.length < 5 ||
+    parts[0] !== "wine-packaging" ||
+    parts[1] !== "admin-web" ||
+    ![normalizedUid, encodeURIComponent(normalizedUid)].includes(parts[2])
+  ) {
+    return false;
+  }
+  return Boolean(parts[3] && parts.slice(4).join("/") && isSupportedSourceFileName(path));
+}
+
+function validateWebSourceFiles(fileIDs, actor) {
+  if (!actor || actor.type !== "cloudbase_uid") return { valid: true };
+  const sources = normalizeValues(fileIDs);
+  if (!sources.length || sources.some((fileID) => !isWebAdminUploadFile(fileID, actor.id))) {
+    return {
+      valid: false,
+      code: "INVALID_UPLOAD_PATH",
+      message: "图片必须来自当前管理员的后台上传目录，且格式为 JPEG、PNG 或 WebP",
+    };
+  }
+  return { valid: true };
+}
+
+function buildExpectedVariantPaths(sourceFileID) {
+  const digest = crypto
+    .createHash("sha256")
+    .update(trimText(sourceFileID))
+    .digest("hex")
+    .slice(0, 32);
+  return {
+    displayPath: `wine-packaging/variants/v2/${digest}/display.jpg`,
+    thumbnailPath: `wine-packaging/variants/v2/${digest}/thumbnail.jpg`,
+    bannerPath: `wine-packaging/variants/v2/${digest}/banner.jpg`,
+  };
+}
+
+function imageArrayValue(value) {
+  return normalizeValues(value).map(trimText).filter(Boolean);
+}
+
+function sameOrderedValues(left, right) {
+  const leftValues = imageArrayValue(left);
+  const rightValues = imageArrayValue(right);
+  return (
+    leftValues.length === rightValues.length &&
+    leftValues.every((value, index) => value === rightValues[index])
+  );
+}
+
+function hasCaseImageChanges(existing = {}, patch = {}) {
+  for (const field of CASE_IMAGE_ARRAY_FIELDS) {
+    if (
+      Object.prototype.hasOwnProperty.call(patch, field) &&
+      !sameOrderedValues(existing[field], patch[field])
+    ) {
+      return true;
+    }
+  }
+  for (const field of CASE_IMAGE_SCALAR_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(patch, field)) continue;
+    if (field === "imageVariantVersion") {
+      if (Number(existing[field] || 0) !== Number(patch[field] || 0)) return true;
+    } else if (trimText(existing[field]) !== trimText(patch[field])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function imageTupleKey(source, display, thumbnail, banner) {
+  return JSON.stringify([source, display, thumbnail, banner]);
+}
+
+/**
+ * A Web caller may only introduce deterministic variants generated from a
+ * source in its own upload directory. Exact tuples already stored on the case
+ * remain trusted so metadata-only edits and reordering migrated legacy images
+ * do not break.
+ */
+function validateWebImageVariants(item = {}, actor, options = {}) {
+  if (!actor || actor.type !== "cloudbase_uid") {
+    return { valid: true, introducedVariants: false };
+  }
+  const displays = imageArrayValue(item.galleryImages);
+  const sources = imageArrayValue(item.sourceGalleryImages);
+  const thumbnails = imageArrayValue(item.galleryThumbnails);
+  const banners = imageArrayValue(item.galleryBanners);
+  if (
+    !displays.length ||
+    sources.length !== displays.length ||
+    thumbnails.length !== displays.length ||
+    banners.length !== displays.length
+  ) {
+    return {
+      valid: false,
+      code: "INVALID_IMAGE_VARIANTS",
+      message: "电脑后台修改图片时必须提供完整的原图、展示图、缩略图和 Banner 变体",
+    };
+  }
+  if (
+    trimText(item.coverImage) !== displays[0] ||
+    trimText(item.coverThumbnail) !== thumbnails[0] ||
+    trimText(item.coverBanner) !== banners[0]
+  ) {
+    return {
+      valid: false,
+      code: "INVALID_IMAGE_VARIANTS",
+      message: "封面必须与图片列表第一项的变体一致",
+    };
+  }
+
+  const existing = options.existing || {};
+  const existingSources = imageArrayValue(existing.sourceGalleryImages);
+  const existingDisplays = imageArrayValue(existing.galleryImages);
+  const existingThumbnails = imageArrayValue(existing.galleryThumbnails);
+  const existingBanners = imageArrayValue(existing.galleryBanners);
+  const trustedExistingTuples = new Set();
+  const existingLength = Math.min(
+    existingSources.length,
+    existingDisplays.length,
+    existingThumbnails.length,
+    existingBanners.length
+  );
+  for (let index = 0; index < existingLength; index += 1) {
+    trustedExistingTuples.add(imageTupleKey(
+      existingSources[index],
+      existingDisplays[index],
+      existingThumbnails[index],
+      existingBanners[index]
+    ));
+  }
+
+  let introducedVariants = false;
+  for (let index = 0; index < displays.length; index += 1) {
+    const tupleKey = imageTupleKey(
+      sources[index],
+      displays[index],
+      thumbnails[index],
+      banners[index]
+    );
+    if (trustedExistingTuples.has(tupleKey)) continue;
+    introducedVariants = true;
+    if (!isWebAdminUploadFile(sources[index], actor.id)) {
+      return {
+        valid: false,
+        code: "INVALID_UPLOAD_PATH",
+        message: "新增图片必须来自当前管理员的后台上传目录",
+      };
+    }
+    const expected = buildExpectedVariantPaths(sources[index]);
+    if (
+      getCloudFilePath(displays[index]) !== expected.displayPath ||
+      getCloudFilePath(thumbnails[index]) !== expected.thumbnailPath ||
+      getCloudFilePath(banners[index]) !== expected.bannerPath
+    ) {
+      return {
+        valid: false,
+        code: "INVALID_IMAGE_VARIANTS",
+        message: "图片变体与原图不匹配，请重新处理后再保存",
+      };
+    }
+  }
+  return { valid: true, introducedVariants };
+}
+
+function validateHomepageOrders(value = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { valid: false, code: "INVALID_HOME_ORDERS", message: "首页编排格式无效" };
+  }
+  const orders = {};
+  for (const slot of Object.keys(HOME_DISPLAY_LIMITS)) {
+    const ids = Array.isArray(value[slot]) ? value[slot] : [];
+    const normalized = uniqueValues(ids);
+    if (normalized.length !== ids.length) {
+      return {
+        valid: false,
+        code: "DUPLICATE_HOME_CASE",
+        message: `${HOME_DISPLAY_LABELS[slot]}包含重复案例`,
+      };
+    }
+    if (normalized.length > HOME_DISPLAY_LIMITS[slot]) {
+      return {
+        valid: false,
+        code: "HOME_DISPLAY_LIMIT_REACHED",
+        slot,
+        limit: HOME_DISPLAY_LIMITS[slot],
+        message: `${HOME_DISPLAY_LABELS[slot]}最多展示 ${HOME_DISPLAY_LIMITS[slot]} 个`,
+      };
+    }
+    orders[slot] = normalized;
+  }
+  return { valid: true, orders };
+}
+
 function sortBySortOrder(items = [], direction = "asc") {
   const multiplier = direction === "desc" ? -1 : 1;
   return items.slice().sort((left, right) => {
@@ -455,10 +1112,27 @@ function buildHomepageDisplayItem(item = {}, options = {}) {
     displaySlot: slot,
     displayLabel: HOME_DISPLAY_LABELS[slot] || "首页展示",
     homeSections: normalizeValues(item.homeSections),
+    homeSectionOrder: normalizeHomeSectionOrder(item.homeSectionOrder).value,
     packageTypes: normalizeValues(item.packageTypes),
     styles: normalizeValues(item.styles),
     priceLevel: trimText(item.priceLevel),
   };
+}
+
+function sortHomepageDisplayItems(items = [], slot, fallbackDirection = "asc") {
+  return items.slice().sort((left, right) => {
+    const leftHomeOrder = getHomeSectionOrder(left, slot);
+    const rightHomeOrder = getHomeSectionOrder(right, slot);
+    if (leftHomeOrder && rightHomeOrder && leftHomeOrder !== rightHomeOrder) {
+      return leftHomeOrder - rightHomeOrder;
+    }
+    if (leftHomeOrder && !rightHomeOrder) return -1;
+    if (!leftHomeOrder && rightHomeOrder) return 1;
+    const multiplier = fallbackDirection === "desc" ? -1 : 1;
+    const sortDifference = normalizeSortOrder(left.sortOrder) - normalizeSortOrder(right.sortOrder);
+    if (sortDifference !== 0) return sortDifference * multiplier;
+    return trimText(left.id).localeCompare(trimText(right.id), "zh-CN");
+  });
 }
 
 function buildHomepageDisplaySearchText(item = {}) {
@@ -498,7 +1172,11 @@ function buildHomepageDisplayItems(cases = [], banners = [], options = {}) {
       .filter((item) => normalizeValues(item.homeSections).includes(slot))
       .map((item) => buildHomepageDisplayItem(item, { slot, source: "case" }));
     const seen = new Set();
-    items = sortBySortOrder(visibleBanners).concat(sortBySortOrder(caseBanners)).filter((item) => {
+    items = sortHomepageDisplayItems(
+      visibleBanners.concat(caseBanners),
+      slot,
+      "asc"
+    ).filter((item) => {
       const key = item.caseId || item.image || item.id;
       if (!key || seen.has(key)) return false;
       seen.add(key);
@@ -506,10 +1184,11 @@ function buildHomepageDisplayItems(cases = [], banners = [], options = {}) {
     });
   } else {
     const direction = slot === "latest" ? "desc" : "asc";
-    items = sortBySortOrder(
+    items = sortHomepageDisplayItems(
       visibleCases
         .filter((item) => normalizeValues(item.homeSections).includes(slot))
         .map((item) => buildHomepageDisplayItem(item, { slot, source: "case" })),
+      slot,
       direction
     );
   }
@@ -570,9 +1249,14 @@ function validateHomepageDisplayCapacity(cases = [], banners = [], candidate = {
 module.exports = {
   ALLOWED_CASE_FIELDS,
   BANNER_COLLECTION,
+  BATCH_PATCH_FIELDS,
+  BATCH_TAG_FIELDS,
+  CASE_ADMIN_OPTIONS,
   CASE_ADMIN_DEFAULT_SORT_ORDER,
+  CASE_BATCH_MAX,
   CASE_COLLECTION,
   CASE_GALLERY_MAX,
+  CASE_SCAN_BATCH_SIZE,
   IMAGE_URL_BATCH_SIZE,
   HOME_DISPLAY_LABELS,
   HOME_DISPLAY_LIMITS,
@@ -580,29 +1264,56 @@ module.exports = {
   PAGE_SIZE_MAX,
   PINNED_CASE_LIMIT,
   SEARCH_FETCH_LIMIT,
+  WEB_UPLOAD_PREFIX,
   VALID_CASE_ADMIN_ACTIONS,
+  buildBatchCasePatch,
   buildCaseKeywords,
   buildCaseSearchText,
+  buildExpectedVariantPaths,
   buildHomepageDisplayItems,
   buildHomepageDisplaySearchText,
+  compareCaseItems,
   filterCaseItems,
+  filterCaseItemsV2,
   filterHomepageDisplayItems,
   generateCaseId,
   generateSequentialCaseId,
+  getCloudFilePath,
+  getEnvList,
+  getHomeSectionOrder,
   getActivatedHomepageSlots,
   getActiveHomepageSlots,
   getAdminOpenidsFromEnv,
   getCaseIdNumber,
+  getRecordVersion,
+  hasCaseImageChanges,
+  isAdminActor,
   isAdminOpenid,
   isCloudFileId,
+  isSupportedSourceFileName,
+  isWebAdminUploadFile,
+  isWebWriteEnabled,
+  normalizeCaseIds,
+  normalizeClientMutationId,
   normalizeCloudFileIds,
   normalizeGalleryImages,
+  normalizeHomeSectionOrder,
+  normalizeListCaseFilters,
+  normalizeListSort,
   normalizePage,
   normalizePageSize,
   normalizeHomepageDisplaySlot,
   normalizeVisibilityFilter,
+  paginateCaseItems,
+  parseCloudbaseContext,
   pickAllowedCaseFields,
+  resolveAdminActor,
   sanitizeCasePayload,
+  sortCaseItemsV2,
   trimText,
+  validateExpectedVersion,
   validateHomepageDisplayCapacity,
+  validateHomepageOrders,
+  validateWebImageVariants,
+  validateWebSourceFiles,
 };

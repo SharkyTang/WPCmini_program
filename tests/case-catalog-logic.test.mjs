@@ -86,6 +86,42 @@ test("home feed enforces limits, ordering, and visibility", () => {
   );
 });
 
+test("home feed prefers independent section order and keeps legacy fallbacks", () => {
+  const ordered = buildHomeFeed([
+    buildCase(1, {
+      sortOrder: 1,
+      homeSections: { values: ["popular", "latest"] },
+      homeSectionOrder: { popular: 2, latest: 1 },
+    }),
+    buildCase(2, {
+      sortOrder: 99,
+      homeSections: { values: ["popular", "latest"] },
+      homeSectionOrder: { popular: 1, latest: 2 },
+    }),
+  ]);
+  assert.deepEqual(
+    plain(ordered.popularCases.map((item) => item.id)),
+    ["doc_2", "doc_1"]
+  );
+  assert.deepEqual(
+    plain(ordered.latestCases.map((item) => item.id)),
+    ["doc_1", "doc_2"]
+  );
+
+  const legacy = buildHomeFeed([
+    buildCase(1, { sortOrder: 1, homeSections: { values: ["popular", "latest"] } }),
+    buildCase(2, { sortOrder: 99, homeSections: { values: ["popular", "latest"] } }),
+  ]);
+  assert.deepEqual(
+    plain(legacy.popularCases.map((item) => item.id)),
+    ["doc_1", "doc_2"]
+  );
+  assert.deepEqual(
+    plain(legacy.latestCases.map((item) => item.id)),
+    ["doc_2", "doc_1"]
+  );
+});
+
 test("catalog snapshot handles target boundary sizes and hides records", () => {
   [0, 1, 20, 21, 89, 100].forEach((count) => {
     const records = Array.from({ length: count }, (_, index) => buildCase(index + 1));

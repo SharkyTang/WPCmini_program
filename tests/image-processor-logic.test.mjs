@@ -15,9 +15,13 @@ const {
   THUMBNAIL_SIZE,
   THUMBNAIL_TARGET_BYTES,
   buildVariantPaths,
+  detectSupportedImageType,
   generateVariantBuffers,
+  isAdminActor,
   isAdminOpenid,
+  isWebAdminUploadFile,
   normalizeSourceFiles,
+  resolveAdminActor,
 } = require(resolve(
   __dirname,
   "../miniprogram/cloudfunctions/imageProcessor/imageProcessorLogic.js"
@@ -36,6 +40,35 @@ async function test(name, fn) {
 await test("image processor accepts only configured admins", () => {
   assert.equal(isAdminOpenid("admin_2", "admin_1, admin_2"), true);
   assert.equal(isAdminOpenid("spoofed", "admin_1, admin_2"), false);
+});
+
+await test("image processor resolves and authorizes CloudBase UIDs", () => {
+  const identity = resolveAdminActor({ UID: "web-admin-1" }, {});
+  assert.deepEqual(identity, {
+    authenticated: true,
+    actor: { type: "cloudbase_uid", id: "web-admin-1" },
+  });
+  assert.equal(
+    isAdminActor(identity.actor, { CASE_ADMIN_UIDS: "web-admin-1,web-admin-2" }),
+    true
+  );
+  assert.equal(
+    isWebAdminUploadFile(
+      "cloud://env/wine-packaging/admin-web/web-admin-1/batch-1/source.webp",
+      "web-admin-1"
+    ),
+    true
+  );
+});
+
+await test("detects supported image signatures", () => {
+  assert.equal(detectSupportedImageType(Buffer.from([
+    0xff, 0xd8, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ])), "jpeg");
+  assert.equal(detectSupportedImageType(Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0,
+  ])), "png");
+  assert.equal(detectSupportedImageType(Buffer.from("not-an-image")), "");
 });
 
 await test("source file normalization deduplicates and enforces the nine image limit", () => {
