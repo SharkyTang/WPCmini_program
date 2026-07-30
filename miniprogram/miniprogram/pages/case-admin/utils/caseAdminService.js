@@ -298,11 +298,21 @@ async function generateCaseImageVariants(fileIDs = []) {
   return result.variants || [];
 }
 
+async function cleanupUnreferencedFiles(fileIDs = []) {
+  const uniqueFileIDs = Array.from(new Set(fileIDs.filter(isCloudFileId)));
+  if (!uniqueFileIDs.length) return [];
+  const result = await callCaseAdmin("cleanupUnreferencedFiles", {
+    fileIDs: uniqueFileIDs,
+  });
+  return result.deletedFileIds || [];
+}
+
 module.exports = {
   CASE_ADMIN_VIEW_OPTIONS,
   CASE_ADMIN_VISIBILITY_OPTIONS,
   DEFAULT_PAGE_SIZE,
   checkCaseAdminAccess,
+  cleanupUnreferencedFiles,
   createCaseAdmin,
   deleteCaseAdmin,
   fetchCaseAdminDetail,

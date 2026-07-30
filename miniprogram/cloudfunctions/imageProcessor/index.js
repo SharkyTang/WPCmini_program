@@ -40,19 +40,44 @@ async function processFile(fileID, sharpFactory) {
   const paths = buildVariantPaths(fileID);
   const response = await cloud.downloadFile({ fileID });
   const buffers = await generateVariantBuffers(sharpFactory, response.fileContent);
-  const [displayFileID, thumbnailFileID] = await Promise.all([
-    uploadVariant(paths.displayPath, buffers.displayBuffer),
-    uploadVariant(paths.thumbnailPath, buffers.thumbnailBuffer),
-  ]);
-  if (!displayFileID || !thumbnailFileID) {
-    throw new Error("图片变体上传失败");
+  const uploadedFileIDs = [];
+  try {
+    const uploadResults = await Promise.allSettled([
+      uploadVariant(paths.displayPath, buffers.displayBuffer),
+      uploadVariant(paths.thumbnailPath, buffers.thumbnailBuffer),
+      uploadVariant(paths.bannerPath, buffers.bannerBuffer),
+    ]);
+    uploadResults.forEach((result) => {
+      if (result.status === "fulfilled" && result.value) {
+        uploadedFileIDs.push(result.value);
+      }
+    });
+    const failedUpload = uploadResults.find((result) => result.status === "rejected");
+    if (failedUpload) throw failedUpload.reason;
+    const [displayFileID, thumbnailFileID, bannerFileID] = uploadResults.map(
+      (result) => result.value
+    );
+    if (!displayFileID || !thumbnailFileID || !bannerFileID) {
+      throw new Error("图片变体上传失败");
+    }
+    return {
+      sourceFileID: fileID,
+      displayFileID,
+      thumbnailFileID,
+      bannerFileID,
+      ...buffers.metadata,
+    };
+  } catch (error) {
+    const fileList = uploadedFileIDs.filter(Boolean);
+    if (fileList.length) {
+      try {
+        await cloud.deleteFile({ fileList });
+      } catch (cleanupError) {
+        console.error("imageProcessor cleanup error", cleanupError);
+      }
+    }
+    throw error;
   }
-  return {
-    sourceFileID: fileID,
-    displayFileID,
-    thumbnailFileID,
-    ...buffers.metadata,
-  };
 }
 
 async function generateCaseVariants(event, sharpFactory) {
@@ -63,8 +88,24 @@ async function generateCaseVariants(event, sharpFactory) {
     return fail("INVALID_FILES", "图片必须是五张以内且不能重复的云存储文件");
   }
   const variants = [];
-  for (const fileID of fileIDs) {
-    variants.push(await processFile(fileID, sharpFactory));
+  try {
+    for (const fileID of fileIDs) {
+      variants.push(await processFile(fileID, sharpFactory));
+    }
+  } catch (error) {
+    const fileList = variants.flatMap((variant) => [
+      variant.displayFileID,
+      variant.thumbnailFileID,
+      variant.bannerFileID,
+    ]).filter(Boolean);
+    if (fileList.length) {
+      try {
+        await cloud.deleteFile({ fileList });
+      } catch (cleanupError) {
+        console.error("imageProcessor batch cleanup error", cleanupError);
+      }
+    }
+    throw error;
   }
   return ok({ variants });
 }
@@ -83,7 +124,7 @@ exports.main = async (event = {}) => {
       });
     }
     if (action === "generateCaseVariants") {
-      return generateCaseVariants(event, loadSharp());
+      return await generateCaseVariants(event, loadSharp());
     }
     return fail("UNKNOWN_ACTION", "未知图片处理操作");
   } catch (error) {

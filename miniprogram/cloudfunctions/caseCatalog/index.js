@@ -112,6 +112,8 @@ const CARD_FIELDS = {
   isVisible: true,
   coverImage: true,
   coverThumbnail: true,
+  coverBanner: true,
+  imageVariantVersion: true,
 };
 
 async function getHomeFeed(event) {
@@ -132,6 +134,8 @@ async function getHomeFeed(event) {
         caseId: true,
         title: true,
         image: true,
+        optimizedImage: true,
+        imageVariantVersion: true,
         sortOrder: true,
         isVisible: true,
       },

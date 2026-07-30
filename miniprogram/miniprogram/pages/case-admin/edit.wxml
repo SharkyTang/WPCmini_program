@@ -41,6 +41,15 @@
         </view>
         <view wx:if="{{uploading}}" class="upload-mask">上传中...</view>
       </view>
+      <button
+        wx:if="{{imageProcessingFailed}}"
+        class="image-retry-button"
+        loading="{{uploading}}"
+        disabled="{{uploading}}"
+        bindtap="retryImageProcessing"
+      >
+        重试处理
+      </button>
       <view class="field-hint">最多 5 张；第一张为封面，可通过箭头调整顺序。图片会上传到云存储。</view>
     </view>
 
@@ -221,7 +230,7 @@
     <button
       class="save-button"
       loading="{{saving}}"
-      disabled="{{saving || uploading}}"
+      disabled="{{saving || uploading || imageProcessingFailed}}"
       bindtap="saveCase"
     >
       {{isEdit ? '保存修改' : '创建案例'}}

@@ -320,6 +320,20 @@ page {
   padding-bottom: 8rpx;
 }
 
+.image-retry-button {
+  margin: 18rpx 0 0;
+  border: 2rpx solid #b77a2d;
+  border-radius: 8rpx;
+  background: #fff8ed;
+  color: #8b571c;
+  font-size: 24rpx;
+  font-weight: 700;
+}
+
+.image-retry-button::after {
+  border: none;
+}
+
 .save-button {
   height: 84rpx;
   border-radius: 42rpx;

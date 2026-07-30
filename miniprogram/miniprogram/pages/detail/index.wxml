@@ -25,7 +25,7 @@
         bindchange="onGalleryChange"
       >
         <swiper-item wx:for="{{galleryItems}}" wx:key="fileID">
-          <image class="hero-image" mode="aspectFill" src="{{item.url}}" bindtap="previewImage"></image>
+          <image class="hero-image" mode="aspectFill" src="{{item.renderUrl}}" bindtap="previewImage"></image>
         </swiper-item>
       </swiper>
       <view

@@ -151,6 +151,7 @@ function normalizeCaseRecord(record = {}) {
     ? normalizedSourceImages
     : galleryImages.slice();
   const galleryThumbnails = normalizeGalleryImages(record.galleryThumbnails);
+  const galleryBanners = normalizeGalleryImages(record.galleryBanners);
   const normalized = {
     ...record,
     id: record._id || record.caseId || "",
@@ -160,8 +161,12 @@ function normalizeCaseRecord(record = {}) {
     galleryImages,
     sourceGalleryImages,
     galleryThumbnails,
+    galleryBanners,
     coverImage: galleryImages[0] || legacyCoverImage,
     coverThumbnail: firstImage(record.coverThumbnail),
+    coverBanner:
+      firstImage(record.coverBanner) || galleryBanners[0] || galleryImages[0] || legacyCoverImage,
+    imageVariantVersion: Number(record.imageVariantVersion) || 0,
     wineType: record.wineType || "白酒",
     priceLevel: normalizeDisplayValue("priceLevel", record.priceLevel || ""),
     notes: record.notes || record.description || "",
@@ -238,7 +243,9 @@ function normalizeBannerRecord(record = {}) {
   return {
     id: record._id || record.caseId || record.title || "",
     title: record.title || "",
-    image: firstImage(record.image || record.coverImage),
+    image: firstImage(record.optimizedImage || record.image || record.coverImage),
+    optimizedImage: firstImage(record.optimizedImage),
+    imageVariantVersion: Number(record.imageVariantVersion) || 0,
     caseId: record.caseId || "",
     sortOrder: toNumber(record.sortOrder),
   };
@@ -251,12 +258,12 @@ function buildFallbackBanners(banners = [], cases = []) {
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
   const caseBanners = cases
-    .filter((caseItem) => caseItem.coverImage)
+    .filter((caseItem) => caseItem.coverBanner || caseItem.coverImage)
     .filter((caseItem) => (caseItem.homeSections || []).includes(HOME_SECTION_VALUES.BANNER))
     .map((caseItem) => ({
       id: caseItem.id,
       title: caseItem.title,
-      image: caseItem.coverImage,
+      image: caseItem.coverBanner || caseItem.coverImage,
       caseId: caseItem.caseId || caseItem.id,
       sortOrder: caseItem.sortOrder,
     }));

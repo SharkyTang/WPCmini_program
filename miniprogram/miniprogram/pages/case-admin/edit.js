@@ -9,6 +9,7 @@ const {
 } = require("./utils/caseAdminData");
 const {
   createCaseAdmin,
+  cleanupUnreferencedFiles,
   fetchCaseAdminDetail,
   generateCaseImageVariants,
   updateCaseAdmin,
@@ -55,14 +56,6 @@ function alignGalleryFiles(fileIDs = [], fallbackFileIDs = []) {
   });
 }
 
-function buildOriginalImageFallbackVariants(fileIDs = []) {
-  return fileIDs.map((fileID) => ({
-    sourceFileID: fileID,
-    displayFileID: fileID,
-    thumbnailFileID: fileID,
-  }));
-}
-
 Page({
   data: {
     id: "",
@@ -70,6 +63,8 @@ Page({
     loading: false,
     saving: false,
     uploading: false,
+    imageProcessingFailed: false,
+    pendingImagePaths: [],
     errorMessage: "",
     coverImageUrl: "",
     galleryPreviewUrls: [],
@@ -107,6 +102,7 @@ Page({
         caseId: caseItem.caseId || "",
         coverImage: caseItem.coverImage || "",
         coverThumbnail: caseItem.coverThumbnail || "",
+        coverBanner: caseItem.coverBanner || "",
         galleryImages: (caseItem.galleryImages && caseItem.galleryImages.length
           ? caseItem.galleryImages
           : [caseItem.coverImage]).filter(Boolean),
@@ -118,6 +114,13 @@ Page({
           caseItem.galleryThumbnails && caseItem.galleryThumbnails.length
             ? caseItem.galleryThumbnails
             : [caseItem.coverThumbnail].filter(Boolean),
+        galleryBanners:
+          caseItem.galleryBanners &&
+          caseItem.galleryBanners.length ===
+            (caseItem.galleryImages || [caseItem.coverImage]).filter(Boolean).length
+            ? caseItem.galleryBanners
+            : (caseItem.galleryImages || [caseItem.coverImage]).filter(Boolean),
+        imageVariantVersion: Number(caseItem.imageVariantVersion) || 0,
         wineType: caseItem.wineType || "白酒",
         packageTypes: caseItem.packageTypes || [],
         styles: caseItem.styles || [],
@@ -257,10 +260,19 @@ Page({
   },
 
   async uploadGalleryImages(filePaths = []) {
+    if (this.data.uploading) return;
+    const selectedPaths = filePaths.slice(
+      0,
+      CASE_ADMIN_GALLERY_MAX - this.data.form.galleryImages.length
+    );
+    if (!selectedPaths.length) return;
     this.setData({
       uploading: true,
+      imageProcessingFailed: false,
+      pendingImagePaths: selectedPaths,
     });
 
+    const uploadedSources = [];
     try {
       const galleryImages = [...this.data.form.galleryImages];
       const sourceGalleryImages = alignGalleryFiles(
@@ -271,90 +283,97 @@ Page({
         this.data.form.galleryThumbnails || [],
         galleryImages
       );
-      const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
-      const selectedPaths = filePaths.slice(
-        0,
-        CASE_ADMIN_GALLERY_MAX - galleryImages.length
+      const galleryBanners = alignGalleryFiles(
+        this.data.form.galleryBanners || [],
+        galleryImages
       );
-      const uploadedSources = [];
-      const uploadedPreviews = [];
+      const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
       for (const filePath of selectedPaths) {
-        try {
-          const cloudPath = buildCaseAdminImagePath(filePath);
-          const fileID = await uploadCaseCoverImage({ filePath, cloudPath });
-          uploadedSources.push(fileID);
-          uploadedPreviews.push(filePath);
-        } catch (uploadError) {
-          console.warn("上传案例图片失败", uploadError);
-        }
+        const cloudPath = buildCaseAdminImagePath(filePath);
+        const fileID = await uploadCaseCoverImage({ filePath, cloudPath });
+        uploadedSources.push(fileID);
       }
-      if (!uploadedSources.length) {
-        throw new Error("图片上传失败");
+      if (uploadedSources.length !== selectedPaths.length) {
+        throw new Error("部分原图上传失败");
       }
 
-      let variants;
-      let usedOriginalFallback = false;
-      try {
-        variants = await generateCaseImageVariants(uploadedSources);
-        const variantsAreComplete =
-          variants.length === uploadedSources.length &&
-          variants.every((variant) => {
-            return Boolean(
-              variant &&
-              variant.sourceFileID &&
-              variant.displayFileID &&
-              variant.thumbnailFileID
-            );
-          });
-        if (!variantsAreComplete) {
-          throw new Error("图片处理结果不完整");
-        }
-      } catch (processingError) {
-        usedOriginalFallback = true;
-        variants = buildOriginalImageFallbackVariants(uploadedSources);
-        console.warn(
-          "图片变体处理失败，已使用原图继续保存",
-          processingError && processingError.code,
-          processingError && processingError.message
-        );
+      const variants = await generateCaseImageVariants(uploadedSources);
+      const variantsAreComplete =
+        variants.length === uploadedSources.length &&
+        variants.every((variant) => {
+          return Boolean(
+            variant &&
+            variant.sourceFileID &&
+            variant.displayFileID &&
+            variant.thumbnailFileID &&
+            variant.bannerFileID &&
+            Number(variant.variantVersion) === 2
+          );
+        });
+      if (!variantsAreComplete) {
+        throw new Error("图片处理结果不完整");
       }
 
       variants.forEach((variant, index) => {
         sourceGalleryImages.push(variant.sourceFileID);
         galleryImages.push(variant.displayFileID);
         galleryThumbnails.push(variant.thumbnailFileID);
-        galleryPreviewUrls.push(uploadedPreviews[index]);
+        galleryBanners.push(variant.bannerFileID);
+        galleryPreviewUrls.push(selectedPaths[index]);
       });
       const form = {
         ...this.data.form,
         galleryImages,
         sourceGalleryImages,
         galleryThumbnails,
+        galleryBanners,
         coverImage: galleryImages[0] || "",
         coverThumbnail: galleryThumbnails[0] || "",
+        coverBanner: galleryBanners[0] || "",
+        imageVariantVersion:
+          Number(this.data.form.imageVariantVersion) === 2 ||
+          galleryImages.length === variants.length
+            ? 2
+            : Number(this.data.form.imageVariantVersion) || 0,
       };
       this.setData({
         uploading: false,
+        imageProcessingFailed: false,
+        pendingImagePaths: [],
         coverImageUrl: galleryPreviewUrls[0] || "",
         galleryPreviewUrls,
         form,
         optionViews: buildCaseAdminOptionViews(form, this.data.formOptions),
       });
       wx.showToast({
-        title: usedOriginalFallback ? "原图已上传" : `已上传 ${variants.length} 张`,
+        title: `已上传 ${variants.length} 张`,
         icon: "none",
       });
     } catch (error) {
-      console.warn("上传案例封面失败", error);
+      console.warn("图片处理失败", error);
+      if (uploadedSources.length) {
+        try {
+          await cleanupUnreferencedFiles(uploadedSources);
+        } catch (cleanupError) {
+          console.warn("未引用原图清理失败", cleanupError);
+        }
+      }
       this.setData({
         uploading: false,
+        imageProcessingFailed: true,
+        pendingImagePaths: selectedPaths,
       });
-      this.showTopTips("图片上传失败，请重新选择一张图片");
+      this.showTopTips("图片处理失败，请重试");
       wx.showToast({
-        title: "图片上传失败",
+        title: "图片处理失败，请重试",
         icon: "none",
       });
     }
+  },
+
+  retryImageProcessing() {
+    if (!this.data.pendingImagePaths.length || this.data.uploading) return;
+    return this.uploadGalleryImages(this.data.pendingImagePaths);
   },
 
   moveGalleryImage(event) {
@@ -364,19 +383,23 @@ Page({
     const galleryImages = [...this.data.form.galleryImages];
     const sourceGalleryImages = [...(this.data.form.sourceGalleryImages || galleryImages)];
     const galleryThumbnails = [...(this.data.form.galleryThumbnails || [])];
+    const galleryBanners = [...(this.data.form.galleryBanners || [])];
     const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
     if (index < 0 || nextIndex < 0 || index >= galleryImages.length || nextIndex >= galleryImages.length) return;
     [galleryImages[index], galleryImages[nextIndex]] = [galleryImages[nextIndex], galleryImages[index]];
     [sourceGalleryImages[index], sourceGalleryImages[nextIndex]] = [sourceGalleryImages[nextIndex], sourceGalleryImages[index]];
     [galleryThumbnails[index], galleryThumbnails[nextIndex]] = [galleryThumbnails[nextIndex], galleryThumbnails[index]];
+    [galleryBanners[index], galleryBanners[nextIndex]] = [galleryBanners[nextIndex], galleryBanners[index]];
     [galleryPreviewUrls[index], galleryPreviewUrls[nextIndex]] = [galleryPreviewUrls[nextIndex], galleryPreviewUrls[index]];
     const form = {
       ...this.data.form,
       galleryImages,
       sourceGalleryImages,
       galleryThumbnails,
+      galleryBanners,
       coverImage: galleryImages[0],
       coverThumbnail: galleryThumbnails[0] || "",
+      coverBanner: galleryBanners[0] || "",
     };
     this.setData({
       form,
@@ -391,6 +414,7 @@ Page({
     const galleryImages = [...this.data.form.galleryImages];
     const sourceGalleryImages = [...(this.data.form.sourceGalleryImages || galleryImages)];
     const galleryThumbnails = [...(this.data.form.galleryThumbnails || [])];
+    const galleryBanners = [...(this.data.form.galleryBanners || [])];
     const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
     if (galleryImages.length <= 1) {
       this.showTopTips("案例至少保留一张图片");
@@ -400,14 +424,17 @@ Page({
     galleryImages.splice(index, 1);
     sourceGalleryImages.splice(index, 1);
     galleryThumbnails.splice(index, 1);
+    galleryBanners.splice(index, 1);
     galleryPreviewUrls.splice(index, 1);
     const form = {
       ...this.data.form,
       galleryImages,
       sourceGalleryImages,
       galleryThumbnails,
+      galleryBanners,
       coverImage: galleryImages[0],
       coverThumbnail: galleryThumbnails[0] || "",
+      coverBanner: galleryBanners[0] || "",
     };
     this.setData({
       form,
@@ -418,6 +445,14 @@ Page({
   },
 
   async saveCase() {
+    if (this.data.imageProcessingFailed || this.data.pendingImagePaths.length) {
+      this.showTopTips("请先重试并完成图片处理");
+      wx.showToast({
+        title: "请先完成图片处理",
+        icon: "none",
+      });
+      return;
+    }
     const validation = validateCaseAdminForm(this.data.form, {
       isCreate: !this.data.isEdit,
     });

@@ -17,15 +17,19 @@ function loadCaseEditPage(options = {}) {
     warnings: [],
     uploads: [],
     variantRequests: [],
+    cleanupRequests: [],
   };
   const initialForm = {
     title: "",
     caseId: "",
     coverImage: "",
     coverThumbnail: "",
+    coverBanner: "",
     galleryImages: [],
     sourceGalleryImages: [],
     galleryThumbnails: [],
+    galleryBanners: [],
+    imageVariantVersion: 2,
     wineType: "白酒",
     packageTypes: [],
     styles: [],
@@ -57,6 +61,10 @@ function loadCaseEditPage(options = {}) {
       if (moduleName === "./utils/caseAdminService") {
         return {
           createCaseAdmin: async () => ({}),
+          cleanupUnreferencedFiles: async (fileIDs) => {
+            calls.cleanupRequests.push(fileIDs);
+            return fileIDs;
+          },
           fetchCaseAdminDetail: async () => null,
           generateCaseImageVariants: async (fileIDs) => {
             calls.variantRequests.push(fileIDs);
@@ -65,6 +73,8 @@ function loadCaseEditPage(options = {}) {
               sourceFileID: fileID,
               displayFileID: `cloud://env/display-${index}.jpg`,
               thumbnailFileID: `cloud://env/thumbnail-${index}.jpg`,
+              bannerFileID: `cloud://env/banner-${index}.jpg`,
+              variantVersion: 2,
             }));
           },
           updateCaseAdmin: async () => ({}),
@@ -121,7 +131,7 @@ async function test(name, fn) {
   }
 }
 
-await test("successful image processing keeps optimized display and thumbnail files", async () => {
+await test("successful image processing keeps all v2 image variants", async () => {
   const { page, calls } = loadCaseEditPage();
 
   await page.uploadGalleryImages(["/tmp/source-a.jpg"]);
@@ -135,62 +145,52 @@ await test("successful image processing keeps optimized display and thumbnail fi
   assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryThumbnails)), [
     "cloud://env/thumbnail-0.jpg",
   ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryBanners)), [
+    "cloud://env/banner-0.jpg",
+  ]);
+  assert.equal(page.data.form.coverBanner, "cloud://env/banner-0.jpg");
+  assert.equal(page.data.form.imageVariantVersion, 2);
   assert.equal(page.data.uploading, false);
+  assert.equal(page.data.imageProcessingFailed, false);
   assert.equal(calls.toasts.at(-1).title, "已上传 1 张");
 });
 
-await test("image processor failures retain uploaded originals and allow saving", async () => {
+await test("image processor failures keep the form unchanged and clean uploaded originals", async () => {
   const error = new Error("无权限处理案例图片");
   error.code = "FORBIDDEN";
   const { page, calls } = loadCaseEditPage({ variantError: error });
 
   await page.uploadGalleryImages(["/tmp/source-a.jpg"]);
 
-  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.sourceGalleryImages)), [
-    "cloud://env/source-1.jpg",
+  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.sourceGalleryImages)), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryImages)), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryThumbnails)), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryBanners)), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.cleanupRequests)), [
+    ["cloud://env/source-1.jpg"],
   ]);
-  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryImages)), [
-    "cloud://env/source-1.jpg",
-  ]);
-  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryThumbnails)), [
-    "cloud://env/source-1.jpg",
-  ]);
-  assert.equal(page.data.form.coverImage, "cloud://env/source-1.jpg");
-  assert.equal(page.data.form.coverThumbnail, "cloud://env/source-1.jpg");
   assert.equal(page.data.uploading, false);
-  assert.equal(calls.toasts.at(-1).title, "原图已上传");
-  assert.equal(calls.warnings[0][0], "图片变体处理失败，已使用原图继续保存");
+  assert.equal(page.data.imageProcessingFailed, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(page.data.pendingImagePaths)), [
+    "/tmp/source-a.jpg",
+  ]);
+  assert.equal(calls.toasts.at(-1).title, "图片处理失败，请重试");
+  await page.saveCase();
+  assert.equal(calls.toasts.at(-1).title, "请先完成图片处理");
 });
 
-await test("fallback keeps legacy gallery arrays aligned when adding an image", async () => {
-  const { page } = loadCaseEditPage({
-    variantError: new Error("cloud function timeout"),
-  });
-  page.setData({
-    form: {
-      ...page.data.form,
-      coverImage: "cloud://env/legacy.jpg",
-      galleryImages: ["cloud://env/legacy.jpg"],
-      sourceGalleryImages: [],
-      galleryThumbnails: [],
-    },
-    galleryPreviewUrls: ["cloud://env/legacy.jpg"],
-  });
-
+await test("retry reuses local paths and only updates the form after success", async () => {
+  const options = { variantError: new Error("cloud function timeout") };
+  const { page } = loadCaseEditPage(options);
   await page.uploadGalleryImages(["/tmp/source-b.jpg"]);
+  options.variantError = null;
+  await page.retryImageProcessing();
 
-  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.sourceGalleryImages)), [
-    "cloud://env/legacy.jpg",
-    "cloud://env/source-1.jpg",
+  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryImages)), [
+    "cloud://env/display-0.jpg",
   ]);
-  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryThumbnails)), [
-    "cloud://env/legacy.jpg",
-    "cloud://env/source-1.jpg",
-  ]);
-  assert.equal(
-    page.data.form.galleryThumbnails.length,
-    page.data.form.galleryImages.length
-  );
+  assert.equal(page.data.imageProcessingFailed, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(page.data.pendingImagePaths)), []);
 });
 
 await test("raw upload failures still show the existing retry error", async () => {
@@ -202,6 +202,7 @@ await test("raw upload failures still show the existing retry error", async () =
 
   assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryImages)), []);
   assert.equal(page.data.uploading, false);
-  assert.equal(page.data.topTips.message, "图片上传失败，请重新选择一张图片");
-  assert.equal(calls.toasts.at(-1).title, "图片上传失败");
+  assert.equal(page.data.topTips.message, "图片处理失败，请重试");
+  assert.equal(page.data.imageProcessingFailed, true);
+  assert.equal(calls.toasts.at(-1).title, "图片处理失败，请重试");
 });

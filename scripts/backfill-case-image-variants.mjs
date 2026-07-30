@@ -17,9 +17,11 @@ const {
 
 const DEFAULT_ENV_ID = "cloud1-d3gznsms746425a42";
 const DEFAULT_COLLECTION = "wine_packaging";
-const DEFAULT_CHECKPOINT = ".case-variant-backfill.json";
+const DEFAULT_BANNER_COLLECTION = "home_banners";
+const DEFAULT_CHECKPOINT = ".case-variant-v2-backfill.json";
+const IMAGE_VARIANT_VERSION = 2;
 const PAGE_SIZE = 100;
-const BATCH_SIZE = 10;
+const BATCH_SIZE = 5;
 
 function parseNumber(value, fallback) {
   const parsed = Number(value);
@@ -30,6 +32,7 @@ export function parseBackfillArgs(argv) {
   const options = {
     envId: DEFAULT_ENV_ID,
     collection: DEFAULT_COLLECTION,
+    bannerCollection: DEFAULT_BANNER_COLLECTION,
     start: 1,
     limit: 0,
     dryRun: false,
@@ -44,6 +47,9 @@ export function parseBackfillArgs(argv) {
       index += 1;
     } else if (arg === "--collection") {
       options.collection = next;
+      index += 1;
+    } else if (arg === "--banner-collection") {
+      options.bannerCollection = next;
       index += 1;
     } else if (arg === "--start") {
       options.start = parseNumber(next, 1);
@@ -76,6 +82,7 @@ node scripts/backfill-case-image-variants.mjs --resume
 选项:
 --env <envId>          云开发环境 ID
 --collection <name>    案例集合，默认 wine_packaging
+--banner-collection    独立 Banner 集合，默认 home_banners
 --start <n>            从第 n 条开始
 --limit <n>            最多处理 n 条，0 表示全部
 --checkpoint <path>    断点文件路径
@@ -98,14 +105,14 @@ async function createCloudbaseApp(envId) {
   });
 }
 
-async function fetchAllCases(app, collectionName) {
+async function fetchAllRecords(app, collectionName, orderField = "sortOrder") {
   const records = [];
   let offset = 0;
   while (true) {
     const response = await app
       .database()
       .collection(collectionName)
-      .orderBy("sortOrder", "asc")
+      .orderBy(orderField, "asc")
       .skip(offset)
       .limit(PAGE_SIZE)
       .get();
@@ -132,12 +139,35 @@ export function needsVariantBackfill(record = {}) {
   const gallery = normalizeFileIDs(record.galleryImages, [record.coverImage]);
   const sources = normalizeFileIDs(record.sourceGalleryImages);
   const thumbnails = normalizeFileIDs(record.galleryThumbnails);
+  const banners = normalizeFileIDs(record.galleryBanners);
+  const hasAliasedThumbnail = gallery.some((fileID, index) => {
+    const thumbnail = thumbnails[index];
+    const source = sources[index];
+    return Boolean(thumbnail && (thumbnail === fileID || thumbnail === source));
+  });
   return Boolean(
     gallery.length &&
     (
+      Number(record.imageVariantVersion) < IMAGE_VARIANT_VERSION ||
       sources.length !== gallery.length ||
       thumbnails.length !== gallery.length ||
-      !record.coverThumbnail
+      banners.length !== gallery.length ||
+      !record.coverThumbnail ||
+      !record.coverBanner ||
+      hasAliasedThumbnail
+    )
+  );
+}
+
+export function needsBannerBackfill(record = {}) {
+  const image = normalizeFileIDs([record.image || record.coverImage])[0] || "";
+  const optimizedImage = normalizeFileIDs([record.optimizedImage])[0] || "";
+  return Boolean(
+    image &&
+    (
+      Number(record.imageVariantVersion) < IMAGE_VARIANT_VERSION ||
+      !optimizedImage ||
+      optimizedImage === image
     )
   );
 }
@@ -152,6 +182,21 @@ export function selectBackfillCandidates(candidates = [], options = {}, checkpoi
   const remaining = candidates
     .slice(start)
     .filter((item) => !completedCaseIds.has(item._id));
+  const limit = Math.max(0, Number(options.limit) || 0);
+  return limit > 0 ? remaining.slice(0, limit) : remaining;
+}
+
+export function selectBannerBackfillCandidates(
+  candidates = [],
+  options = {},
+  checkpoint = null
+) {
+  const completedBannerIds = new Set(
+    checkpoint && Array.isArray(checkpoint.completedBannerIds)
+      ? checkpoint.completedBannerIds
+      : []
+  );
+  const remaining = candidates.filter((item) => !completedBannerIds.has(item._id));
   const limit = Math.max(0, Number(options.limit) || 0);
   return limit > 0 ? remaining.slice(0, limit) : remaining;
 }
@@ -174,17 +219,21 @@ async function processSource(app, sourceFileID) {
   const download = await app.downloadFile({ fileID: sourceFileID });
   const buffers = await generateVariantBuffers(sharp, download.fileContent);
   const paths = buildVariantPaths(sourceFileID);
-  const [displayFileID, thumbnailFileID] = await Promise.all([
+  const [displayFileID, thumbnailFileID, bannerFileID] = await Promise.all([
     uploadVariant(app, paths.displayPath, buffers.displayBuffer),
     uploadVariant(app, paths.thumbnailPath, buffers.thumbnailBuffer),
+    uploadVariant(app, paths.bannerPath, buffers.bannerBuffer),
   ]);
-  if (!displayFileID || !thumbnailFileID) {
+  if (!displayFileID || !thumbnailFileID || !bannerFileID) {
     throw new Error(`变体上传失败：${sourceFileID}`);
   }
   return {
     sourceFileID,
     displayFileID,
     thumbnailFileID,
+    bannerFileID,
+    variantVersion: IMAGE_VARIANT_VERSION,
+    ...buffers.metadata,
   };
 }
 
@@ -202,12 +251,35 @@ async function processCase(app, collectionName, record) {
   }
   const galleryImages = variants.map((item) => item.displayFileID);
   const galleryThumbnails = variants.map((item) => item.thumbnailFileID);
+  const galleryBanners = variants.map((item) => item.bannerFileID);
   await app.database().collection(collectionName).doc(record._id).update({
     sourceGalleryImages: sources,
     galleryImages,
     galleryThumbnails,
+    galleryBanners,
     coverImage: galleryImages[0],
     coverThumbnail: galleryThumbnails[0],
+    coverBanner: galleryBanners[0],
+    imageVariantVersion: IMAGE_VARIANT_VERSION,
+    updatedAt: app.database().serverDate(),
+  });
+}
+
+async function processBanner(app, collectionName, record) {
+  const sourceFileID = normalizeFileIDs([record.image || record.coverImage])[0];
+  if (!sourceFileID) throw new Error(`Banner 缺少原图：${record._id}`);
+  const download = await app.downloadFile({ fileID: sourceFileID });
+  const buffers = await generateVariantBuffers(sharp, download.fileContent);
+  const paths = buildVariantPaths(sourceFileID);
+  const optimizedImage = await uploadVariant(
+    app,
+    paths.bannerPath,
+    buffers.bannerBuffer
+  );
+  if (!optimizedImage) throw new Error(`Banner 优化图上传失败：${record._id}`);
+  await app.database().collection(collectionName).doc(record._id).update({
+    optimizedImage,
+    imageVariantVersion: IMAGE_VARIANT_VERSION,
     updatedAt: app.database().serverDate(),
   });
 }
@@ -229,12 +301,21 @@ async function bumpCatalogRevision(app) {
 
 async function run(options) {
   const app = await createCloudbaseApp(options.envId);
-  const allCases = await fetchAllCases(app, options.collection);
-  const candidates = allCases.filter(needsVariantBackfill);
+  const [allCases, allBanners] = await Promise.all([
+    fetchAllRecords(app, options.collection),
+    fetchAllRecords(app, options.bannerCollection),
+  ]);
+  const caseCandidates = allCases.filter(needsVariantBackfill);
+  const bannerCandidates = allBanners.filter(needsBannerBackfill);
   const checkpoint = options.resume ? readCheckpoint(options.checkpoint) : null;
   const completedCaseIds = new Set(
     checkpoint && Array.isArray(checkpoint.completedCaseIds)
       ? checkpoint.completedCaseIds
+      : []
+  );
+  const completedBannerIds = new Set(
+    checkpoint && Array.isArray(checkpoint.completedBannerIds)
+      ? checkpoint.completedBannerIds
       : []
   );
   const failedCaseIds = new Set(
@@ -242,46 +323,125 @@ async function run(options) {
       ? checkpoint.failedCaseIds
       : []
   );
-  const selected = selectBackfillCandidates(candidates, options, checkpoint);
-  console.log(`待回填 ${selected.length} 条案例，批次大小 ${BATCH_SIZE}`);
+  const failedBannerIds = new Set(
+    checkpoint && Array.isArray(checkpoint.failedBannerIds)
+      ? checkpoint.failedBannerIds
+      : []
+  );
+  const currentCaseCandidateIds = new Set(caseCandidates.map((item) => item._id));
+  const currentBannerCandidateIds = new Set(bannerCandidates.map((item) => item._id));
+  Array.from(failedCaseIds).forEach((id) => {
+    if (!currentCaseCandidateIds.has(id)) failedCaseIds.delete(id);
+  });
+  Array.from(failedBannerIds).forEach((id) => {
+    if (!currentBannerCandidateIds.has(id)) failedBannerIds.delete(id);
+  });
+  const selectedCases = selectBackfillCandidates(
+    caseCandidates,
+    options,
+    checkpoint
+  );
+  const remainingLimit = options.limit
+    ? Math.max(0, options.limit - selectedCases.length)
+    : 0;
+  const selectedBanners =
+    options.limit && remainingLimit === 0
+      ? []
+      : selectBannerBackfillCandidates(
+          bannerCandidates,
+          { ...options, limit: options.limit ? remainingLimit : 0 },
+          checkpoint
+        );
+  console.log(
+    `待回填 ${selectedCases.length} 条案例、${selectedBanners.length} 条独立 Banner，批次大小 ${BATCH_SIZE}`
+  );
   if (options.dryRun) {
-    selected.slice(0, 20).forEach((item, index) => {
-      console.log(`${index + 1}. ${item._id} ${item.title || ""}`);
+    selectedCases.slice(0, 20).forEach((item, index) => {
+      console.log(`案例 ${index + 1}. ${item._id} ${item.title || ""}`);
+    });
+    selectedBanners.slice(0, 20).forEach((item, index) => {
+      console.log(`Banner ${index + 1}. ${item._id} ${item.title || ""}`);
     });
     return;
   }
 
-  let succeeded = completedCaseIds.size;
-  let failed = failedCaseIds.size;
-  let newlySucceeded = 0;
-  for (let index = 0; index < selected.length; index += 1) {
-    const record = selected[index];
+  let revisionBumped = checkpoint && checkpoint.revisionBumped === true;
+  if (caseCandidates.length || bannerCandidates.length) revisionBumped = false;
+  const saveProgress = (last = {}) => {
+    writeCheckpoint(options.checkpoint, {
+      version: IMAGE_VARIANT_VERSION,
+      lastCaseId: last.caseId || "",
+      lastBannerId: last.bannerId || "",
+      completedCaseIds: Array.from(completedCaseIds),
+      failedCaseIds: Array.from(failedCaseIds),
+      completedBannerIds: Array.from(completedBannerIds),
+      failedBannerIds: Array.from(failedBannerIds),
+      revisionBumped,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  for (let index = 0; index < selectedCases.length; index += 1) {
+    const record = selectedCases[index];
     try {
       await processCase(app, options.collection, record);
-      succeeded += 1;
-      newlySucceeded += 1;
       completedCaseIds.add(record._id);
-      if (failedCaseIds.delete(record._id)) failed -= 1;
-      console.log(`已完成 ${index + 1}/${selected.length}: ${record._id}`);
+      failedCaseIds.delete(record._id);
+      console.log(`案例已完成 ${index + 1}/${selectedCases.length}: ${record._id}`);
     } catch (error) {
-      if (!failedCaseIds.has(record._id)) failed += 1;
       failedCaseIds.add(record._id);
       console.error(`处理失败 ${record._id}: ${error.message}`);
     }
-    writeCheckpoint(options.checkpoint, {
-      lastCaseId: record._id,
-      succeeded,
-      failed,
-      completedCaseIds: Array.from(completedCaseIds),
-      failedCaseIds: Array.from(failedCaseIds),
-      updatedAt: new Date().toISOString(),
-    });
+    saveProgress({ caseId: record._id });
     if ((index + 1) % BATCH_SIZE === 0) {
-      console.log(`批次完成：成功 ${succeeded}，失败 ${failed}`);
+      console.log(
+        `案例批次完成：累计成功 ${completedCaseIds.size}，失败 ${failedCaseIds.size}`
+      );
     }
   }
-  if (newlySucceeded) await bumpCatalogRevision(app);
-  console.log(`回填完成：成功 ${succeeded}，失败 ${failed}`);
+
+  for (let index = 0; index < selectedBanners.length; index += 1) {
+    const record = selectedBanners[index];
+    try {
+      await processBanner(app, options.bannerCollection, record);
+      completedBannerIds.add(record._id);
+      failedBannerIds.delete(record._id);
+      console.log(`Banner 已完成 ${index + 1}/${selectedBanners.length}: ${record._id}`);
+    } catch (error) {
+      failedBannerIds.add(record._id);
+      console.error(`Banner 处理失败 ${record._id}: ${error.message}`);
+    }
+    saveProgress({ bannerId: record._id });
+    if ((index + 1) % BATCH_SIZE === 0) {
+      console.log(
+        `Banner 批次完成：累计成功 ${completedBannerIds.size}，失败 ${failedBannerIds.size}`
+      );
+    }
+  }
+
+  const unfinishedCases = caseCandidates.filter(
+    (record) => !completedCaseIds.has(record._id)
+  );
+  const unfinishedBanners = bannerCandidates.filter(
+    (record) => !completedBannerIds.has(record._id)
+  );
+  const migrationComplete =
+    !unfinishedCases.length &&
+    !unfinishedBanners.length &&
+    !failedCaseIds.size &&
+    !failedBannerIds.size;
+  if (
+    migrationComplete &&
+    !revisionBumped &&
+    (completedCaseIds.size || completedBannerIds.size)
+  ) {
+    await bumpCatalogRevision(app);
+    revisionBumped = true;
+    saveProgress();
+  }
+  console.log(
+    `回填结束：案例成功 ${completedCaseIds.size}、失败 ${failedCaseIds.size}；Banner 成功 ${completedBannerIds.size}、失败 ${failedBannerIds.size}；待处理 ${unfinishedCases.length + unfinishedBanners.length}`
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

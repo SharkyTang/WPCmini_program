@@ -55,6 +55,7 @@ function normalizeCaseRecord(record = {}) {
     ? normalizedSourceImages
     : galleryImages.slice();
   const galleryThumbnails = normalizeGallery(record.galleryThumbnails);
+  const galleryBanners = normalizeGallery(record.galleryBanners);
   const homeSections = normalizeValues(record.homeSections);
   const statuses = normalizeValues(record.statuses);
   const packageTypes = normalizeValues(record.packageTypes);
@@ -80,9 +81,13 @@ function normalizeCaseRecord(record = {}) {
     galleryImages,
     sourceGalleryImages,
     galleryThumbnails,
+    galleryBanners,
     coverImage: firstImage(record.coverImage) || galleryImages[0] || legacyCover,
     coverThumbnail:
       firstImage(record.coverThumbnail) || galleryThumbnails[0] || galleryImages[0] || legacyCover,
+    coverBanner:
+      firstImage(record.coverBanner) || galleryBanners[0] || galleryImages[0] || legacyCover,
+    imageVariantVersion: Number(record.imageVariantVersion) || 0,
   };
 }
 
@@ -134,7 +139,8 @@ function buildHomeCaseGroups(records = []) {
   const fallbackBanners = sortCases(
     cases.filter(
       (item) =>
-        item.homeSections.includes(HOME_SECTION_VALUES.BANNER) && Boolean(item.coverImage)
+        item.homeSections.includes(HOME_SECTION_VALUES.BANNER) &&
+        Boolean(item.coverBanner || item.coverImage)
     )
   )
     .slice(0, 5)
@@ -142,18 +148,21 @@ function buildHomeCaseGroups(records = []) {
       id: item.id,
       caseId: item.caseId || item.id,
       title: item.title,
-      image: item.coverImage,
+      image: item.coverBanner || item.coverImage,
       sortOrder: item.sortOrder,
     }));
   return { popularCases, latestCases, fallbackBanners };
 }
 
 function normalizeBanner(record = {}) {
+  const optimizedImage = firstImage(record.optimizedImage);
   return {
     id: record._id || record.id || record.caseId || trimText(record.title),
     caseId: record.caseId || "",
     title: trimText(record.title),
-    image: firstImage(record.image || record.coverImage),
+    image: optimizedImage || firstImage(record.image || record.coverImage),
+    optimizedImage,
+    imageVariantVersion: Number(record.imageVariantVersion) || 0,
     sortOrder: toNumber(record.sortOrder),
     isVisible: record.isVisible !== false,
   };
@@ -252,22 +261,19 @@ function mergeUserLibrary(type, libraryRecords = [], caseRecords = [], urlMap = 
 
 function buildDetail(record = {}, urlMap = {}) {
   const item = normalizeCaseRecord(record);
-  const sourceImages = item.sourceGalleryImages.length
-    ? item.sourceGalleryImages
-    : item.galleryImages;
+  const { sourceGalleryImages: _sourceGalleryImages, ...publicItem } = item;
   const gallery = item.galleryImages.map((fileID, index) => {
     const thumbnailFileID =
       item.galleryThumbnails[index] || item.coverThumbnail || fileID;
-    const sourceFileID = sourceImages[index] || fileID;
     return {
       fileID,
       thumbnailUrl: urlMap[thumbnailFileID] || urlMap[fileID] || "",
       displayUrl: urlMap[fileID] || "",
-      downloadUrl: urlMap[sourceFileID] || urlMap[fileID] || "",
+      downloadUrl: urlMap[fileID] || "",
     };
   });
   return {
-    ...item,
+    ...publicItem,
     gallery,
     coverImageUrl: gallery[0] ? gallery[0].displayUrl : "",
   };
@@ -280,7 +286,6 @@ function collectDetailImageFileIds(record = {}) {
       [
         ...item.galleryImages,
         ...item.galleryThumbnails,
-        ...item.sourceGalleryImages,
         item.coverImage,
         item.coverThumbnail,
       ].filter(Boolean)

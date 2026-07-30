@@ -58,9 +58,14 @@ function buildGalleryItems(caseItem = {}) {
     .filter((item) => item && (item.url || item.displayUrl))
     .map((item, index) => ({
       ...item,
-      url: item.url || item.displayUrl || "",
-      thumbnailUrl: item.thumbnailUrl || item.url || item.displayUrl || "",
-      downloadUrl: item.downloadUrl || item.url || item.displayUrl || "",
+      displayUrl: item.displayUrl || item.url || "",
+      thumbnailUrl: item.thumbnailUrl || item.displayUrl || item.url || "",
+      renderUrl:
+        index === 0
+          ? item.displayUrl || item.url || ""
+          : item.thumbnailUrl || item.displayUrl || item.url || "",
+      downloadUrl: item.displayUrl || item.url || "",
+      loaded: index === 0,
       index,
       positionLabel: `第 ${index + 1} 张`,
     }));
@@ -123,8 +128,8 @@ Page({
         detailSubtitle: buildDetailSubtitle(caseItem),
         galleryItems,
         currentImageIndex: 0,
-        currentImageUrl: galleryItems[0] ? galleryItems[0].url : "",
-        currentDownloadUrl: galleryItems[0] ? galleryItems[0].downloadUrl : "",
+        currentImageUrl: galleryItems[0] ? galleryItems[0].displayUrl : "",
+        currentDownloadUrl: galleryItems[0] ? galleryItems[0].displayUrl : "",
         customerServiceSessionFrom: buildCustomerSessionFrom({
           source: CUSTOMER_SERVICE_SOURCE.DETAIL,
           caseItem,
@@ -233,21 +238,29 @@ Page({
 
   onGalleryChange(event) {
     const currentImageIndex = Number(event.detail && event.detail.current) || 0;
-    const current = this.data.galleryItems[currentImageIndex];
-    this.setData({
-      currentImageIndex,
-      currentImageUrl: current ? current.url : "",
-      currentDownloadUrl: current ? current.downloadUrl : "",
-    });
+    this.showGalleryImage(currentImageIndex);
   },
 
   selectGalleryImage(event) {
     const currentImageIndex = Number(event.currentTarget.dataset.index) || 0;
+    this.showGalleryImage(currentImageIndex);
+  },
+
+  showGalleryImage(currentImageIndex) {
     const current = this.data.galleryItems[currentImageIndex];
+    if (!current) return;
+    const galleryItems = current.loaded
+      ? this.data.galleryItems
+      : this.data.galleryItems.map((item, index) =>
+          index === currentImageIndex
+            ? { ...item, renderUrl: item.displayUrl, loaded: true }
+            : item
+        );
     this.setData({
+      galleryItems,
       currentImageIndex,
-      currentImageUrl: current ? current.url : "",
-      currentDownloadUrl: current ? current.downloadUrl : "",
+      currentImageUrl: current.displayUrl,
+      currentDownloadUrl: current.displayUrl,
     });
   },
 

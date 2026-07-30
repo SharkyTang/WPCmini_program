@@ -119,7 +119,7 @@ test("user library preserves record order and identifies stale records", () => {
   assert.deepEqual(plain(result.staleIds), ["fav_missing"]);
 });
 
-test("detail uses display, thumbnail and source download variants with legacy fallback", () => {
+test("detail downloads the display variant and never exposes source URLs", () => {
   const source = "cloud://env/source.jpg";
   const display = "cloud://env/display.jpg";
   const thumbnail = "cloud://env/thumb.jpg";
@@ -141,14 +141,43 @@ test("detail uses display, thumbnail and source download variants with legacy fa
     fileID: display,
     thumbnailUrl: "https://temp/thumb",
     displayUrl: "https://temp/display",
-    downloadUrl: "https://temp/source",
+    downloadUrl: "https://temp/display",
   });
+  assert.equal(Object.prototype.hasOwnProperty.call(detail, "sourceGalleryImages"), false);
 
   const legacy = buildDetail(buildCase(2), {
     "cloud://env/case-2.jpg": "https://temp/legacy",
   });
   assert.equal(legacy.gallery[0].displayUrl, "https://temp/legacy");
   assert.equal(legacy.gallery[0].downloadUrl, "https://temp/legacy");
+});
+
+test("home banners prefer optimized independent and case banner variants", () => {
+  const caseBanner = "cloud://env/case-banner.jpg";
+  const independentBanner = "cloud://env/independent-banner.jpg";
+  const feed = buildHomeFeed(
+    [
+      buildCase(1, {
+        homeSections: { values: ["banner"] },
+        coverBanner: caseBanner,
+      }),
+    ],
+    [
+      {
+        _id: "banner_1",
+        image: "cloud://env/original-banner.jpg",
+        optimizedImage: independentBanner,
+        isVisible: true,
+        sortOrder: 1,
+      },
+    ],
+    {
+      [caseBanner]: "https://temp/case-banner",
+      [independentBanner]: "https://temp/independent-banner",
+    }
+  );
+  assert.equal(feed.banners[0].imageUrl, "https://temp/independent-banner");
+  assert.equal(feed.banners[1].imageUrl, "https://temp/case-banner");
 });
 
 test("case lookup chunks stay at ten ids", () => {

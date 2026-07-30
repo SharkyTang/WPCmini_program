@@ -75,6 +75,7 @@ function createQuery(collectionName, records, calls, condition = {}) {
 function loadCaseAdminFunction(options = {}) {
   const calls = [];
   const deletedFiles = [];
+  const tempFileRequests = [];
   const collections = {
     wine_packaging: clone(options.cases || []),
     home_banners: clone(options.banners || []),
@@ -91,6 +92,15 @@ function loadCaseAdminFunction(options = {}) {
     async deleteFile({ fileList }) {
       deletedFiles.push(...fileList);
       return { fileList };
+    },
+    async getTempFileURL({ fileList }) {
+      tempFileRequests.push(...fileList);
+      return {
+        fileList: fileList.map((fileID) => ({
+          fileID,
+          tempFileURL: `https://temp/${encodeURIComponent(fileID)}`,
+        })),
+      };
     },
     database() {
       return {
@@ -166,6 +176,7 @@ function loadCaseAdminFunction(options = {}) {
     calls,
     collections,
     deletedFiles,
+    tempFileRequests,
   };
 }
 
@@ -193,6 +204,28 @@ await test("deleteCase rejects non admins", async () => {
   assert.deepEqual(deletedFiles, []);
 });
 
+await test("public visible image URLs exclude original source files", async () => {
+  const source = "cloud://env/source.jpg";
+  const display = "cloud://env/display.jpg";
+  const { main, tempFileRequests } = loadCaseAdminFunction({
+    openid: "customer_openid",
+    cases: [{
+      _id: "case_doc_1",
+      isVisible: true,
+      galleryImages: [display],
+      sourceGalleryImages: [source],
+    }],
+  });
+  const result = await main({
+    action: "getVisibleImageUrls",
+    fileIDs: [source, display],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(result.urls, source), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result.urls, display), true);
+  assert.deepEqual(tempFileRequests, [display]);
+});
+
 await test("deleteCase reports missing cases", async () => {
   const { main } = loadCaseAdminFunction();
 
@@ -200,6 +233,25 @@ await test("deleteCase reports missing cases", async () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.code, "CASE_NOT_FOUND");
+});
+
+await test("cleanupUnreferencedFiles deletes only files confirmed unused", async () => {
+  const referenced = "cloud://env/referenced-banner.jpg";
+  const unused = "cloud://env/unused-source.jpg";
+  const { main, deletedFiles } = loadCaseAdminFunction({
+    cases: [{
+      _id: "case_doc_1",
+      galleryBanners: [referenced],
+      coverBanner: referenced,
+    }],
+  });
+  const result = await main({
+    action: "cleanupUnreferencedFiles",
+    fileIDs: [referenced, unused],
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(clone(result.deletedFileIds), [unused]);
+  assert.deepEqual(deletedFiles, [unused]);
 });
 
 await test("deleteCase preserves an unreferenced legacy source image", async () => {

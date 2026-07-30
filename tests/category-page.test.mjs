@@ -248,7 +248,7 @@ await test("category page consumes pending tab sort from storage", async () => {
   assert.equal(removedKey, "pendingCategorySort");
 });
 
-await test("category keeps the full snapshot off data and renders at most 24 cards", async () => {
+await test("category keeps the full snapshot off data and renders at most 12 cards", async () => {
   const cases = Array.from({ length: 50 }, (_, index) =>
     buildCase(`case_${index + 1}`)
   );
@@ -259,7 +259,7 @@ await test("category keeps the full snapshot off data and renders at most 24 car
 
   assert.equal(page._allCases.length, 50);
   assert.equal(page._filteredCases.length, 50);
-  assert.equal(page.data.visibleCards.length, 24);
+  assert.equal(page.data.visibleCards.length, 12);
   assert.equal(Object.prototype.hasOwnProperty.call(page.data, "allCases"), false);
   assert.equal(page.data.filteredCount, 50);
 });
@@ -293,12 +293,12 @@ await test("category load-more sends only appended card paths", async () => {
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
 
   const appendPatch = setDataCalls.find((patch) =>
-    Object.prototype.hasOwnProperty.call(patch, "visibleCards[24]")
+    Object.prototype.hasOwnProperty.call(patch, "visibleCards[12]")
   );
   assert.ok(appendPatch);
   assert.equal(Object.prototype.hasOwnProperty.call(appendPatch, "visibleCards"), false);
   assert.equal(
     Object.keys(appendPatch).filter((key) => key.startsWith("visibleCards[")).length,
-    24
+    12
   );
 });

@@ -9,7 +9,8 @@
     "import:cases:dry": "node scripts/import-wine-packaging.mjs --dry-run",
     "import:cases": "node scripts/import-wine-packaging.mjs",
     "backfill:image-variants:dry": "node scripts/backfill-case-image-variants.mjs --dry-run --limit 5",
-    "backfill:image-variants": "node scripts/backfill-case-image-variants.mjs --resume"
+    "backfill:image-variants": "node scripts/backfill-case-image-variants.mjs --resume",
+    "backup:cloudbase": "node scripts/backup-cloudbase-data.mjs"
   },
   "dependencies": {
     "@cloudbase/node-sdk": "^3.18.1"

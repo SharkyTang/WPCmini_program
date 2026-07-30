@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const wxmlPath = resolve(
@@ -15,6 +16,10 @@ const jsonPath = resolve(
 const wxssPath = resolve(
   __dirname,
   "../miniprogram/miniprogram/pages/detail/index.wxss"
+);
+const pagePath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/detail/index.js"
 );
 
 function test(name, fn) {
@@ -58,6 +63,95 @@ test("detail page supports a gallery and downloads the selected image", () => {
   assert.equal(wxml.includes('bindchange="onGalleryChange"'), true);
   assert.equal(wxml.includes('bindtap="selectGalleryImage"'), true);
   assert.equal(source.includes("currentImageUrl"), true);
+  assert.equal(wxml.includes('src="{{item.renderUrl}}"'), true);
+  assert.equal(source.includes("loaded: index === 0"), true);
+  assert.equal(source.includes("renderUrl: item.displayUrl"), true);
+});
+
+async function asyncTest(name, fn) {
+  try {
+    await fn();
+    console.log(`ok - ${name}`);
+  } catch (error) {
+    console.error(`not ok - ${name}`);
+    throw error;
+  }
+}
+
+await asyncTest("detail loads one display image and upgrades only the selected target", async () => {
+  let page;
+  const gallery = [0, 1, 2].map((index) => ({
+    fileID: `cloud://env/display-${index}.jpg`,
+    displayUrl: `https://temp/display-${index}`,
+    thumbnailUrl: `https://temp/thumb-${index}`,
+    downloadUrl: `https://temp/source-${index}`,
+  }));
+  const sandbox = {
+    Page(config) {
+      page = config;
+    },
+    console,
+    require(moduleName) {
+      if (moduleName === "../../utils/cloudData") {
+        return { fetchCaseById: async () => ({}) };
+      }
+      if (moduleName === "../../utils/caseCatalogService") {
+        return {
+          fetchCaseDetail: async () => ({
+            id: "case_1",
+            title: "案例",
+            packageTypes: [],
+            styles: [],
+            scenes: [],
+            gallery,
+          }),
+        };
+      }
+      if (moduleName === "../../utils/caseData") {
+        return { formatJoined: (values, fallback = "") => (values || []).join("/") || fallback };
+      }
+      if (moduleName === "../../utils/customerServiceData") {
+        return {
+          CUSTOMER_SERVICE_SOURCE: { DETAIL: "detail" },
+          buildCustomerSessionFrom: () => "",
+        };
+      }
+      if (moduleName === "../../utils/favoriteService") {
+        return {
+          fetchFavoriteForCase: async () => null,
+          toggleFavorite: async () => ({}),
+        };
+      }
+      if (moduleName === "../../utils/historyService") {
+        return { recordCaseView: async () => {} };
+      }
+      if (moduleName === "../../utils/userService") {
+        return { ensureProfileIdentity: async () => ({ ready: false }) };
+      }
+      throw new Error(`Unexpected require: ${moduleName}`);
+    },
+    wx: {},
+  };
+  vm.runInNewContext(readFileSync(pagePath, "utf8"), sandbox, {
+    filename: pagePath,
+  });
+  page.setData = function setData(patch) {
+    this.data = { ...this.data, ...patch };
+  };
+  await page.loadCase("case_1");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(page.data.galleryItems.map((item) => item.renderUrl))),
+    [
+      "https://temp/display-0",
+      "https://temp/thumb-1",
+      "https://temp/thumb-2",
+    ]
+  );
+  page.showGalleryImage(1);
+  assert.equal(page.data.galleryItems[0].renderUrl, "https://temp/display-0");
+  assert.equal(page.data.galleryItems[1].renderUrl, "https://temp/display-1");
+  assert.equal(page.data.galleryItems[2].renderUrl, "https://temp/thumb-2");
+  assert.equal(page.data.currentDownloadUrl, "https://temp/display-1");
 });
 
 test("detail page uses branded states and removes developer-facing copy", () => {

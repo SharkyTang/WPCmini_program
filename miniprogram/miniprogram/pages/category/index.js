@@ -28,7 +28,7 @@ const SORT_OPTIONS = [
   { key: "popular", title: "热门产品" },
 ];
 const PENDING_CATEGORY_SORT_KEY = "pendingCategorySort";
-const CARD_PAGE_SIZE = 24;
+const CARD_PAGE_SIZE = 12;
 const SEARCH_DEBOUNCE_MS = 250;
 const PANEL_SUBTITLES = {
   sort: "选择案例排序方式",

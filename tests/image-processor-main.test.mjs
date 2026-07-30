@@ -18,11 +18,29 @@ const logicPath = resolve(
 
 function loadMain(options = {}) {
   const exported = {};
+  const calls = {
+    uploads: [],
+    deletions: [],
+  };
   const cloud = {
     DYNAMIC_CURRENT_ENV: Symbol("DYNAMIC_CURRENT_ENV"),
     init() {},
     getWXContext() {
       return { OPENID: "admin_1" };
+    },
+    async downloadFile() {
+      return { fileContent: Buffer.from("source") };
+    },
+    async uploadFile({ cloudPath }) {
+      calls.uploads.push(cloudPath);
+      if (calls.uploads.length === options.uploadFailureIndex) {
+        throw new Error("upload failed");
+      }
+      return { fileID: `cloud://env/${cloudPath}` };
+    },
+    async deleteFile({ fileList }) {
+      calls.deletions.push(fileList);
+      return {};
     },
   };
   const sandbox = {
@@ -47,13 +65,19 @@ function loadMain(options = {}) {
           },
         };
       }
-      if (moduleName === "./imageProcessorLogic") return require(logicPath);
+      if (moduleName === "./imageProcessorLogic") {
+        return {
+          ...require(logicPath),
+          ...(options.logic || {}),
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
   };
   vm.runInNewContext(readFileSync(mainPath, "utf8"), sandbox, {
     filename: mainPath,
   });
+  exported.main.calls = calls;
   return exported.main;
 }
 
@@ -94,4 +118,80 @@ await test("health checks expose the loaded sharp version", async () => {
 
   assert.equal(result.ok, true);
   assert.equal(result.sharpVersion, "0.33.5");
+});
+
+await test("case variants return display, thumbnail and banner v2 files", async () => {
+  const main = loadMain({
+    logic: {
+      async generateVariantBuffers() {
+        return {
+          displayBuffer: Buffer.from("display"),
+          thumbnailBuffer: Buffer.from("thumbnail"),
+          bannerBuffer: Buffer.from("banner"),
+          metadata: {
+            bannerBytes: 6,
+            bannerQuality: 72,
+            variantVersion: 2,
+          },
+        };
+      },
+    },
+  });
+  const result = await main({
+    action: "generateCaseVariants",
+    files: ["cloud://env/source.jpg"],
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.variants.length, 1);
+  assert.match(result.variants[0].displayFileID, /display\.jpg$/);
+  assert.match(result.variants[0].thumbnailFileID, /thumbnail\.jpg$/);
+  assert.match(result.variants[0].bannerFileID, /banner\.jpg$/);
+  assert.equal(result.variants[0].variantVersion, 2);
+});
+
+await test("partial v2 upload failures clean generated files", async () => {
+  const main = loadMain({
+    uploadFailureIndex: 3,
+    logic: {
+      async generateVariantBuffers() {
+        return {
+          displayBuffer: Buffer.from("display"),
+          thumbnailBuffer: Buffer.from("thumbnail"),
+          bannerBuffer: Buffer.from("banner"),
+          metadata: { variantVersion: 2 },
+        };
+      },
+    },
+  });
+  const result = await main({
+    action: "generateCaseVariants",
+    files: ["cloud://env/source.jpg"],
+  });
+  assert.equal(result.ok, false);
+  assert.equal(main.calls.deletions.length, 1);
+  assert.equal(main.calls.deletions[0].length, 2);
+});
+
+await test("batch failures clean variants generated for earlier images", async () => {
+  const main = loadMain({
+    uploadFailureIndex: 6,
+    logic: {
+      async generateVariantBuffers() {
+        return {
+          displayBuffer: Buffer.from("display"),
+          thumbnailBuffer: Buffer.from("thumbnail"),
+          bannerBuffer: Buffer.from("banner"),
+          metadata: { variantVersion: 2 },
+        };
+      },
+    },
+  });
+  const result = await main({
+    action: "generateCaseVariants",
+    files: ["cloud://env/source-1.jpg", "cloud://env/source-2.jpg"],
+  });
+  assert.equal(result.ok, false);
+  assert.equal(main.calls.deletions.length, 2);
+  assert.equal(main.calls.deletions[0].length, 2);
+  assert.equal(main.calls.deletions[1].length, 3);
 });

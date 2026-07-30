@@ -29,6 +29,7 @@ function loadCaseCatalog(options = {}) {
   const calls = [];
   const recordsByCollection = options.recordsByCollection || {};
   const removed = [];
+  const tempFileRequests = [];
   const command = {
     in(values) {
       return { $in: values };
@@ -97,6 +98,7 @@ function loadCaseCatalog(options = {}) {
       return { OPENID: options.openid || "server_openid" };
     },
     async getTempFileURL({ fileList }) {
+      tempFileRequests.push(...fileList);
       return {
         fileList: fileList.map((fileID) => ({
           fileID,
@@ -129,6 +131,7 @@ function loadCaseCatalog(options = {}) {
     main: sandbox.module.exports.main,
     calls,
     removed,
+    tempFileRequests,
   };
 }
 
@@ -159,6 +162,37 @@ await test("known catalog revision returns notModified without reading cases", a
     calls.some((call) => call.collection === "wine_packaging"),
     false
   );
+});
+
+await test("public case detail never signs source originals", async () => {
+  const source = "cloud://env/source.jpg";
+  const display = "cloud://env/display.jpg";
+  const thumbnail = "cloud://env/thumbnail.jpg";
+  const { main, tempFileRequests } = loadCaseCatalog({
+    recordsByCollection: {
+      wine_packaging: [{
+        _id: "doc_1",
+        caseId: "case_1",
+        title: "案例",
+        isVisible: true,
+        galleryImages: [display],
+        sourceGalleryImages: [source],
+        galleryThumbnails: [thumbnail],
+        coverImage: display,
+        coverThumbnail: thumbnail,
+      }],
+    },
+  });
+  const result = await main({ action: "getCaseDetail", id: "doc_1" });
+  assert.equal(result.ok, true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(result.item, "sourceGalleryImages"),
+    false
+  );
+  assert.equal(result.item.gallery[0].downloadUrl, result.item.gallery[0].displayUrl);
+  assert.equal(tempFileRequests.includes(source), false);
+  assert.equal(tempFileRequests.includes(display), true);
+  assert.equal(tempFileRequests.includes(thumbnail), true);
 });
 
 await test("favorites use server OPENID and batched case lookups", async () => {

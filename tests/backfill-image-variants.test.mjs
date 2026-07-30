@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import {
   needsVariantBackfill,
+  needsBannerBackfill,
   parseBackfillArgs,
   selectBackfillCandidates,
 } from "../scripts/backfill-case-image-variants.mjs";
@@ -42,13 +43,45 @@ test("backfill skips complete variants and accepts legacy records", () => {
     sourceGalleryImages: [source],
     galleryImages: [display],
     galleryThumbnails: [thumbnail],
+    galleryBanners: ["cloud://env/banner.jpg"],
     coverThumbnail: thumbnail,
+    coverBanner: "cloud://env/banner.jpg",
+    imageVariantVersion: 2,
   }), false);
   assert.equal(needsVariantBackfill({
     galleryImages: [source],
     coverImage: source,
   }), true);
   assert.equal(needsVariantBackfill({ galleryImages: [] }), false);
+});
+
+test("backfill detects aliased thumbnails, inconsistent arrays and old versions", () => {
+  const source = "cloud://env/source.jpg";
+  const display = "cloud://env/display.jpg";
+  const banner = "cloud://env/banner.jpg";
+  assert.equal(needsVariantBackfill({
+    sourceGalleryImages: [source],
+    galleryImages: [display],
+    galleryThumbnails: [source],
+    galleryBanners: [banner],
+    coverThumbnail: source,
+    coverBanner: banner,
+    imageVariantVersion: 2,
+  }), true);
+  assert.equal(needsVariantBackfill({
+    sourceGalleryImages: [source],
+    galleryImages: [display],
+    galleryThumbnails: ["cloud://env/thumb.jpg"],
+    galleryBanners: [],
+    coverThumbnail: "cloud://env/thumb.jpg",
+    imageVariantVersion: 2,
+  }), true);
+  assert.equal(needsBannerBackfill({
+    image: source,
+    optimizedImage: banner,
+    imageVariantVersion: 2,
+  }), false);
+  assert.equal(needsBannerBackfill({ image: source }), true);
 });
 
 test("resume skips successful cases but retries prior failures", () => {

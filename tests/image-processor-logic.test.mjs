@@ -8,6 +8,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const {
   DISPLAY_LONG_EDGE,
+  BANNER_LONG_EDGE,
+  BANNER_TARGET_BYTES,
+  IMAGE_VARIANT_VERSION,
   MAX_FILES,
   THUMBNAIL_SIZE,
   THUMBNAIL_TARGET_BYTES,
@@ -58,9 +61,11 @@ await test("variant paths are deterministic and source-specific", () => {
   assert.notEqual(first.displayPath, second.displayPath);
   assert.match(first.displayPath, /\/display\.jpg$/);
   assert.match(first.thumbnailPath, /\/thumbnail\.jpg$/);
+  assert.match(first.bannerPath, /\/banner\.jpg$/);
+  assert.match(first.displayPath, /\/v2\//);
 });
 
-await test("generated display and thumbnail images satisfy size bounds", async () => {
+await test("generated display, thumbnail and banner images satisfy size bounds", async () => {
   const source = await sharp({
     create: {
       width: 2400,
@@ -72,10 +77,15 @@ await test("generated display and thumbnail images satisfy size bounds", async (
   const result = await generateVariantBuffers(sharp, source);
   const displayMeta = await sharp(result.displayBuffer).metadata();
   const thumbnailMeta = await sharp(result.thumbnailBuffer).metadata();
+  const bannerMeta = await sharp(result.bannerBuffer).metadata();
 
   assert.equal(Math.max(displayMeta.width, displayMeta.height) <= DISPLAY_LONG_EDGE, true);
   assert.equal(thumbnailMeta.width <= THUMBNAIL_SIZE, true);
   assert.equal(thumbnailMeta.height <= THUMBNAIL_SIZE, true);
   assert.equal(result.thumbnailBuffer.length <= THUMBNAIL_TARGET_BYTES, true);
+  assert.equal(Math.max(bannerMeta.width, bannerMeta.height) <= BANNER_LONG_EDGE, true);
+  assert.equal(result.bannerBuffer.length <= BANNER_TARGET_BYTES, true);
   assert.equal(result.metadata.thumbnailBytes, result.thumbnailBuffer.length);
+  assert.equal(result.metadata.bannerBytes, result.bannerBuffer.length);
+  assert.equal(result.metadata.variantVersion, IMAGE_VARIANT_VERSION);
 });

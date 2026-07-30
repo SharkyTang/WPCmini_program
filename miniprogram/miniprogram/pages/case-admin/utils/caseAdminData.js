@@ -88,9 +88,12 @@ function createEmptyCaseForm() {
     caseId: "",
     coverImage: "",
     coverThumbnail: "",
+    coverBanner: "",
     galleryImages: [],
     sourceGalleryImages: [],
     galleryThumbnails: [],
+    galleryBanners: [],
+    imageVariantVersion: 2,
     wineType: "白酒",
     packageTypes: [],
     styles: [],
@@ -128,16 +131,20 @@ function normalizeCaseAdminForm(form = {}) {
   const galleryImages = normalizeGalleryImages(form.galleryImages, form.coverImage);
   const sourceGalleryImages = normalizeGalleryImages(form.sourceGalleryImages);
   const galleryThumbnails = normalizeGalleryImages(form.galleryThumbnails);
+  const galleryBanners = normalizeGalleryImages(form.galleryBanners);
   return {
     title: trimText(form.title),
     caseId: trimText(form.caseId),
     coverImage: galleryImages[0] || trimText(form.coverImage),
     coverThumbnail: trimText(form.coverThumbnail),
+    coverBanner: trimText(form.coverBanner),
     galleryImages,
     sourceGalleryImages: sourceGalleryImages.length
       ? sourceGalleryImages
       : galleryImages.slice(),
     galleryThumbnails,
+    galleryBanners,
+    imageVariantVersion: Number(form.imageVariantVersion) || 0,
     wineType: trimText(form.wineType) || "白酒",
     packageTypes: normalizeStringList(form.packageTypes),
     styles: normalizeStringList(form.styles),
@@ -194,6 +201,18 @@ function validateCaseAdminForm(form = {}, options = {}) {
   if (normalized.galleryImages.length > CASE_ADMIN_GALLERY_MAX) {
     return { valid: false, message: "最多上传 5 张图片" };
   }
+  for (const [field, label] of [
+    ["sourceGalleryImages", "原图"],
+    ["galleryThumbnails", "缩略图"],
+    ["galleryBanners", "Banner"],
+  ]) {
+    if (
+      normalized[field].length &&
+      normalized[field].length !== normalized.galleryImages.length
+    ) {
+      return { valid: false, message: `${label}与展示图数量不一致，请重新处理图片` };
+    }
+  }
   if (!normalized.packageTypes.length) {
     return { valid: false, message: "请选择包装内容" };
   }
@@ -216,6 +235,9 @@ function buildCaseAdminPayload(form = {}) {
     galleryImages: normalized.galleryImages,
     sourceGalleryImages: normalized.sourceGalleryImages,
     galleryThumbnails: normalized.galleryThumbnails,
+    galleryBanners: normalized.galleryBanners,
+    coverBanner: normalized.coverBanner,
+    imageVariantVersion: normalized.imageVariantVersion,
     wineType: normalized.wineType,
     packageTypes: valuesObject(normalized.packageTypes),
     styles: valuesObject(normalized.styles),

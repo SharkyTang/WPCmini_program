@@ -57,6 +57,33 @@ test("declares supported case admin actions", () => {
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("createCase"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("setCaseVisibility"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("deleteCase"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("cleanupUnreferencedFiles"), true);
+});
+
+test("accepts complete v2 image arrays and rejects incomplete banners", () => {
+  const base = {
+    title: "v2 案例",
+    packageTypes: ["礼盒"],
+    galleryImages: ["cloud://env/display.jpg"],
+    sourceGalleryImages: ["cloud://env/source.jpg"],
+    galleryThumbnails: ["cloud://env/thumb.jpg"],
+    galleryBanners: ["cloud://env/banner.jpg"],
+    coverBanner: "cloud://env/banner.jpg",
+    imageVariantVersion: 2,
+  };
+  const valid = sanitizeCasePayload(base, {
+    isCreate: true,
+    defaultCaseId: "case_100",
+  });
+  assert.equal(valid.valid, true);
+  assert.equal(valid.data.coverBanner, "cloud://env/banner.jpg");
+  assert.equal(valid.data.imageVariantVersion, 2);
+  const invalid = sanitizeCasePayload(
+    { ...base, galleryImages: [...base.galleryImages, "cloud://env/display-2.jpg"] },
+    { isCreate: true, defaultCaseId: "case_101" }
+  );
+  assert.equal(invalid.valid, false);
+  assert.equal(invalid.code, "INCOMPLETE_IMAGE_VARIANTS");
 });
 
 test("normalizes cloud file ids for image URL exchange", () => {
@@ -109,6 +136,19 @@ test("rejects partially generated image variant arrays", () => {
 
   assert.equal(result.valid, false);
   assert.equal(result.code, "INCOMPLETE_IMAGE_VARIANTS");
+});
+
+test("rejects original or display images masquerading as thumbnails", () => {
+  const source = "cloud://env/source.jpg";
+  const result = sanitizeCasePayload({
+    title: "错误回退案例",
+    galleryImages: [source],
+    sourceGalleryImages: [source],
+    galleryThumbnails: [source],
+    packageTypes: ["礼盒"],
+  }, { isCreate: true, defaultCaseId: "case_093" });
+  assert.equal(result.valid, false);
+  assert.equal(result.code, "INVALID_IMAGE_VARIANTS");
 });
 
 test("sanitizes create payload with defaults and preserves visible flag", () => {

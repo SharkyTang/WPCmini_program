@@ -33,6 +33,7 @@ const VALID_CASE_ADMIN_ACTIONS = [
   "updateCase",
   "setCaseVisibility",
   "deleteCase",
+  "cleanupUnreferencedFiles",
 ];
 
 const ALLOWED_CASE_FIELDS = [
@@ -40,9 +41,12 @@ const ALLOWED_CASE_FIELDS = [
   "caseId",
   "coverImage",
   "coverThumbnail",
+  "coverBanner",
   "galleryImages",
   "sourceGalleryImages",
   "galleryThumbnails",
+  "galleryBanners",
+  "imageVariantVersion",
   "wineType",
   "packageTypes",
   "styles",
@@ -266,7 +270,13 @@ function sanitizeCasePayload(input = {}, options = {}) {
       return { valid: false, code: "INVALID_THUMBNAIL", message: "缩略图需要先上传到云存储" };
     }
   }
-  for (const field of ["sourceGalleryImages", "galleryThumbnails"]) {
+  if (Object.prototype.hasOwnProperty.call(picked, "coverBanner")) {
+    data.coverBanner = trimText(picked.coverBanner);
+    if (data.coverBanner && !isCloudFileId(data.coverBanner)) {
+      return { valid: false, code: "INVALID_BANNER", message: "Banner 图片需要先上传到云存储" };
+    }
+  }
+  for (const field of ["sourceGalleryImages", "galleryThumbnails", "galleryBanners"]) {
     if (Object.prototype.hasOwnProperty.call(picked, field)) {
       const normalizedImages = normalizeGalleryImages(picked[field]);
       if (!normalizedImages.valid) return normalizedImages;
@@ -290,7 +300,34 @@ function sanitizeCasePayload(input = {}, options = {}) {
         message: "缩略图与展示图数量不一致，请重新处理图片",
       };
     }
+    const aliasedThumbnail = data.galleryThumbnails.some((fileID, index) => {
+      return (
+        fileID === data.galleryImages[index] ||
+        (data.sourceGalleryImages && fileID === data.sourceGalleryImages[index])
+      );
+    });
+    if (aliasedThumbnail) {
+      return {
+        valid: false,
+        code: "INVALID_IMAGE_VARIANTS",
+        message: "原图不能作为缩略图，请重新处理图片",
+      };
+    }
     data.coverThumbnail = data.galleryThumbnails[0];
+  }
+  if (data.galleryImages && data.galleryBanners && data.galleryBanners.length) {
+    if (data.galleryBanners.length !== data.galleryImages.length) {
+      return {
+        valid: false,
+        code: "INCOMPLETE_IMAGE_VARIANTS",
+        message: "Banner 与展示图数量不一致，请重新处理图片",
+      };
+    }
+    data.coverBanner = data.galleryBanners[0];
+  }
+  if (Object.prototype.hasOwnProperty.call(picked, "imageVariantVersion")) {
+    const version = Number(picked.imageVariantVersion);
+    data.imageVariantVersion = Number.isInteger(version) && version >= 0 ? version : 0;
   }
 
   if (isCreate || Object.prototype.hasOwnProperty.call(picked, "packageTypes")) {
@@ -397,7 +434,10 @@ function sortBySortOrder(items = [], direction = "asc") {
 function buildHomepageDisplayItem(item = {}, options = {}) {
   const slot = normalizeHomepageDisplaySlot(options.slot);
   const source = options.source === "banner" ? "banner" : "case";
-  const image = source === "banner" ? trimText(item.image) : trimText(item.coverImage);
+  const image =
+    source === "banner"
+      ? trimText(item.optimizedImage || item.image)
+      : trimText(item.coverBanner || item.coverImage);
   return {
     id: item._id || item.caseId || image,
     caseId: trimText(item.caseId),
