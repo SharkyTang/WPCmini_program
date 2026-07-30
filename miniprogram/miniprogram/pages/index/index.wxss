@@ -34,18 +34,19 @@ page {
 }
 
 .banner-swiper {
-  height: 326rpx;
+  height: 382rpx;
   margin: 18rpx 0 42rpx;
 }
 
 .banner-card {
   position: relative;
-  height: 304rpx;
+  height: 360rpx;
   margin: 0 8rpx;
   overflow: hidden;
   border-radius: 8rpx;
   background: #f5e2ae;
   box-shadow: 0 14rpx 34rpx rgba(72, 49, 25, 0.14);
+  transition: opacity 180ms ease;
 }
 
 .banner-image {
@@ -54,8 +55,17 @@ page {
   display: block;
 }
 
+.banner-card-preview {
+  opacity: 0.72;
+}
+
+.banner-card-active {
+  opacity: 1;
+}
+
 .banner-title {
   position: absolute;
+  z-index: 1;
   left: 18rpx;
   bottom: 16rpx;
   max-width: 82%;

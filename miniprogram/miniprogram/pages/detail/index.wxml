@@ -93,14 +93,33 @@
         <view class="cta-copy">告诉我们包装方向和使用场景</view>
       </view>
 
-      <button
-        class="consult-button consult-contact-button"
-        open-type="contact"
-        session-from="{{customerServiceSessionFrom}}"
-        bindcontact="handleContact"
-      >
-        咨询同款包装方案
-      </button>
+      <block wx:if="{{customerServiceMessageImage}}">
+        <button
+          class="consult-button consult-contact-button"
+          open-type="contact"
+          session-from="{{customerServiceSessionFrom}}"
+          show-message-card="{{customerServiceMessageCardEnabled}}"
+          send-message-title="{{customerServiceMessageTitle}}"
+          send-message-path="{{customerServiceMessagePath}}"
+          send-message-img="{{customerServiceMessageImage}}"
+          bindcontact="handleContact"
+        >
+          咨询同款包装方案
+        </button>
+      </block>
+      <block wx:else>
+        <button
+          class="consult-button consult-contact-button"
+          open-type="contact"
+          session-from="{{customerServiceSessionFrom}}"
+          show-message-card="{{customerServiceMessageCardEnabled}}"
+          send-message-title="{{customerServiceMessageTitle}}"
+          send-message-path="{{customerServiceMessagePath}}"
+          bindcontact="handleContact"
+        >
+          咨询同款包装方案
+        </button>
+      </block>
     </view>
   </view>
 

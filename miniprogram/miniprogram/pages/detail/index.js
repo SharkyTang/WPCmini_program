@@ -3,6 +3,7 @@ const { fetchCaseDetail } = require("../../utils/caseCatalogService");
 const { formatJoined } = require("../../utils/caseData");
 const {
   CUSTOMER_SERVICE_SOURCE,
+  buildCustomerMessageCard,
   buildCustomerSessionFrom,
 } = require("../../utils/customerServiceData");
 const {
@@ -87,6 +88,10 @@ Page({
     currentImageIndex: 0,
     currentImageUrl: "",
     currentDownloadUrl: "",
+    customerServiceMessageCardEnabled: false,
+    customerServiceMessageTitle: "",
+    customerServiceMessagePath: "",
+    customerServiceMessageImage: "",
     customerServiceSessionFrom: buildCustomerSessionFrom({
       source: CUSTOMER_SERVICE_SOURCE.DETAIL,
     }),
@@ -120,6 +125,10 @@ Page({
         caseItem = await fetchCaseById(decodedId);
       }
       const galleryItems = buildGalleryItems(caseItem);
+      const customerServiceMessageCard = buildCustomerMessageCard({
+        caseItem,
+        imageUrl: galleryItems[0] ? galleryItems[0].displayUrl : "",
+      });
       this.setData({
         loading: false,
         caseItem,
@@ -130,6 +139,10 @@ Page({
         currentImageIndex: 0,
         currentImageUrl: galleryItems[0] ? galleryItems[0].displayUrl : "",
         currentDownloadUrl: galleryItems[0] ? galleryItems[0].displayUrl : "",
+        customerServiceMessageCardEnabled: customerServiceMessageCard.enabled,
+        customerServiceMessageTitle: customerServiceMessageCard.title,
+        customerServiceMessagePath: customerServiceMessageCard.path,
+        customerServiceMessageImage: customerServiceMessageCard.imageUrl,
         customerServiceSessionFrom: buildCustomerSessionFrom({
           source: CUSTOMER_SERVICE_SOURCE.DETAIL,
           caseItem,

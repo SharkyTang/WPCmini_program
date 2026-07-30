@@ -95,6 +95,7 @@ Page({
     popularCases: [],
     latestCases: [],
     caseDataVersion: 0,
+    activeBannerIndex: 0,
   },
 
   onLoad() {
@@ -224,6 +225,14 @@ Page({
     if (!id) return;
     wx.navigateTo({
       url: `/pages/detail/index?id=${encodeURIComponent(id)}`,
+    });
+  },
+
+  onBannerChange(event) {
+    const current = Number(event && event.detail && event.detail.current);
+    if (!Number.isInteger(current) || current < 0) return;
+    this.setData({
+      activeBannerIndex: current,
     });
   },
 });

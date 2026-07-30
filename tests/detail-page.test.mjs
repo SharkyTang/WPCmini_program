@@ -41,10 +41,28 @@ test("detail page exposes one clear return action for unavailable cases", () => 
 
 test("detail consult action opens official customer service", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
-
-  assert.equal(wxml.includes('open-type="contact"'), true);
-  assert.equal(wxml.includes('session-from="{{customerServiceSessionFrom}}"'), true);
-  assert.equal(wxml.includes('bindcontact="handleContact"'), true);
+  const contactBranches = wxml.match(
+    /<block wx:if="\{\{customerServiceMessageImage\}\}">([\s\S]*?)<\/block>\s*<block wx:else>([\s\S]*?)<\/block>/
+  );
+  assert.ok(contactBranches);
+  const imageBranch = contactBranches[1];
+  const fallbackBranch = contactBranches[2];
+  [
+    'open-type="contact"',
+    'session-from="{{customerServiceSessionFrom}}"',
+    'show-message-card="{{customerServiceMessageCardEnabled}}"',
+    'send-message-title="{{customerServiceMessageTitle}}"',
+    'send-message-path="{{customerServiceMessagePath}}"',
+    'bindcontact="handleContact"',
+  ].forEach((attribute) => {
+    assert.equal(imageBranch.includes(attribute), true);
+    assert.equal(fallbackBranch.includes(attribute), true);
+  });
+  assert.equal(
+    imageBranch.includes('send-message-img="{{customerServiceMessageImage}}"'),
+    true
+  );
+  assert.equal(fallbackBranch.includes("send-message-img"), false);
   assert.equal(wxml.includes('bindtap="showConsultTip"'), false);
 });
 
@@ -88,12 +106,21 @@ async function asyncTest(name, fn) {
 
 await asyncTest("detail loads one display image and upgrades only the selected target", async () => {
   let page;
+  const messageCardCalls = [];
   const gallery = Array.from({ length: 9 }, (_, index) => ({
     fileID: `cloud://env/display-${index}.jpg`,
     displayUrl: `https://temp/display-${index}`,
     thumbnailUrl: `https://temp/thumb-${index}`,
     downloadUrl: `https://temp/source-${index}`,
   }));
+  let detailCase = {
+    id: "case_1",
+    title: "案例",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+    gallery,
+  };
   const sandbox = {
     Page(config) {
       page = config;
@@ -105,14 +132,7 @@ await asyncTest("detail loads one display image and upgrades only the selected t
       }
       if (moduleName === "../../utils/caseCatalogService") {
         return {
-          fetchCaseDetail: async () => ({
-            id: "case_1",
-            title: "案例",
-            packageTypes: [],
-            styles: [],
-            scenes: [],
-            gallery,
-          }),
+          fetchCaseDetail: async () => detailCase,
         };
       }
       if (moduleName === "../../utils/caseData") {
@@ -121,6 +141,15 @@ await asyncTest("detail loads one display image and upgrades only the selected t
       if (moduleName === "../../utils/customerServiceData") {
         return {
           CUSTOMER_SERVICE_SOURCE: { DETAIL: "detail" },
+          buildCustomerMessageCard(options) {
+            messageCardCalls.push(options);
+            return {
+              enabled: Boolean(options.caseItem.id),
+              title: `咨询同款：${options.caseItem.title}`,
+              path: `/pages/detail/index?id=${encodeURIComponent(options.caseItem.id)}`,
+              imageUrl: options.imageUrl,
+            };
+          },
           buildCustomerSessionFrom: () => "",
         };
       }
@@ -147,6 +176,10 @@ await asyncTest("detail loads one display image and upgrades only the selected t
     this.data = { ...this.data, ...patch };
   };
   await page.loadCase("case_1");
+  assert.equal(page.data.errorMessage, "");
+  assert.equal(messageCardCalls.length, 1);
+  assert.equal(messageCardCalls[0].caseItem.id, "case_1");
+  assert.equal(messageCardCalls[0].imageUrl, "https://temp/display-0");
   assert.deepEqual(
     JSON.parse(JSON.stringify(page.data.galleryItems.map((item) => item.renderUrl))),
     Array.from(
@@ -157,16 +190,38 @@ await asyncTest("detail loads one display image and upgrades only the selected t
           : `https://temp/thumb-${index}`
     )
   );
+  assert.equal(page.data.customerServiceMessageCardEnabled, true);
+  assert.equal(page.data.customerServiceMessageTitle, "咨询同款：案例");
+  assert.equal(page.data.customerServiceMessagePath, "/pages/detail/index?id=case_1");
+  assert.equal(page.data.customerServiceMessageImage, "https://temp/display-0");
   page.selectGalleryImage({ currentTarget: { dataset: { index: 7 } } });
   assert.equal(page.data.galleryItems[0].renderUrl, "https://temp/display-0");
   assert.equal(page.data.galleryItems[7].renderUrl, "https://temp/display-7");
   assert.equal(page.data.galleryItems[8].renderUrl, "https://temp/thumb-8");
   assert.equal(page.data.currentImageIndex, 7);
   assert.equal(page.data.currentDownloadUrl, "https://temp/display-7");
+  assert.equal(page.data.customerServiceMessageImage, "https://temp/display-0");
   page.onGalleryChange({ detail: { current: 8 } });
   assert.equal(page.data.galleryItems[8].renderUrl, "https://temp/display-8");
   assert.equal(page.data.currentImageIndex, 8);
   assert.equal(page.data.currentDownloadUrl, "https://temp/display-8");
+  assert.equal(page.data.customerServiceMessageImage, "https://temp/display-0");
+
+  detailCase = {
+    id: "case_without_cover",
+    title: "无封面案例",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+    gallery: [],
+    coverImageUrl: "",
+  };
+  await page.loadCase("case_without_cover");
+  assert.equal(page.data.errorMessage, "");
+  assert.equal(messageCardCalls.length, 2);
+  assert.equal(messageCardCalls[1].imageUrl, "");
+  assert.equal(page.data.customerServiceMessageCardEnabled, true);
+  assert.equal(page.data.customerServiceMessageImage, "");
 });
 
 test("detail page uses branded states and removes developer-facing copy", () => {

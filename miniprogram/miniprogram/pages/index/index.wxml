@@ -11,13 +11,26 @@
     circular
     interval="3600"
     duration="450"
-    previous-margin="24rpx"
-    next-margin="24rpx"
+    previous-margin="188rpx"
+    next-margin="188rpx"
+    bindchange="onBannerChange"
   >
-    <swiper-item wx:for="{{banners}}" wx:key="id">
-      <view class="banner-card" bindtap="onBannerTap" data-id="{{item.caseId}}">
-        <image class="banner-image" mode="aspectFill" src="{{item.imageUrl}}" lazy-load></image>
-        <view class="banner-title" wx:if="{{item.title}}">{{item.title}}</view>
+    <swiper-item wx:for="{{banners}}" wx:for-index="bannerIndex" wx:key="id">
+      <view
+        class="banner-card {{bannerIndex == activeBannerIndex ? 'banner-card-active' : 'banner-card-preview'}}"
+        bindtap="onBannerTap"
+        data-id="{{item.caseId}}"
+      >
+        <image
+          class="banner-image"
+          mode="aspectFill"
+          src="{{item.imageUrl}}"
+          lazy-load
+        ></image>
+        <view
+          class="banner-title"
+          wx:if="{{item.title && bannerIndex == activeBannerIndex}}"
+        >{{item.title}}</view>
       </view>
     </swiper-item>
   </swiper>

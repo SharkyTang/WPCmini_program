@@ -7,6 +7,7 @@ import vm from "node:vm";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pagePath = resolve(__dirname, "../miniprogram/miniprogram/pages/index/index.js");
 const wxmlPath = resolve(__dirname, "../miniprogram/miniprogram/pages/index/index.wxml");
+const wxssPath = resolve(__dirname, "../miniprogram/miniprogram/pages/index/index.wxss");
 
 function loadHomePage(wxMock = {}, cases = []) {
   let pageConfig;
@@ -120,6 +121,80 @@ await test("home sections expose more links for popular and latest products", ()
   assert.equal(wxml.includes('data-sort="latest"'), true);
   assert.equal(wxml.includes('bindtap="navigateToCategory"'), true);
   assert.equal((wxml.match(/class="product-image"\s+mode="aspectFill"/g) || []).length, 2);
+});
+
+await test("home carousel keeps one crop ratio across active and preview cards", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+  const wxss = readFileSync(wxssPath, "utf8");
+  const swiperBlock = wxml.match(/<swiper\b[\s\S]*?<\/swiper>/)?.[0] || "";
+  const swiperTag = swiperBlock.match(/<swiper\b[^>]*>/)?.[0] || "";
+  const bannerCardTag =
+    swiperBlock.match(/<view\b[^>]*class="banner-card[^"]*"[^>]*>/)?.[0] || "";
+  const foregroundTag =
+    swiperBlock.match(/<image\b[^>]*class="banner-image"[^>]*>/)?.[0] || "";
+  const titleTag =
+    swiperBlock.match(/<view\b[^>]*class="banner-title"[\s\S]*?>/)?.[0] || "";
+
+  assert.equal(swiperBlock.includes("banner-image-backdrop"), false);
+  assert.equal(wxss.includes("banner-image-backdrop"), false);
+  assert.match(foregroundTag, /mode="aspectFill"/);
+  assert.equal(foregroundTag.includes("activeBannerIndex ?"), false);
+  assert.match(foregroundTag, /src="{{item\.imageUrl}}"/);
+  assert.match(foregroundTag, /\slazy-load(?:\s|>)/);
+  assert.match(wxss, /\.banner-swiper\s*\{[^}]*height:\s*382rpx/s);
+  assert.match(wxss, /\.banner-card\s*\{[^}]*height:\s*360rpx/s);
+  assert.match(wxss, /\.banner-card-preview\s*\{[^}]*opacity:\s*0\.72/s);
+  assert.match(wxss, /\.banner-card-active\s*\{[^}]*opacity:\s*1/s);
+  assert.match(swiperTag, /\sautoplay(?:\s|>)/);
+  assert.match(swiperTag, /\scircular(?:\s|>)/);
+  assert.match(swiperTag, /interval="3600"/);
+  assert.match(swiperTag, /duration="450"/);
+  assert.match(swiperTag, /previous-margin="188rpx"/);
+  assert.match(swiperTag, /next-margin="188rpx"/);
+  assert.match(swiperTag, /bindchange="onBannerChange"/);
+  assert.match(swiperBlock, /wx:for-index="bannerIndex"/);
+  assert.match(bannerCardTag, /bannerIndex == activeBannerIndex/);
+  assert.match(titleTag, /item\.title && bannerIndex == activeBannerIndex/);
+  assert.match(bannerCardTag, /bindtap="onBannerTap"/);
+  assert.match(bannerCardTag, /data-id="{{item\.caseId}}"/);
+});
+
+await test("home carousel tracks the active banner for its title state", () => {
+  const { page } = loadHomePage();
+
+  assert.equal(page.data.activeBannerIndex, 0);
+  page.onBannerChange({
+    detail: {
+      current: 2,
+    },
+  });
+  assert.equal(page.data.activeBannerIndex, 2);
+
+  page.onBannerChange({
+    detail: {
+      current: -1,
+    },
+  });
+  assert.equal(page.data.activeBannerIndex, 2);
+});
+
+await test("home banner tap still opens its case detail", () => {
+  let navigatedUrl = "";
+  const { page } = loadHomePage({
+    navigateTo(options) {
+      navigatedUrl = options.url;
+    },
+  });
+
+  page.onBannerTap({
+    currentTarget: {
+      dataset: {
+        id: "case 1",
+      },
+    },
+  });
+
+  assert.equal(navigatedUrl, "/pages/detail/index?id=case%201");
 });
 
 await test("home page shows only selected home section cases", async () => {
