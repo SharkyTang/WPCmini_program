@@ -52,7 +52,7 @@ type StorageLike = {
 };
 
 type CloudbaseAppLike = {
-  auth: AuthLike | (() => AuthLike);
+  auth: AuthLike;
   callFunction: (input: {
     name: string;
     data: Record<string, unknown>;
@@ -106,8 +106,7 @@ export class CloudbaseAdminApi implements AdminApi {
   }
 
   private getAuth(): AuthLike {
-    const auth = this.getApp().auth;
-    return typeof auth === "function" ? auth() : auth;
+    return this.getApp().auth;
   }
 
   private async call<T extends ResultEnvelope>(
