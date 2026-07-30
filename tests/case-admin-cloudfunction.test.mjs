@@ -12,6 +12,7 @@ const logic = require(resolve(
 
 const {
   ALLOWED_CASE_FIELDS,
+  CASE_GALLERY_MAX,
   HOME_DISPLAY_LIMITS,
   VALID_CASE_ADMIN_ACTIONS,
   buildCaseSearchText,
@@ -123,6 +124,30 @@ test("uses the first gallery image as the server-side cover", () => {
   assert.equal(result.data.coverImage, "cloud://cloud1/cover.jpg");
   assert.deepEqual(plain(result.data.galleryImages), ["cloud://cloud1/cover.jpg", "cloud://cloud1/detail.jpg"]);
   assert.equal(result.data.isPinned, true);
+});
+
+test("server accepts nine case images and rejects the tenth", () => {
+  const galleryImages = Array.from(
+    { length: CASE_GALLERY_MAX },
+    (_, index) => `cloud://cloud1/display-${index}.jpg`
+  );
+  const accepted = sanitizeCasePayload({
+    title: "九图案例",
+    galleryImages,
+    packageTypes: ["礼盒"],
+  }, { isCreate: true, defaultCaseId: "case_109" });
+  const rejected = sanitizeCasePayload({
+    title: "十图案例",
+    galleryImages: [...galleryImages, "cloud://cloud1/display-9.jpg"],
+    packageTypes: ["礼盒"],
+  }, { isCreate: true, defaultCaseId: "case_111" });
+
+  assert.equal(CASE_GALLERY_MAX, 9);
+  assert.equal(accepted.valid, true);
+  assert.equal(accepted.data.galleryImages.length, 9);
+  assert.equal(rejected.valid, false);
+  assert.equal(rejected.code, "TOO_MANY_IMAGES");
+  assert.equal(rejected.message, "一个案例最多上传 9 张图片");
 });
 
 test("rejects partially generated image variant arrays", () => {

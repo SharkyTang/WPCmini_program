@@ -20,6 +20,7 @@ const DEFAULT_COLLECTION = "wine_packaging";
 const DEFAULT_BANNER_COLLECTION = "home_banners";
 const DEFAULT_CHECKPOINT = ".case-variant-v2-backfill.json";
 const IMAGE_VARIANT_VERSION = 2;
+const CASE_GALLERY_MAX = 9;
 const PAGE_SIZE = 100;
 const BATCH_SIZE = 5;
 
@@ -132,7 +133,7 @@ function normalizeFileIDs(value, fallback = []) {
         (fileID) => typeof fileID === "string" && fileID.startsWith("cloud://")
       )
     )
-  ).slice(0, 5);
+  ).slice(0, CASE_GALLERY_MAX);
 }
 
 export function needsVariantBackfill(record = {}) {

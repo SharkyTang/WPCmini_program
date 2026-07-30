@@ -38,9 +38,9 @@ await test("image processor accepts only configured admins", () => {
   assert.equal(isAdminOpenid("spoofed", "admin_1, admin_2"), false);
 });
 
-await test("source file normalization deduplicates and enforces the five image limit", () => {
+await test("source file normalization deduplicates and enforces the nine image limit", () => {
   const files = Array.from(
-    { length: 8 },
+    { length: 12 },
     (_, index) => `cloud://env/source-${index}.jpg`
   );
   const normalized = normalizeSourceFiles([
@@ -49,6 +49,7 @@ await test("source file normalization deduplicates and enforces the five image l
     "/tmp/not-cloud.jpg",
     ...files.slice(1),
   ]);
+  assert.equal(MAX_FILES, 9);
   assert.equal(normalized.length, MAX_FILES);
   assert.equal(new Set(normalized).size, MAX_FILES);
 });

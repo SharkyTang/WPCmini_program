@@ -190,6 +190,34 @@ test("detail downloads the display variant and never exposes source URLs", () =>
   assert.equal(legacy.gallery[0].downloadUrl, "https://temp/legacy");
 });
 
+test("detail preserves all nine case images", () => {
+  const galleryImages = Array.from(
+    { length: 9 },
+    (_, index) => `cloud://env/display-${index}.jpg`
+  );
+  const galleryThumbnails = Array.from(
+    { length: 9 },
+    (_, index) => `cloud://env/thumb-${index}.jpg`
+  );
+  const urlMap = [...galleryImages, ...galleryThumbnails].reduce((map, fileID) => {
+    map[fileID] = `https://temp/${fileID.split("/").pop()}`;
+    return map;
+  }, {});
+  const detail = buildDetail(
+    buildCase(9, {
+      galleryImages,
+      galleryThumbnails,
+      coverImage: galleryImages[0],
+      coverThumbnail: galleryThumbnails[0],
+    }),
+    urlMap
+  );
+
+  assert.equal(detail.gallery.length, 9);
+  assert.equal(detail.gallery[8].fileID, galleryImages[8]);
+  assert.equal(detail.gallery[8].thumbnailUrl, urlMap[galleryThumbnails[8]]);
+});
+
 test("home banners prefer optimized independent and case banner variants", () => {
   const caseBanner = "cloud://env/case-banner.jpg";
   const independentBanner = "cloud://env/independent-banner.jpg";

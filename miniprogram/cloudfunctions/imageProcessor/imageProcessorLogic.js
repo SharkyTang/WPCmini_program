@@ -1,6 +1,6 @@
 const crypto = require("node:crypto");
 
-const MAX_FILES = 5;
+const MAX_FILES = 9;
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 const DISPLAY_LONG_EDGE = 1600;
 const THUMBNAIL_SIZE = 640;

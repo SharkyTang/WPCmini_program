@@ -124,6 +124,8 @@ function firstImage(value) {
   return "";
 }
 
+const CASE_GALLERY_MAX = 9;
+
 function normalizeGalleryImages(value, fallbackImage = "") {
   const seen = new Set();
   const values = Array.isArray(value) ? value : value ? [value] : [];
@@ -135,7 +137,7 @@ function normalizeGalleryImages(value, fallbackImage = "") {
       seen.add(fileID);
       return true;
     })
-    .slice(0, 5);
+    .slice(0, CASE_GALLERY_MAX);
 }
 
 function toNumber(value, fallback = 9999) {

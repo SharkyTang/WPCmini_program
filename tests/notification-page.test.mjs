@@ -184,7 +184,7 @@ function loadCaseEditPage(options = {}) {
           buildCaseAdminOptionViews: () => ({}),
           buildCaseAdminPayload: (form) => form,
           createEmptyCaseForm: () => ({ ...emptyForm }),
-          CASE_ADMIN_GALLERY_MAX: 5,
+          CASE_ADMIN_GALLERY_MAX: 9,
           validateCaseAdminForm: () => ({ valid: true }),
         };
       }

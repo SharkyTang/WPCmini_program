@@ -16,7 +16,12 @@ function loadCaseEditPage(options = {}) {
     toasts: [],
     warnings: [],
     uploads: [],
+    activeUploads: 0,
+    maxConcurrentUploads: 0,
+    mediaPickerCounts: [],
     variantRequests: [],
+    activeVariantRequests: 0,
+    maxConcurrentVariantRequests: 0,
     cleanupRequests: [],
   };
   const initialForm = {
@@ -54,7 +59,7 @@ function loadCaseEditPage(options = {}) {
           buildCaseAdminOptionViews: () => ({}),
           buildCaseAdminPayload: (form) => form,
           createEmptyCaseForm: () => ({ ...initialForm }),
-          CASE_ADMIN_GALLERY_MAX: 5,
+          CASE_ADMIN_GALLERY_MAX: 9,
           validateCaseAdminForm: () => ({ valid: true }),
         };
       }
@@ -67,21 +72,55 @@ function loadCaseEditPage(options = {}) {
           },
           fetchCaseAdminDetail: async () => null,
           generateCaseImageVariants: async (fileIDs) => {
+            const callNumber = calls.variantRequests.length + 1;
             calls.variantRequests.push(fileIDs);
-            if (options.variantError) throw options.variantError;
-            return options.variants || fileIDs.map((fileID, index) => ({
-              sourceFileID: fileID,
-              displayFileID: `cloud://env/display-${index}.jpg`,
-              thumbnailFileID: `cloud://env/thumbnail-${index}.jpg`,
-              bannerFileID: `cloud://env/banner-${index}.jpg`,
-              variantVersion: 2,
-            }));
+            calls.activeVariantRequests += 1;
+            calls.maxConcurrentVariantRequests = Math.max(
+              calls.maxConcurrentVariantRequests,
+              calls.activeVariantRequests
+            );
+            try {
+              await Promise.resolve();
+              if (
+                options.variantError ||
+                options.variantFailureCall === callNumber
+              ) {
+                throw options.variantError || new Error("variant batch failed");
+              }
+              const variants = options.variants || fileIDs.map((fileID, index) => {
+                const sourceMatch = /source-(\d+)\.jpg$/.exec(fileID);
+                const variantIndex = sourceMatch
+                  ? Number(sourceMatch[1]) - 1
+                  : index;
+                return {
+                  sourceFileID: fileID,
+                  displayFileID: `cloud://env/display-${variantIndex}.jpg`,
+                  thumbnailFileID: `cloud://env/thumbnail-${variantIndex}.jpg`,
+                  bannerFileID: `cloud://env/banner-${variantIndex}.jpg`,
+                  variantVersion: 2,
+                };
+              });
+              return options.reverseVariants ? variants.reverse() : variants;
+            } finally {
+              calls.activeVariantRequests -= 1;
+            }
           },
           updateCaseAdmin: async () => ({}),
           uploadCaseCoverImage: async ({ filePath }) => {
             calls.uploads.push(filePath);
-            if (options.uploadError) throw options.uploadError;
-            return `cloud://env/source-${calls.uploads.length}.jpg`;
+            const uploadIndex = calls.uploads.length;
+            calls.activeUploads += 1;
+            calls.maxConcurrentUploads = Math.max(
+              calls.maxConcurrentUploads,
+              calls.activeUploads
+            );
+            try {
+              await Promise.resolve();
+              if (options.uploadError) throw options.uploadError;
+              return `cloud://env/source-${uploadIndex}.jpg`;
+            } finally {
+              calls.activeUploads -= 1;
+            }
           },
         };
       }
@@ -102,6 +141,9 @@ function loadCaseEditPage(options = {}) {
       callback();
     },
     wx: {
+      chooseMedia(options) {
+        calls.mediaPickerCounts.push(options.count);
+      },
       showToast(toast) {
         calls.toasts.push(toast);
       },
@@ -155,6 +197,93 @@ await test("successful image processing keeps all v2 image variants", async () =
   assert.equal(calls.toasts.at(-1).title, "已上传 1 张");
 });
 
+await test("one case accepts up to nine selected images with bounded concurrency", async () => {
+  const { page, calls } = loadCaseEditPage();
+  const selectedPaths = Array.from(
+    { length: 10 },
+    (_, index) => `/tmp/source-${index}.jpg`
+  );
+
+  await page.uploadGalleryImages(selectedPaths);
+
+  assert.equal(calls.uploads.length, 9);
+  assert.equal(calls.maxConcurrentUploads, 3);
+  assert.equal(calls.variantRequests.length, 3);
+  assert.deepEqual(
+    calls.variantRequests.map((fileIDs) => fileIDs.length),
+    [3, 3, 3]
+  );
+  assert.equal(calls.maxConcurrentVariantRequests, 3);
+  assert.equal(page.data.form.galleryImages.length, 9);
+  assert.equal(page.data.form.sourceGalleryImages.length, 9);
+  assert.equal(page.data.form.galleryThumbnails.length, 9);
+  assert.equal(page.data.form.galleryBanners.length, 9);
+  assert.equal(calls.toasts.at(-1).title, "已上传 9 张");
+});
+
+await test("variant results are aligned back to the original selection order", async () => {
+  const { page } = loadCaseEditPage({ reverseVariants: true });
+
+  await page.uploadGalleryImages([
+    "/tmp/source-a.jpg",
+    "/tmp/source-b.jpg",
+    "/tmp/source-c.jpg",
+  ]);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryImages)), [
+    "cloud://env/display-0.jpg",
+    "cloud://env/display-1.jpg",
+    "cloud://env/display-2.jpg",
+  ]);
+});
+
+await test("the media picker accepts nine images at once and only the remaining slot later", async () => {
+  const { page, calls } = loadCaseEditPage();
+
+  page.chooseGalleryImages();
+  page.data.form.galleryImages = Array.from(
+    { length: 8 },
+    (_, index) => `cloud://env/display-${index}.jpg`
+  );
+  page.chooseGalleryImages();
+
+  assert.deepEqual(calls.mediaPickerCounts, [9, 1]);
+});
+
+await test("a later processing batch failure cleans originals and completed variants", async () => {
+  const { page, calls } = loadCaseEditPage({ variantFailureCall: 2 });
+  const selectedPaths = Array.from(
+    { length: 9 },
+    (_, index) => `/tmp/source-${index}.jpg`
+  );
+
+  await page.uploadGalleryImages(selectedPaths);
+
+  assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryImages)), []);
+  assert.equal(calls.variantRequests.length, 3);
+  assert.equal(calls.cleanupRequests.length, 1);
+  assert.equal(calls.cleanupRequests[0].length, 27);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.cleanupRequests[0].slice(0, 9))),
+    [
+      "cloud://env/source-1.jpg",
+      "cloud://env/source-2.jpg",
+      "cloud://env/source-3.jpg",
+      "cloud://env/source-4.jpg",
+      "cloud://env/source-5.jpg",
+      "cloud://env/source-6.jpg",
+      "cloud://env/source-7.jpg",
+      "cloud://env/source-8.jpg",
+      "cloud://env/source-9.jpg",
+    ]
+  );
+  assert.equal(page.data.imageProcessingFailed, true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(page.data.pendingImagePaths)),
+    selectedPaths
+  );
+});
+
 await test("image processor failures keep the form unchanged and clean uploaded originals", async () => {
   const error = new Error("无权限处理案例图片");
   error.code = "FORBIDDEN";
@@ -187,7 +316,7 @@ await test("retry reuses local paths and only updates the form after success", a
   await page.retryImageProcessing();
 
   assert.deepEqual(JSON.parse(JSON.stringify(page.data.form.galleryImages)), [
-    "cloud://env/display-0.jpg",
+    "cloud://env/display-1.jpg",
   ]);
   assert.equal(page.data.imageProcessingFailed, false);
   assert.deepEqual(JSON.parse(JSON.stringify(page.data.pendingImagePaths)), []);

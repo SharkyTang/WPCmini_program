@@ -84,6 +84,36 @@ test("backfill detects aliased thumbnails, inconsistent arrays and old versions"
   assert.equal(needsBannerBackfill({ image: source }), true);
 });
 
+test("backfill audits image variants through the ninth gallery item", () => {
+  const sources = Array.from(
+    { length: 9 },
+    (_, index) => `cloud://env/source-${index}.jpg`
+  );
+  const displays = Array.from(
+    { length: 9 },
+    (_, index) => `cloud://env/display-${index}.jpg`
+  );
+  const thumbnails = Array.from(
+    { length: 9 },
+    (_, index) => `cloud://env/thumb-${index}.jpg`
+  );
+  const banners = Array.from(
+    { length: 9 },
+    (_, index) => `cloud://env/banner-${index}.jpg`
+  );
+  thumbnails[8] = sources[8];
+
+  assert.equal(needsVariantBackfill({
+    sourceGalleryImages: sources,
+    galleryImages: displays,
+    galleryThumbnails: thumbnails,
+    galleryBanners: banners,
+    coverThumbnail: thumbnails[0],
+    coverBanner: banners[0],
+    imageVariantVersion: 2,
+  }), true);
+});
+
 test("resume skips successful cases but retries prior failures", () => {
   const candidates = ["case_1", "case_2", "case_3", "case_4"].map((_id) => ({
     _id,

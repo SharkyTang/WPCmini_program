@@ -50,7 +50,7 @@
       >
         重试处理
       </button>
-      <view class="field-hint">最多 5 张；第一张为封面，可通过箭头调整顺序。图片会上传到云存储。</view>
+      <view class="field-hint">最多 {{galleryMax}} 张；第一张为封面，可通过箭头调整顺序。图片会上传到云存储。</view>
     </view>
 
     <view class="field">

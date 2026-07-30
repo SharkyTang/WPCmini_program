@@ -7,7 +7,7 @@ const {
 
 const CASE_ADMIN_DEFAULT_SORT_ORDER = 9999;
 const CASE_ADMIN_NOTES_MAX_LENGTH = 800;
-const CASE_ADMIN_GALLERY_MAX = 5;
+const CASE_ADMIN_GALLERY_MAX = 9;
 const CASE_ADMIN_VISIBILITY_OPTIONS = [
   { value: "all", label: "全部" },
   { value: "visible", label: "显示中" },
@@ -193,13 +193,13 @@ function validateCaseAdminForm(form = {}, options = {}) {
     return { valid: false, message: "封面图片需要先上传到云存储" };
   }
   if (rawGalleryImages.filter((image) => trimText(image)).length > CASE_ADMIN_GALLERY_MAX) {
-    return { valid: false, message: "最多上传 5 张图片" };
+    return { valid: false, message: `最多上传 ${CASE_ADMIN_GALLERY_MAX} 张图片` };
   }
   if ((options.isCreate || normalized.coverImage) && !normalized.galleryImages.length) {
     return { valid: false, message: "请上传封面图片" };
   }
   if (normalized.galleryImages.length > CASE_ADMIN_GALLERY_MAX) {
-    return { valid: false, message: "最多上传 5 张图片" };
+    return { valid: false, message: `最多上传 ${CASE_ADMIN_GALLERY_MAX} 张图片` };
   }
   for (const [field, label] of [
     ["sourceGalleryImages", "原图"],

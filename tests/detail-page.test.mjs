@@ -58,10 +58,18 @@ test("detail page keeps customer service and adds inquiry action", () => {
 
 test("detail page supports a gallery and downloads the selected image", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
+  const wxss = readFileSync(wxssPath, "utf8");
   const source = readFileSync(resolve(__dirname, "../miniprogram/miniprogram/pages/detail/index.js"), "utf8");
 
   assert.equal(wxml.includes('bindchange="onGalleryChange"'), true);
   assert.equal(wxml.includes('bindtap="selectGalleryImage"'), true);
+  assert.match(
+    wxml,
+    /<scroll-view[\s\S]*?class="gallery-thumbnails"[\s\S]*?scroll-x[\s\S]*?show-scrollbar="\{\{false\}\}"/
+  );
+  assert.equal(wxml.includes('class="gallery-thumbnails-track"'), true);
+  assert.match(wxss, /\.gallery-thumbnails-track\s*\{[\s\S]*?display:\s*inline-flex;/);
+  assert.match(wxss, /\.gallery-thumbnail\s*\{[\s\S]*?flex:\s*0 0 104rpx;/);
   assert.equal(source.includes("currentImageUrl"), true);
   assert.equal(wxml.includes('src="{{item.renderUrl}}"'), true);
   assert.equal(source.includes("loaded: index === 0"), true);
@@ -80,7 +88,7 @@ async function asyncTest(name, fn) {
 
 await asyncTest("detail loads one display image and upgrades only the selected target", async () => {
   let page;
-  const gallery = [0, 1, 2].map((index) => ({
+  const gallery = Array.from({ length: 9 }, (_, index) => ({
     fileID: `cloud://env/display-${index}.jpg`,
     displayUrl: `https://temp/display-${index}`,
     thumbnailUrl: `https://temp/thumb-${index}`,
@@ -141,17 +149,24 @@ await asyncTest("detail loads one display image and upgrades only the selected t
   await page.loadCase("case_1");
   assert.deepEqual(
     JSON.parse(JSON.stringify(page.data.galleryItems.map((item) => item.renderUrl))),
-    [
-      "https://temp/display-0",
-      "https://temp/thumb-1",
-      "https://temp/thumb-2",
-    ]
+    Array.from(
+      { length: 9 },
+      (_, index) =>
+        index === 0
+          ? "https://temp/display-0"
+          : `https://temp/thumb-${index}`
+    )
   );
-  page.showGalleryImage(1);
+  page.selectGalleryImage({ currentTarget: { dataset: { index: 7 } } });
   assert.equal(page.data.galleryItems[0].renderUrl, "https://temp/display-0");
-  assert.equal(page.data.galleryItems[1].renderUrl, "https://temp/display-1");
-  assert.equal(page.data.galleryItems[2].renderUrl, "https://temp/thumb-2");
-  assert.equal(page.data.currentDownloadUrl, "https://temp/display-1");
+  assert.equal(page.data.galleryItems[7].renderUrl, "https://temp/display-7");
+  assert.equal(page.data.galleryItems[8].renderUrl, "https://temp/thumb-8");
+  assert.equal(page.data.currentImageIndex, 7);
+  assert.equal(page.data.currentDownloadUrl, "https://temp/display-7");
+  page.onGalleryChange({ detail: { current: 8 } });
+  assert.equal(page.data.galleryItems[8].renderUrl, "https://temp/display-8");
+  assert.equal(page.data.currentImageIndex, 8);
+  assert.equal(page.data.currentDownloadUrl, "https://temp/display-8");
 });
 
 test("detail page uses branded states and removes developer-facing copy", () => {

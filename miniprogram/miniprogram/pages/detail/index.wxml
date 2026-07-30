@@ -50,17 +50,25 @@
       <view class="placeholder-copy">可先查看案例信息，稍后再试</view>
     </view>
 
-    <view wx:if="{{galleryItems.length > 1}}" class="gallery-thumbnails">
-      <view
-        wx:for="{{galleryItems}}"
-        wx:key="fileID"
-        class="gallery-thumbnail {{currentImageIndex === index ? 'gallery-thumbnail-active' : ''}}"
-        data-index="{{index}}"
-        bindtap="selectGalleryImage"
-      >
-        <image class="gallery-thumbnail-image" src="{{item.thumbnailUrl}}" mode="aspectFill" lazy-load></image>
+    <scroll-view
+      wx:if="{{galleryItems.length > 1}}"
+      class="gallery-thumbnails"
+      scroll-x
+      enhanced
+      show-scrollbar="{{false}}"
+    >
+      <view class="gallery-thumbnails-track">
+        <view
+          wx:for="{{galleryItems}}"
+          wx:key="fileID"
+          class="gallery-thumbnail {{currentImageIndex === index ? 'gallery-thumbnail-active' : ''}}"
+          data-index="{{index}}"
+          bindtap="selectGalleryImage"
+        >
+          <image class="gallery-thumbnail-image" src="{{item.thumbnailUrl}}" mode="aspectFill" lazy-load></image>
+        </view>
       </view>
-    </view>
+    </scroll-view>
 
     <view class="info-card">
       <view class="info-card-head">

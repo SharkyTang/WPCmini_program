@@ -41,6 +41,7 @@ const caseAdminData = loadCommonJsModule(caseAdminDataPath, {
 });
 
 const {
+  CASE_ADMIN_GALLERY_MAX,
   CASE_ADMIN_FORM_OPTIONS,
   buildCaseAdminPayload,
   buildCaseAdminOptionViews,
@@ -119,6 +120,7 @@ test("case admin edit form shows home section controls after visibility switch",
   assert.ok(homeSectionIndex > visibleIndex);
   assert.equal(wxml.includes("optionViews.homeSections"), true);
   assert.equal(wxml.includes("不勾选仍可在分类页显示"), true);
+  assert.equal(wxml.includes("最多 {{galleryMax}} 张"), true);
   assert.equal(wxml.includes("轮播最多 5 张、热门最多 4 个、最新最多 6 个"), true);
 });
 
@@ -230,15 +232,28 @@ test("normalizes case admin form and builds keywords", () => {
   ]);
 });
 
-test("rejects galleries with more than five images", () => {
-  const result = validateCaseAdminForm({
+test("accepts nine case images and rejects the tenth", () => {
+  const galleryImages = Array.from(
+    { length: CASE_ADMIN_GALLERY_MAX },
+    (_, index) => `cloud://cloud1/${index}.jpg`
+  );
+  const accepted = validateCaseAdminForm({
     title: "多图案例",
-    galleryImages: Array.from({ length: 6 }, (_, index) => `cloud://cloud1/${index}.jpg`),
+    galleryImages,
     packageTypes: ["礼盒"],
+    sortOrder: "",
+  }, { isCreate: true });
+  const rejected = validateCaseAdminForm({
+    title: "图片过多案例",
+    galleryImages: [...galleryImages, "cloud://cloud1/9.jpg"],
+    packageTypes: ["礼盒"],
+    sortOrder: "",
   }, { isCreate: true });
 
-  assert.equal(result.valid, false);
-  assert.equal(result.message, "最多上传 5 张图片");
+  assert.equal(CASE_ADMIN_GALLERY_MAX, 9);
+  assert.equal(accepted.valid, true);
+  assert.equal(rejected.valid, false);
+  assert.equal(rejected.message, "最多上传 9 张图片");
 });
 
 test("builds database payload with json value fields and leaves blank sort order for cloud default", () => {

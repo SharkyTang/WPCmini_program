@@ -120,6 +120,21 @@ test("keeps legacy covers as a one-image gallery and pins only default sorting",
   assert.deepEqual(plain(filterCases(cases).map((item) => item.id)), ["normal", "pinned"]);
 });
 
+test("client normalization preserves up to nine case images", () => {
+  const galleryImages = Array.from(
+    { length: 10 },
+    (_, index) => `cloud://gallery-${index}`
+  );
+  const normalized = normalizeCaseRecord({
+    _id: "nine-image-case",
+    galleryImages,
+    isVisible: true,
+  });
+
+  assert.equal(normalized.galleryImages.length, 9);
+  assert.deepEqual(plain(normalized.galleryImages), galleryImages.slice(0, 9));
+});
+
 test("builds fallback banners from home section cases when CMS banners are empty", () => {
   const cases = [
     normalizeCaseRecord({

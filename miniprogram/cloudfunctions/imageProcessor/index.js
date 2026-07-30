@@ -1,5 +1,6 @@
 const cloud = require("wx-server-sdk");
 const {
+  MAX_FILES,
   buildVariantPaths,
   generateVariantBuffers,
   isAdminOpenid,
@@ -88,7 +89,10 @@ async function generateCaseVariants(event, imageFactory) {
   const fileIDs = normalizeSourceFiles(requested);
   if (!fileIDs.length) return fail("INVALID_FILES", "缺少有效的云存储图片");
   if ((requested || []).length > fileIDs.length) {
-    return fail("INVALID_FILES", "图片必须是五张以内且不能重复的云存储文件");
+    return fail(
+      "INVALID_FILES",
+      `图片必须是 ${MAX_FILES} 张以内且不能重复的云存储文件`
+    );
   }
   const variants = [];
   try {

@@ -160,6 +160,39 @@ await test("case variants return display, thumbnail and banner v2 files", async 
   assert.equal(result.variants[0].variantVersion, 2);
 });
 
+await test("case variants accept nine images and reject the tenth", async () => {
+  const main = loadMain({
+    logic: {
+      async generateVariantBuffers() {
+        return {
+          displayBuffer: Buffer.from("display"),
+          thumbnailBuffer: Buffer.from("thumbnail"),
+          bannerBuffer: Buffer.from("banner"),
+          metadata: { variantVersion: 2 },
+        };
+      },
+    },
+  });
+  const files = Array.from(
+    { length: 9 },
+    (_, index) => `cloud://env/source-${index}.jpg`
+  );
+  const accepted = await main({
+    action: "generateCaseVariants",
+    files,
+  });
+  const rejected = await main({
+    action: "generateCaseVariants",
+    files: [...files, "cloud://env/source-9.jpg"],
+  });
+
+  assert.equal(accepted.ok, true);
+  assert.equal(accepted.variants.length, 9);
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.code, "INVALID_FILES");
+  assert.match(rejected.message, /9 张以内/);
+});
+
 await test("partial v2 upload failures clean generated files", async () => {
   const main = loadMain({
     uploadFailureIndex: 3,

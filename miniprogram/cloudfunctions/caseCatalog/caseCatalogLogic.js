@@ -8,6 +8,7 @@ const USER_LIBRARY_LIMITS = {
   favorites: 100,
   history: 50,
 };
+const CASE_GALLERY_MAX = 9;
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -39,7 +40,7 @@ function normalizeGallery(value, fallback = "") {
       seen.add(fileID);
       return true;
     })
-    .slice(0, 5);
+    .slice(0, CASE_GALLERY_MAX);
 }
 
 function toNumber(value, fallback = 9999) {

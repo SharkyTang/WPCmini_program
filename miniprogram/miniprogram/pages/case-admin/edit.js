@@ -19,6 +19,10 @@ const {
   publishProductAnnouncement,
 } = require("./utils/notificationAdminService");
 
+const MEDIA_PICKER_MAX = 9;
+const SOURCE_UPLOAD_CONCURRENCY = 3;
+const IMAGE_PROCESSING_BATCH_SIZE = 3;
+
 function buildProductNotificationDraft(form = {}) {
   const summary = [
     ...(form.packageTypes || []).slice(0, 2),
@@ -53,6 +57,58 @@ function getMediaPaths(result = {}) {
 function alignGalleryFiles(fileIDs = [], fallbackFileIDs = []) {
   return fallbackFileIDs.map((fallbackFileID, index) => {
     return fileIDs[index] || fallbackFileID;
+  });
+}
+
+function chunkGalleryFiles(
+  fileIDs = [],
+  batchSize = IMAGE_PROCESSING_BATCH_SIZE
+) {
+  const batches = [];
+  for (let index = 0; index < fileIDs.length; index += batchSize) {
+    batches.push(fileIDs.slice(index, index + batchSize));
+  }
+  return batches;
+}
+
+async function mapSettledWithConcurrency(
+  items = [],
+  concurrency = SOURCE_UPLOAD_CONCURRENCY,
+  mapper
+) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        try {
+          results[currentIndex] = {
+            status: "fulfilled",
+            value: await mapper(items[currentIndex], currentIndex),
+          };
+        } catch (reason) {
+          results[currentIndex] = {
+            status: "rejected",
+            reason,
+          };
+        }
+      }
+    }
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+function collectVariantFileIDs(variants = []) {
+  return variants.flatMap((variant) => {
+    return [
+      variant && variant.displayFileID,
+      variant && variant.thumbnailFileID,
+      variant && variant.bannerFileID,
+    ].filter(Boolean);
   });
 }
 
@@ -242,12 +298,13 @@ Page({
   chooseGalleryImages() {
     const remaining = CASE_ADMIN_GALLERY_MAX - this.data.form.galleryImages.length;
     if (remaining <= 0) {
-      this.showTopTips("最多上传 5 张图片");
-      wx.showToast({ title: "最多上传 5 张图片", icon: "none" });
+      const message = `最多上传 ${CASE_ADMIN_GALLERY_MAX} 张图片`;
+      this.showTopTips(message);
+      wx.showToast({ title: message, icon: "none" });
       return;
     }
     wx.chooseMedia({
-      count: remaining,
+      count: Math.min(MEDIA_PICKER_MAX, remaining),
       mediaType: ["image"],
       sourceType: ["album", "camera"],
       sizeType: ["original"],
@@ -273,6 +330,7 @@ Page({
     });
 
     const uploadedSources = [];
+    const generatedVariants = [];
     try {
       const galleryImages = [...this.data.form.galleryImages];
       const sourceGalleryImages = alignGalleryFiles(
@@ -288,17 +346,68 @@ Page({
         galleryImages
       );
       const galleryPreviewUrls = [...this.data.galleryPreviewUrls];
-      for (const filePath of selectedPaths) {
-        const cloudPath = buildCaseAdminImagePath(filePath);
-        const fileID = await uploadCaseCoverImage({ filePath, cloudPath });
-        uploadedSources.push(fileID);
+      const uploadResults = await mapSettledWithConcurrency(
+        selectedPaths,
+        SOURCE_UPLOAD_CONCURRENCY,
+        (filePath) => {
+          const cloudPath = buildCaseAdminImagePath(filePath);
+          return uploadCaseCoverImage({ filePath, cloudPath });
+        }
+      );
+      uploadResults.forEach((result) => {
+        if (result.status === "fulfilled" && result.value) {
+          uploadedSources.push(result.value);
+        }
+      });
+      const failedUpload = uploadResults.find(
+        (result) => result.status === "rejected"
+      );
+      if (failedUpload) {
+        throw failedUpload.reason;
       }
       if (uploadedSources.length !== selectedPaths.length) {
         throw new Error("部分原图上传失败");
       }
 
-      const variants = await generateCaseImageVariants(uploadedSources);
+      const variantBatches = chunkGalleryFiles(uploadedSources);
+      const variantResults = await mapSettledWithConcurrency(
+        variantBatches,
+        variantBatches.length,
+        (batch) => generateCaseImageVariants(batch)
+      );
+      let variantProcessingError = null;
+      variantResults.forEach((result) => {
+        if (result.status === "fulfilled" && Array.isArray(result.value)) {
+          generatedVariants.push(...result.value);
+          return;
+        }
+        if (!variantProcessingError) {
+          variantProcessingError =
+            result.status === "rejected"
+              ? result.reason
+              : new Error("图片处理结果格式错误");
+        }
+      });
+      if (variantProcessingError) {
+        throw variantProcessingError;
+      }
+      const variantMap = new Map();
+      generatedVariants.forEach((variant) => {
+        const sourceFileID = variant && variant.sourceFileID;
+        if (!sourceFileID || variantMap.has(sourceFileID)) {
+          variantProcessingError = new Error("图片处理结果与原图不匹配");
+          return;
+        }
+        variantMap.set(sourceFileID, variant);
+      });
+      if (variantProcessingError) {
+        throw variantProcessingError;
+      }
+      const variants = uploadedSources.map((sourceFileID) => {
+        return variantMap.get(sourceFileID);
+      });
       const variantsAreComplete =
+        generatedVariants.length === uploadedSources.length &&
         variants.length === uploadedSources.length &&
         variants.every((variant) => {
           return Boolean(
@@ -351,11 +460,15 @@ Page({
       });
     } catch (error) {
       console.warn("图片处理失败", error);
-      if (uploadedSources.length) {
+      const cleanupFileIDs = [
+        ...uploadedSources,
+        ...collectVariantFileIDs(generatedVariants),
+      ];
+      if (cleanupFileIDs.length) {
         try {
-          await cleanupUnreferencedFiles(uploadedSources);
+          await cleanupUnreferencedFiles(cleanupFileIDs);
         } catch (cleanupError) {
-          console.warn("未引用原图清理失败", cleanupError);
+          console.warn("未引用图片清理失败", cleanupError);
         }
       }
       this.setData({

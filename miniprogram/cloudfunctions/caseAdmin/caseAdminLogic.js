@@ -5,7 +5,7 @@ const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 50;
 const SEARCH_FETCH_LIMIT = 300;
 const IMAGE_URL_BATCH_SIZE = 50;
-const CASE_GALLERY_MAX = 5;
+const CASE_GALLERY_MAX = 9;
 const PINNED_CASE_LIMIT = 20;
 const CASE_ID_PREFIX = "case_";
 const CASE_ID_PAD_LENGTH = 3;
@@ -122,7 +122,11 @@ function normalizeCloudFileIds(value = [], limit = IMAGE_URL_BATCH_SIZE) {
 function normalizeGalleryImages(value) {
   const rawImages = normalizeValues(value).map(trimText).filter(Boolean);
   if (rawImages.length > CASE_GALLERY_MAX) {
-    return { valid: false, code: "TOO_MANY_IMAGES", message: "一个案例最多上传 5 张图片" };
+    return {
+      valid: false,
+      code: "TOO_MANY_IMAGES",
+      message: `一个案例最多上传 ${CASE_GALLERY_MAX} 张图片`,
+    };
   }
   if (rawImages.some((fileID) => !isCloudFileId(fileID))) {
     return { valid: false, code: "INVALID_GALLERY_IMAGE", message: "封面图片需要先上传到云存储" };

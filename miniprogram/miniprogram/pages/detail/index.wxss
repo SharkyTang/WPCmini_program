@@ -51,12 +51,16 @@ page {
 }
 
 .gallery-thumbnails {
-  display: flex;
-  gap: 14rpx;
+  width: 100%;
   margin: 22rpx 0 0;
-  padding: 4rpx 2rpx 8rpx;
-  overflow-x: auto;
   white-space: nowrap;
+}
+
+.gallery-thumbnails-track {
+  display: inline-flex;
+  gap: 14rpx;
+  padding: 4rpx 2rpx 8rpx;
+  box-sizing: border-box;
 }
 
 .gallery-thumbnail {
