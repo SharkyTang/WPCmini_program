@@ -92,7 +92,10 @@ function normalizeCaseRecord(record = {}) {
 }
 
 function getCardImageFileId(item = {}) {
-  return item.coverThumbnail || item.coverImage || "";
+  // The square thumbnail is intentionally cropped and is best suited to tiny
+  // thumbnail strips. Product cards need the full composition, so reuse the
+  // optimized, aspect-preserving banner variant before falling back.
+  return item.coverBanner || item.coverThumbnail || item.coverImage || "";
 }
 
 function buildCard(record = {}, urlMap = {}) {

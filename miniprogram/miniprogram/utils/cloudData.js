@@ -170,6 +170,9 @@ async function getTempUrlMap(fileIds, options = {}) {
 }
 
 function getCaseDisplayImage(item, options = {}) {
+  if (options.preferBanner === true) {
+    return item.coverBanner || item.coverThumbnail || item.coverImage;
+  }
   return options.preferThumbnail !== false ? item.coverThumbnail || item.coverImage : item.coverImage;
 }
 

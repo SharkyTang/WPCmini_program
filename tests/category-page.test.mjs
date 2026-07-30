@@ -6,6 +6,7 @@ import vm from "node:vm";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pagePath = resolve(__dirname, "../miniprogram/miniprogram/pages/category/index.js");
+const wxmlPath = resolve(__dirname, "../miniprogram/miniprogram/pages/category/index.wxml");
 
 function loadCategoryPage(cases = [], appGlobalData = {}, wxMock = {}) {
   let pageConfig;
@@ -112,6 +113,11 @@ async function test(name, fn) {
     throw error;
   }
 }
+
+await test("category cards fill their frame with the aspect-preserving cover", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+  assert.match(wxml, /class="case-image"\s+mode="aspectFill"/);
+});
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value));

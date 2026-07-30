@@ -101,6 +101,26 @@ test("catalog snapshot handles target boundary sizes and hides records", () => {
   assert.equal(Object.prototype.hasOwnProperty.call(result[0], "galleryImages"), false);
 });
 
+test("catalog cards prefer the aspect-preserving banner cover", () => {
+  const banner = "cloud://env/banner.jpg";
+  const thumbnail = "cloud://env/thumbnail.jpg";
+  const display = "cloud://env/display.jpg";
+  const result = buildCatalogSnapshot([
+    buildCase(1, {
+      coverImage: display,
+      coverThumbnail: thumbnail,
+      coverBanner: banner,
+    }),
+  ], {
+    [banner]: "https://temp/banner",
+    [thumbnail]: "https://temp/thumbnail",
+    [display]: "https://temp/display",
+  });
+
+  assert.equal(result[0].imageFileId, banner);
+  assert.equal(result[0].thumbnailUrl, "https://temp/banner");
+});
+
 test("user library preserves record order and identifies stale records", () => {
   const library = [
     { _id: "fav_3", caseDocId: "doc_3", createdAt: 30 },

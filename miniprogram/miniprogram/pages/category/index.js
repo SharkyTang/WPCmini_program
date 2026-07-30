@@ -417,7 +417,7 @@ Page({
       );
       const visibleCards = alreadyHydrated
         ? sourceCards
-        : await attachCaseImageUrls(sourceCards, { preferThumbnail: true });
+        : await attachCaseImageUrls(sourceCards, { preferBanner: true });
       if (this._imageRequestVersion !== requestVersion) return;
       if (!options.append) {
         this.setData({ visibleCards, isLoadingMore: false });

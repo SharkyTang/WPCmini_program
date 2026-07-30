@@ -119,6 +119,7 @@ await test("home sections expose more links for popular and latest products", ()
   assert.equal(wxml.includes('data-sort="popular"'), true);
   assert.equal(wxml.includes('data-sort="latest"'), true);
   assert.equal(wxml.includes('bindtap="navigateToCategory"'), true);
+  assert.equal((wxml.match(/class="product-image"\s+mode="aspectFill"/g) || []).length, 2);
 });
 
 await test("home page shows only selected home section cases", async () => {
