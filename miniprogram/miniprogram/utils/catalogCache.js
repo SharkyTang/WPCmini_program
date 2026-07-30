@@ -1,6 +1,6 @@
-const CACHE_SCHEMA_VERSION = 3;
+const CACHE_SCHEMA_VERSION = 2;
 const CACHE_TTL_MS = 20 * 60 * 1000;
-const HOME_CACHE_KEY = "wineHomeFeedV3";
+const HOME_CACHE_KEY = "wineHomeFeedV2";
 const CATALOG_CACHE_KEY = "wineCatalogSnapshotV3";
 
 function normalizeCacheEntry(value) {

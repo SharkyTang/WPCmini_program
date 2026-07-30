@@ -121,6 +121,24 @@ test("catalog cards prefer the aspect-preserving banner cover", () => {
   assert.equal(result[0].thumbnailUrl, "https://temp/banner");
 });
 
+test("home cards keep using compact thumbnails", () => {
+  const banner = "cloud://env/banner.jpg";
+  const thumbnail = "cloud://env/thumbnail.jpg";
+  const result = buildHomeFeed([
+    buildCase(1, {
+      coverThumbnail: thumbnail,
+      coverBanner: banner,
+      homeSections: { values: ["popular"] },
+    }),
+  ], [], {
+    [banner]: "https://temp/banner",
+    [thumbnail]: "https://temp/thumbnail",
+  });
+
+  assert.equal(result.popularCases[0].imageFileId, thumbnail);
+  assert.equal(result.popularCases[0].thumbnailUrl, "https://temp/thumbnail");
+});
+
 test("user library preserves record order and identifies stale records", () => {
   const library = [
     { _id: "fav_3", caseDocId: "doc_3", createdAt: 30 },

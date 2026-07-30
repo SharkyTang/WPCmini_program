@@ -91,16 +91,18 @@ function normalizeCaseRecord(record = {}) {
   };
 }
 
-function getCardImageFileId(item = {}) {
-  // The square thumbnail is intentionally cropped and is best suited to tiny
-  // thumbnail strips. Product cards need the full composition, so reuse the
-  // optimized, aspect-preserving banner variant before falling back.
-  return item.coverBanner || item.coverThumbnail || item.coverImage || "";
+function getCardImageFileId(item = {}, options = {}) {
+  if (options.preferBanner === true) {
+    // Category cards need the full composition. The optimized banner keeps the
+    // source aspect ratio, unlike the square thumbnail used elsewhere.
+    return item.coverBanner || item.coverThumbnail || item.coverImage || "";
+  }
+  return item.coverThumbnail || item.coverImage || "";
 }
 
-function buildCard(record = {}, urlMap = {}) {
+function buildCard(record = {}, urlMap = {}, options = {}) {
   const item = normalizeCaseRecord(record);
-  const imageFileId = getCardImageFileId(item);
+  const imageFileId = getCardImageFileId(item, options);
   return {
     id: item.id,
     caseId: item.caseId,
@@ -217,7 +219,7 @@ function collectHomeImageFileIds(caseRecords = [], bannerRecords = []) {
 function buildCatalogSnapshot(records = [], urlMap = {}) {
   return sortCases(
     records.map(normalizeCaseRecord).filter((item) => item.isVisible)
-  ).map((item) => buildCard(item, urlMap));
+  ).map((item) => buildCard(item, urlMap, { preferBanner: true }));
 }
 
 function getLibraryType(value) {

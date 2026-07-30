@@ -163,7 +163,9 @@ async function getCatalogSnapshot(event) {
     orderField: "sortOrder",
   });
   const urlMap = await getTempUrlMap(
-    records.map((record) => getCardImageFileId(normalizeCaseRecord(record)))
+    records.map((record) =>
+      getCardImageFileId(normalizeCaseRecord(record), { preferBanner: true })
+    )
   );
   return ok({
     revision,
