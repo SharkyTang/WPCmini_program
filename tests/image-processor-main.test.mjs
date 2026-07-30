@@ -57,11 +57,21 @@ function loadMain(options = {}) {
     },
     require(moduleName) {
       if (moduleName === "wx-server-sdk") return cloud;
-      if (moduleName === "sharp") {
-        if (options.sharpError) throw options.sharpError;
+      if (moduleName === "jimp") {
+        if (options.imageLibraryError) throw options.imageLibraryError;
+        return {};
+      }
+      if (moduleName === "jimp/package.json") {
+        return { version: "0.22.12" };
+      }
+      if (moduleName === "./jimpSharpCompat") {
         return {
-          versions: {
-            sharp: "0.33.5",
+          createJimpSharpCompat() {
+            return {
+              versions: {
+                jimp: "0.22.12",
+              },
+            };
           },
         };
       }
@@ -91,9 +101,9 @@ async function test(name, fn) {
   }
 }
 
-await test("unknown actions do not load the native image dependency", async () => {
+await test("unknown actions do not load the image dependency", async () => {
   const main = loadMain({
-    sharpError: new Error("native module cannot load"),
+    imageLibraryError: new Error("image library cannot load"),
   });
   const result = await main({ action: "probe" });
 
@@ -101,23 +111,24 @@ await test("unknown actions do not load the native image dependency", async () =
   assert.equal(result.code, "UNKNOWN_ACTION");
 });
 
-await test("health checks return a structured native dependency error", async () => {
+await test("health checks return a structured image dependency error", async () => {
   const main = loadMain({
-    sharpError: new Error("native module cannot load"),
+    imageLibraryError: new Error("image library cannot load"),
   });
   const result = await main({ action: "healthCheck" });
 
   assert.equal(result.ok, false);
   assert.equal(result.code, "IMAGE_PROCESSOR_UNAVAILABLE");
-  assert.equal(result.message, "native module cannot load");
+  assert.equal(result.message, "image library cannot load");
 });
 
-await test("health checks expose the loaded sharp version", async () => {
+await test("health checks expose the loaded image library version", async () => {
   const main = loadMain();
   const result = await main({ action: "healthCheck" });
 
   assert.equal(result.ok, true);
-  assert.equal(result.sharpVersion, "0.33.5");
+  assert.equal(result.imageLibrary, "jimp");
+  assert.equal(result.imageLibraryVersion, "0.22.12");
 });
 
 await test("case variants return display, thumbnail and banner v2 files", async () => {

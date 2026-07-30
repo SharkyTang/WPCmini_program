@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "dependencies": {
-    "sharp": "0.32.6",
+    "jimp": "0.22.12",
     "wx-server-sdk": "~2.6.3"
   }
 }

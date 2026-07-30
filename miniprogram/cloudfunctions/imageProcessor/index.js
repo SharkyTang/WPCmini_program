@@ -6,6 +6,7 @@ const {
   normalizeSourceFiles,
   trimText,
 } = require("./imageProcessorLogic");
+const { createJimpSharpCompat } = require("./jimpSharpCompat");
 
 cloud.init({
   env: cloud.DYNAMIC_CURRENT_ENV,
@@ -19,9 +20,11 @@ function fail(code, message) {
   return { ok: false, code, message };
 }
 
-function loadSharp() {
+function loadImageFactory() {
   try {
-    return require("sharp");
+    const Jimp = require("jimp");
+    const { version } = require("jimp/package.json");
+    return createJimpSharpCompat(Jimp, version);
   } catch (error) {
     error.code = "IMAGE_PROCESSOR_UNAVAILABLE";
     throw error;
@@ -36,10 +39,10 @@ async function uploadVariant(cloudPath, fileContent) {
   return response.fileID || response.fileId || "";
 }
 
-async function processFile(fileID, sharpFactory) {
+async function processFile(fileID, imageFactory) {
   const paths = buildVariantPaths(fileID);
   const response = await cloud.downloadFile({ fileID });
-  const buffers = await generateVariantBuffers(sharpFactory, response.fileContent);
+  const buffers = await generateVariantBuffers(imageFactory, response.fileContent);
   const uploadedFileIDs = [];
   try {
     const uploadResults = await Promise.allSettled([
@@ -80,7 +83,7 @@ async function processFile(fileID, sharpFactory) {
   }
 }
 
-async function generateCaseVariants(event, sharpFactory) {
+async function generateCaseVariants(event, imageFactory) {
   const requested = Array.isArray(event.files) ? event.files : event.fileIDs;
   const fileIDs = normalizeSourceFiles(requested);
   if (!fileIDs.length) return fail("INVALID_FILES", "缺少有效的云存储图片");
@@ -90,7 +93,7 @@ async function generateCaseVariants(event, sharpFactory) {
   const variants = [];
   try {
     for (const fileID of fileIDs) {
-      variants.push(await processFile(fileID, sharpFactory));
+      variants.push(await processFile(fileID, imageFactory));
     }
   } catch (error) {
     const fileList = variants.flatMap((variant) => [
@@ -118,13 +121,14 @@ exports.main = async (event = {}) => {
   try {
     const action = trimText(event.action);
     if (action === "healthCheck") {
-      const sharpFactory = loadSharp();
+      const imageFactory = loadImageFactory();
       return ok({
-        sharpVersion: sharpFactory.versions && sharpFactory.versions.sharp,
+        imageLibrary: "jimp",
+        imageLibraryVersion: imageFactory.versions && imageFactory.versions.jimp,
       });
     }
     if (action === "generateCaseVariants") {
-      return await generateCaseVariants(event, loadSharp());
+      return await generateCaseVariants(event, loadImageFactory());
     }
     return fail("UNKNOWN_ACTION", "未知图片处理操作");
   } catch (error) {
