@@ -5,7 +5,7 @@ import {
   readFileSync,
   statSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
@@ -18,6 +18,26 @@ const appConfig = JSON.parse(
 const projectConfig = JSON.parse(
   readFileSync(resolve(projectRoot, "project.config.json"), "utf8")
 );
+const BUNDLED_MEDIA_EXTENSIONS = new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".svg",
+  ".webp",
+  ".gif",
+  ".flac",
+  ".m4a",
+  ".ogg",
+  ".ape",
+  ".amr",
+  ".wma",
+  ".wav",
+  ".mp3",
+  ".mp4",
+  ".aac",
+  ".aiff",
+  ".caf",
+]);
 
 function collectFiles(directory, excludedRoots = []) {
   return readdirSync(directory).flatMap((name) => {
@@ -91,6 +111,21 @@ test("project keeps lazy loading, audits and system-file exclusion enabled", () 
     true
   );
   assert.notEqual(projectConfig.libVersion, "2.21.2");
+});
+
+test("bundled image and audio resources stay under the 200 KiB audit limit", () => {
+  const mediaFiles = collectFiles(miniRoot).filter((filePath) =>
+    BUNDLED_MEDIA_EXTENSIONS.has(extname(filePath).toLowerCase())
+  );
+  const mediaBytes = mediaFiles.reduce(
+    (total, filePath) => total + statSync(filePath).size,
+    0
+  );
+  assert.equal(
+    mediaBytes < 200 * 1024,
+    true,
+    `bundled image and audio resources total ${mediaBytes} bytes`
+  );
 });
 
 test("profile page no longer imports admin service bundles", () => {
