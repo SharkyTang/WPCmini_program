@@ -143,6 +143,18 @@ await test("category sort options use recent and popular labels", () => {
   assert.equal(source.includes("最新优先"), false);
 });
 
+await test("category page can be shared to friends and timeline", () => {
+  const { page } = loadCategoryPage();
+
+  assert.deepEqual(plain(page.onShareAppMessage()), {
+    title: "酒包装案例库｜金亿诚包装科技",
+    path: "/pages/category/index",
+  });
+  assert.deepEqual(plain(page.onShareTimeline()), {
+    title: "酒包装案例库｜金亿诚包装科技",
+  });
+});
+
 await test("category page initializes latest sort from URL options", async () => {
   const { page } = loadCategoryPage([
     buildCase("case_1", { sortOrder: 1, statuses: ["最新产品"], homeSections: [] }),

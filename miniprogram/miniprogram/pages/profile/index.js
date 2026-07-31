@@ -13,6 +13,7 @@ const {
   CUSTOMER_SERVICE_SOURCE,
   buildCustomerSessionFrom,
 } = require("../../utils/customerServiceData");
+const HOME_SHARE_TITLE = "金亿诚包装科技｜酒包装灵感库";
 const DEFAULT_PROFILE_INFO = {
   nickname: DEFAULT_NICKNAME,
   avatarUrl: "",
@@ -76,6 +77,19 @@ Page({
 
   onPullDownRefresh() {
     this.loadProfileInfo({ stopRefresh: true, forceRefresh: true });
+  },
+
+  onShareAppMessage() {
+    return {
+      title: HOME_SHARE_TITLE,
+      path: "/pages/index/index",
+    };
+  },
+
+  onShareTimeline() {
+    return {
+      title: HOME_SHARE_TITLE,
+    };
   },
 
   async loadProfileInfo(options = {}) {

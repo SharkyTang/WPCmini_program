@@ -72,6 +72,32 @@ function buildGalleryItems(caseItem = {}) {
     }));
 }
 
+function buildCaseShare(pageData = {}) {
+  const caseItem = pageData.caseItem;
+  const caseId =
+    caseItem && (caseItem.id || caseItem._id || caseItem.caseId);
+  if (!caseItem || !caseId) {
+    return {
+      title: "金亿诚包装科技｜酒包装灵感库",
+      path: "/pages/index/index",
+      query: "",
+    };
+  }
+
+  const imageUrl =
+    (pageData.galleryItems &&
+      pageData.galleryItems[0] &&
+      pageData.galleryItems[0].displayUrl) ||
+    pageData.currentImageUrl ||
+    "";
+  return {
+    title: `${caseItem.title || "酒包装设计案例"}｜金亿诚包装科技`,
+    path: `/pages/detail/index?id=${encodeURIComponent(caseId)}`,
+    query: `id=${encodeURIComponent(caseId)}`,
+    imageUrl,
+  };
+}
+
 Page({
   data: {
     loading: true,
@@ -99,6 +125,30 @@ Page({
 
   onLoad(options) {
     this.loadCase(options.id);
+  },
+
+  onShareAppMessage() {
+    const share = buildCaseShare(this.data);
+    const result = {
+      title: share.title,
+      path: share.path,
+    };
+    if (share.imageUrl) {
+      result.imageUrl = share.imageUrl;
+    }
+    return result;
+  },
+
+  onShareTimeline() {
+    const share = buildCaseShare(this.data);
+    const result = {
+      title: share.title,
+      query: share.query,
+    };
+    if (share.imageUrl) {
+      result.imageUrl = share.imageUrl;
+    }
+    return result;
   },
 
   async loadCase(id) {

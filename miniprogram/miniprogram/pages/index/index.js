@@ -16,6 +16,7 @@ const {
 const { HOME_SECTION_VALUES } = require("../../utils/caseData");
 
 const PENDING_CATEGORY_SORT_KEY = "pendingCategorySort";
+const HOME_SHARE_TITLE = "金亿诚包装科技｜酒包装灵感库";
 
 function summarizeTags(caseItem) {
   return [
@@ -116,6 +117,19 @@ Page({
 
   onPullDownRefresh() {
     this.loadData({ forceRefresh: true }).finally(() => wx.stopPullDownRefresh());
+  },
+
+  onShareAppMessage() {
+    return {
+      title: HOME_SHARE_TITLE,
+      path: "/pages/index/index",
+    };
+  },
+
+  onShareTimeline() {
+    return {
+      title: HOME_SHARE_TITLE,
+    };
   },
 
   applyHomeFeed(feed, options = {}) {

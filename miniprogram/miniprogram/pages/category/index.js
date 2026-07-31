@@ -30,6 +30,7 @@ const SORT_OPTIONS = [
 const PENDING_CATEGORY_SORT_KEY = "pendingCategorySort";
 const CARD_PAGE_SIZE = 12;
 const SEARCH_DEBOUNCE_MS = 250;
+const CATEGORY_SHARE_TITLE = "酒包装案例库｜金亿诚包装科技";
 const PANEL_SUBTITLES = {
   sort: "选择案例排序方式",
   wineType: "按酒类查看产品与案例",
@@ -274,6 +275,19 @@ Page({
 
   onPullDownRefresh() {
     this.loadData({ forceRefresh: true }).finally(() => wx.stopPullDownRefresh());
+  },
+
+  onShareAppMessage() {
+    return {
+      title: CATEGORY_SHARE_TITLE,
+      path: "/pages/category/index",
+    };
+  },
+
+  onShareTimeline() {
+    return {
+      title: CATEGORY_SHARE_TITLE,
+    };
   },
 
   onUnload() {

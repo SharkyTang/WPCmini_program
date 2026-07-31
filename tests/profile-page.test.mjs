@@ -79,6 +79,18 @@ await test("profile quick actions include feedback with image icon paths", () =>
   ]);
 });
 
+await test("profile shares the public homepage without exposing personal data", () => {
+  const page = loadProfilePage();
+
+  assert.deepEqual(plain(page.onShareAppMessage()), {
+    title: "金亿诚包装科技｜酒包装灵感库",
+    path: "/pages/index/index",
+  });
+  assert.deepEqual(plain(page.onShareTimeline()), {
+    title: "金亿诚包装科技｜酒包装灵感库",
+  });
+});
+
 await test("unconfigured profile card opens the setup page", async () => {
   let navigatedUrl = "";
   const page = loadProfilePage({ navigateTo(options) { navigatedUrl = options.url; } });

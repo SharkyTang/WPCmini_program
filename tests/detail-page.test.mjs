@@ -224,6 +224,91 @@ await asyncTest("detail loads one display image and upgrades only the selected t
   assert.equal(page.data.customerServiceMessageImage, "");
 });
 
+await asyncTest("detail shares the selected case with a direct-entry path", async () => {
+  let page;
+  const detailCase = {
+    id: "case 1",
+    title: "鎏金礼盒",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+    gallery: [
+      {
+        displayUrl: "https://example.com/case-1.jpg",
+        thumbnailUrl: "https://example.com/case-1-thumb.jpg",
+      },
+    ],
+  };
+  const sandbox = {
+    Page(config) {
+      page = config;
+    },
+    console,
+    require(moduleName) {
+      if (moduleName === "../../utils/cloudData") {
+        return { fetchCaseById: async () => ({}) };
+      }
+      if (moduleName === "../../utils/caseCatalogService") {
+        return { fetchCaseDetail: async () => detailCase };
+      }
+      if (moduleName === "../../utils/caseData") {
+        return { formatJoined: (values, fallback = "") => (values || []).join("/") || fallback };
+      }
+      if (moduleName === "../../utils/customerServiceData") {
+        return {
+          CUSTOMER_SERVICE_SOURCE: { DETAIL: "detail" },
+          buildCustomerMessageCard: () => ({
+            enabled: false,
+            title: "",
+            path: "",
+            imageUrl: "",
+          }),
+          buildCustomerSessionFrom: () => "",
+        };
+      }
+      if (moduleName === "../../utils/favoriteService") {
+        return {
+          fetchFavoriteForCase: async () => null,
+          toggleFavorite: async () => ({}),
+        };
+      }
+      if (moduleName === "../../utils/historyService") {
+        return { recordCaseView: async () => {} };
+      }
+      if (moduleName === "../../utils/userService") {
+        return { ensureProfileIdentity: async () => ({ ready: false }) };
+      }
+      throw new Error(`Unexpected require: ${moduleName}`);
+    },
+    wx: {},
+  };
+
+  vm.runInNewContext(readFileSync(pagePath, "utf8"), sandbox, {
+    filename: pagePath,
+  });
+  page.setData = function setData(patch) {
+    this.data = { ...this.data, ...patch };
+  };
+  await page.loadCase("case 1");
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(page.onShareAppMessage())),
+    {
+      title: "鎏金礼盒｜金亿诚包装科技",
+      path: "/pages/detail/index?id=case%201",
+      imageUrl: "https://example.com/case-1.jpg",
+    }
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(page.onShareTimeline())),
+    {
+      title: "鎏金礼盒｜金亿诚包装科技",
+      query: "id=case%201",
+      imageUrl: "https://example.com/case-1.jpg",
+    }
+  );
+});
+
 test("detail page uses branded states and removes developer-facing copy", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
   const pageJson = JSON.parse(readFileSync(jsonPath, "utf8"));

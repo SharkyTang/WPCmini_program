@@ -197,6 +197,24 @@ await test("home banner tap still opens its case detail", () => {
   assert.equal(navigatedUrl, "/pages/detail/index?id=case%201");
 });
 
+await test("home page can be shared to friends and timeline", () => {
+  const { page } = loadHomePage();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(page.onShareAppMessage())),
+    {
+      title: "金亿诚包装科技｜酒包装灵感库",
+      path: "/pages/index/index",
+    }
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(page.onShareTimeline())),
+    {
+      title: "金亿诚包装科技｜酒包装灵感库",
+    }
+  );
+});
+
 await test("home page shows only selected home section cases", async () => {
   const cases = Array.from({ length: 8 }, (_, index) =>
     buildCase(index + 1, {
