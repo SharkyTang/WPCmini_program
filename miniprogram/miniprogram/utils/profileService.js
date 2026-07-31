@@ -142,8 +142,9 @@ async function saveProfile(profile = {}) {
   return hydrateProfile(result.profile || profile);
 }
 
-function hasCompletedProfile(profile = {}) {
-  return Boolean(trimText(profile.nickname) && isCloudFileId(profile.avatarFileId));
+function hasCompletedProfile(profile) {
+  const source = profile && typeof profile === "object" ? profile : {};
+  return Boolean(trimText(source.nickname) && isCloudFileId(source.avatarFileId));
 }
 
 module.exports = {

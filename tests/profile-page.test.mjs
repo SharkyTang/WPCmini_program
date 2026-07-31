@@ -114,7 +114,11 @@ await test("unconfigured profile card opens the setup page", async () => {
   await page.loadProfileInfo();
   page.openProfileEditor();
   assert.equal(navigatedUrl, "/pages/profile/edit/index?mode=setup");
-  assert.equal(page.data.profileInfo.nickname, "微信名称");
+  assert.equal(page.data.profileInfo.nickname, "完善个人资料");
+  assert.equal(
+    page.data.profileInfo.note,
+    "完善头像和昵称后，可使用收藏与浏览记录"
+  );
 });
 
 await test("configured cloud profile opens the independent edit page", async () => {
@@ -133,6 +137,7 @@ await test("configured cloud profile opens the independent edit page", async () 
   page.openProfileEditor();
   assert.equal(navigatedUrl, "/pages/profile/edit/index?mode=edit");
   assert.equal(page.data.profileInfo.nickname, "墨韵 ovo");
+  assert.equal(page.data.profileInfo.note, "点击修改头像和名称");
   assert.equal(cachedProfile.avatarFileId, "cloud://avatar");
   assert.equal(cachedIdentity.openid, "openid_1");
 });
@@ -169,33 +174,52 @@ await test("completed profiles open favorites and history without the access gat
   assert.equal(accessRequests, 0);
 });
 
-await test("incomplete profiles request access with a resumable library target", async () => {
-  let accessOptions = null;
-  let navigatedUrl = "";
-  const page = loadProfilePage(
+await test("incomplete profiles request access with the matching resumable library target", async () => {
+  const scenarios = [
     {
-      navigateTo(options) {
-        navigatedUrl = options.url;
-        if (options.success) options.success({});
-        if (options.complete) options.complete({});
-      },
+      key: "favorites",
+      kind: "favorites",
+      source: "profile_favorites",
+      url: "/pages/favorites/index",
     },
     {
-      requestLibraryAccess: async (options) => {
-        accessOptions = options;
-        return { status: "redirected", ready: false };
+      key: "history",
+      kind: "history",
+      source: "profile_history",
+      url: "/pages/history/index",
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    let accessOptions = null;
+    let navigatedUrl = "";
+    const page = loadProfilePage(
+      {
+        navigateTo(options) {
+          navigatedUrl = options.url;
+          if (options.success) options.success({});
+          if (options.complete) options.complete({});
+        },
       },
-    }
-  );
-  await page.loadProfileInfo();
+      {
+        requestLibraryAccess: async (options) => {
+          accessOptions = options;
+          return { status: "redirected", ready: false };
+        },
+      }
+    );
+    await page.loadProfileInfo();
 
-  await page.handleQuickAction({ currentTarget: { dataset: { key: "favorites" } } });
+    await page.handleQuickAction({
+      currentTarget: { dataset: { key: scenario.key } },
+    });
 
-  assert.equal(navigatedUrl, "");
-  assert.equal(accessOptions.kind, "favorites");
-  assert.equal(accessOptions.source, "profile_favorites");
-  await accessOptions.resume();
-  assert.equal(navigatedUrl, "/pages/favorites/index");
+    assert.equal(navigatedUrl, "");
+    assert.equal(accessOptions.kind, scenario.kind);
+    assert.equal(accessOptions.source, scenario.source);
+    await accessOptions.resume();
+    assert.equal(navigatedUrl, scenario.url);
+  }
 });
 
 await test("a ready access response navigates immediately when cached profile state is stale", async () => {
@@ -327,7 +351,11 @@ await test("an authoritative incomplete cloud profile clears a stale completed f
   });
 
   assert.equal(page.data.hasCompletedProfile, false);
-  assert.equal(page.data.profileInfo.nickname, "微信名称");
+  assert.equal(page.data.profileInfo.nickname, "完善个人资料");
+  assert.equal(
+    page.data.profileInfo.note,
+    "完善头像和昵称后，可使用收藏与浏览记录"
+  );
   assert.equal(page.data.profileInfo.avatarUrl, "");
   assert.equal(accessRequests, 1);
   assert.deepEqual(plain(cachedProfiles), [{}]);

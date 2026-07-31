@@ -201,6 +201,69 @@ await test("profile mode returns ready without showing a prompt for completed pr
   assert.equal(context.navigations.length, 0);
 });
 
+await test("all incomplete-profile entry sources show their contextual prompt and resume once", async () => {
+  const scenarios = [
+    {
+      kind: "favorites",
+      source: "detail_favorite",
+      title: "收藏当前案例",
+      content: "完善头像和昵称后，可保存并跨设备查看收藏。完成后将自动返回并收藏当前案例。",
+    },
+    {
+      kind: "favorites",
+      source: "profile_favorites",
+      title: "查看我的收藏",
+      content: "完善头像和昵称后，可保存并跨设备查看收藏。完成后将自动进入“我的收藏”。",
+    },
+    {
+      kind: "history",
+      source: "profile_history",
+      title: "查看浏览记录",
+      content: "完善头像和昵称后，可记录并跨设备查看最近浏览的案例。完成后将自动进入“浏览记录”。",
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    let resumed = 0;
+    const context = loadLibraryAccessService({
+      profileIdentity: {
+        ready: false,
+        openid: "openid_new_user",
+        profile: null,
+      },
+    });
+
+    const result = await context.service.requestLibraryAccess({
+      kind: scenario.kind,
+      source: scenario.source,
+      resume() {
+        resumed += 1;
+      },
+    });
+
+    assert.equal(result.status, "redirected");
+    assert.equal(context.modals.length, 1);
+    assert.equal(context.modals[0].title, scenario.title);
+    assert.equal(context.modals[0].content, scenario.content);
+    assert.equal(context.modals[0].confirmText, "去完善");
+    assert.equal(context.modals[0].cancelText, "暂不");
+    assert.deepEqual(context.navigations, [
+      `/pages/profile/edit/index?mode=setup&identityGate=1&source=${scenario.source}`,
+    ]);
+
+    assert.deepEqual(
+      plain(await context.service.resumePendingLibraryAction(scenario.source)),
+      { resumed: true, success: true }
+    );
+    assert.equal(resumed, 1);
+    assert.equal(
+      await context.service.resumePendingLibraryAction(scenario.source),
+      false
+    );
+    assert.equal(resumed, 1);
+  }
+});
+
 await test("openid mode only checks the WeChat identity", async () => {
   const context = loadLibraryAccessService({
     modes: { favorites: "openid" },

@@ -1,5 +1,4 @@
 const {
-  DEFAULT_NICKNAME,
   cacheProfile,
   fetchSessionSummary,
   getLegacyProfile,
@@ -32,9 +31,9 @@ const LIBRARY_QUICK_ACTIONS = {
   },
 };
 const DEFAULT_PROFILE_INFO = {
-  nickname: DEFAULT_NICKNAME,
+  nickname: "完善个人资料",
   avatarUrl: "",
-  note: "点击使用微信头像和名称",
+  note: "完善头像和昵称后，可使用收藏与浏览记录",
 };
 
 function toProfileInfo(profile = {}) {

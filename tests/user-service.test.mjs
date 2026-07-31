@@ -6,6 +6,35 @@ import vm from "node:vm";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const modulePath = resolve(__dirname, "../miniprogram/miniprogram/utils/userService.js");
+const profileServicePath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/utils/profileService.js"
+);
+
+function loadProductionHasCompletedProfile() {
+  const profileModule = { exports: {} };
+  const sandbox = {
+    module: profileModule,
+    exports: profileModule.exports,
+    require(moduleName) {
+      if (moduleName === "./userDataService") {
+        return {
+          callUserData() {
+            throw new Error("profile service data access is not used in this test");
+          },
+        };
+      }
+      throw new Error(`Unexpected require: ${moduleName}`);
+    },
+    wx: {},
+  };
+  vm.runInNewContext(readFileSync(profileServicePath, "utf8"), sandbox, {
+    filename: profileServicePath,
+  });
+  return profileModule.exports.hasCompletedProfile;
+}
+
+const productionHasCompletedProfile = loadProductionHasCompletedProfile();
 
 function loadUserService(options = {}) {
   const app = { globalData: {} };
@@ -17,6 +46,7 @@ function loadUserService(options = {}) {
     exports: {},
     console: options.console || { error() {}, log() {}, warn() {} },
     getApp() { return app; },
+    setTimeout(callback) { callback(); },
     require(moduleName) {
       if (moduleName !== "./profileService") throw new Error(`Unexpected require: ${moduleName}`);
       return {
@@ -30,7 +60,7 @@ function loadUserService(options = {}) {
               : { nickname: "酒友", avatarFileId: "cloud://avatar" },
             roles: {},
           })),
-        hasCompletedProfile: options.hasCompletedProfile || ((profile) => Boolean(profile && profile.nickname && profile.avatarFileId)),
+        hasCompletedProfile: options.hasCompletedProfile || productionHasCompletedProfile,
       };
     },
     wx: {
@@ -97,6 +127,49 @@ await test("completed profile identity checks reuse the verified result without 
   assert.equal(first.ready, true);
   assert.equal(second.ready, true);
   assert.equal(sessionCalls, 1);
+});
+
+await test("a null session profile is incomplete without becoming an identity error", async () => {
+  const context = loadUserService({
+    fetchSessionSummary: async () => ({
+      openid: "openid_1",
+      profile: null,
+      roles: {},
+    }),
+  });
+
+  const identity = await context.service.ensureProfileIdentity({
+    redirectToSetup: false,
+    showError: false,
+  });
+
+  assert.equal(identity.ready, false);
+  assert.equal(identity.error, undefined);
+  assert.equal(identity.openid, "openid_1");
+  assert.equal(identity.profile, null);
+  assert.equal(context.navigations.length, 0);
+  assert.equal(context.toasts.length, 0);
+});
+
+await test("a rejected session lookup remains an explicit identity error", async () => {
+  const expectedError = new Error("offline");
+  const context = loadUserService({
+    fetchSessionSummary: async () => {
+      throw expectedError;
+    },
+  });
+
+  const identity = await context.service.ensureProfileIdentity({
+    redirectToSetup: false,
+    showError: false,
+  });
+
+  assert.equal(identity.ready, false);
+  assert.equal(identity.error, expectedError);
+  assert.equal(identity.openid, "");
+  assert.equal(identity.profile, null);
+  assert.equal(context.navigations.length, 0);
+  assert.equal(context.toasts.length, 0);
 });
 
 await test("an incomplete profile opens one setup page and resumes its pending action after saving", async () => {

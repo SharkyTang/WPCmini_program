@@ -42,6 +42,43 @@ async function test(name, fn) {
   }
 }
 
+await test("profile completion safely rejects missing and non-object values", () => {
+  const service = loadProfileService(async () => ({}));
+
+  assert.equal(service.hasCompletedProfile(null), false);
+  assert.equal(service.hasCompletedProfile(undefined), false);
+  assert.equal(service.hasCompletedProfile("profile"), false);
+  assert.equal(service.hasCompletedProfile(42), false);
+  assert.equal(service.hasCompletedProfile([]), false);
+});
+
+await test("profile completion still requires a nickname and cloud avatar", () => {
+  const service = loadProfileService(async () => ({}));
+
+  assert.equal(service.hasCompletedProfile({}), false);
+  assert.equal(
+    service.hasCompletedProfile({
+      nickname: "   ",
+      avatarFileId: "cloud://avatar",
+    }),
+    false
+  );
+  assert.equal(
+    service.hasCompletedProfile({
+      nickname: "酒友",
+      avatarFileId: "https://example.com/avatar.jpg",
+    }),
+    false
+  );
+  assert.equal(
+    service.hasCompletedProfile({
+      nickname: "酒友",
+      avatarFileId: "cloud://avatar",
+    }),
+    true
+  );
+});
+
 await test("concurrent session summary readers share one cloud request and cache it", async () => {
   let calls = 0;
   let resolveRequest;
