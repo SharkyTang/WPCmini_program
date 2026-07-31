@@ -7,6 +7,8 @@ Page({
   data: {
     ...CONTACT_DATA,
     activeStoreImageIndex: 0,
+    storeImagesLoading: true,
+    storeImagesError: false,
     isAdmin: false,
   },
 
@@ -15,15 +17,26 @@ Page({
   },
 
   async loadPublicContact() {
+    // 每次读取前先清空已渲染的门店图，避免管理员更新后短暂显示旧云端图片。
+    this.setData({
+      storeImages: [],
+      activeStoreImageIndex: 0,
+      storeImagesLoading: true,
+      storeImagesError: false,
+    });
+
     try {
       const contact = await fetchPublicContact();
+      const storeImages = Array.isArray(contact.storeImages)
+        ? contact.storeImages
+        : [];
       const patch = {
         isAdmin: contact.isAdmin,
+        storeImages,
+        activeStoreImageIndex: 0,
+        storeImagesLoading: false,
+        storeImagesError: false,
       };
-      if (Array.isArray(contact.storeImages) && contact.storeImages.length) {
-        patch.storeImages = contact.storeImages;
-        patch.activeStoreImageIndex = 0;
-      }
       if (
         Array.isArray(contact.wechatQrImages) &&
         contact.wechatQrImages.length
@@ -40,8 +53,10 @@ Page({
       this.setData(patch);
     } catch (error) {
       this.setData({
-        ...CONTACT_DATA,
+        storeImages: [],
         activeStoreImageIndex: 0,
+        storeImagesLoading: false,
+        storeImagesError: true,
         isAdmin: false,
       });
     }
@@ -67,6 +82,9 @@ Page({
   },
 
   previewStoreImage(event) {
+    if (!Array.isArray(this.data.storeImages) || !this.data.storeImages.length) {
+      return;
+    }
     const index = Number(event && event.currentTarget && event.currentTarget.dataset.index);
     const safeIndex =
       Number.isInteger(index) && index >= 0 && index < this.data.storeImages.length
@@ -153,17 +171,23 @@ Page({
   },
 
   onShareAppMessage() {
-    return {
+    const share = {
       title: CONTACT_SHARE_TITLE,
       path: "/pages/contact/index",
-      imageUrl: this.data.storeImages[0],
     };
+    if (this.data.storeImages[0]) {
+      share.imageUrl = this.data.storeImages[0];
+    }
+    return share;
   },
 
   onShareTimeline() {
-    return {
+    const share = {
       title: CONTACT_SHARE_TITLE,
-      imageUrl: this.data.storeImages[0],
     };
+    if (this.data.storeImages[0]) {
+      share.imageUrl = this.data.storeImages[0];
+    }
+    return share;
   },
 });

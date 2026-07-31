@@ -19,12 +19,13 @@
         <view class="section-title">门店实景</view>
         <view class="section-subtitle">左右滑动查看更多，点击图片可放大</view>
       </view>
-      <view class="image-count">
+      <view wx:if="{{storeImages.length}}" class="image-count">
         {{activeStoreImageIndex + 1}} / {{storeImages.length}}
       </view>
     </view>
 
     <swiper
+      wx:if="{{storeImages.length}}"
       class="store-swiper"
       current="{{activeStoreImageIndex}}"
       circular="{{storeImages.length > 1}}"
@@ -43,6 +44,15 @@
         />
       </swiper-item>
     </swiper>
+    <view wx:elif="{{storeImagesLoading}}" class="store-image-state">
+      门店图片加载中…
+    </view>
+    <view wx:elif="{{storeImagesError}}" class="store-image-state store-image-state-error">
+      门店图片暂时无法加载，请稍后重试
+    </view>
+    <view wx:else class="store-image-state">
+      门店图片暂未配置
+    </view>
   </view>
 
   <view class="section address-section">

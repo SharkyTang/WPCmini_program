@@ -96,7 +96,7 @@ async function test(name, fn) {
   }
 }
 
-await test("contact data uses complete public store details and bounded assets", () => {
+await test("contact data uses complete public store details without old store fallbacks", () => {
   const data = plain(loadContactData());
 
   assert.equal(data.storeName, "金亿诚包装科技");
@@ -108,18 +108,18 @@ await test("contact data uses complete public store details and bounded assets",
   assert.equal(Number.isFinite(data.longitude), true);
   assert.equal(data.latitude >= -90 && data.latitude <= 90, true);
   assert.equal(data.longitude >= -180 && data.longitude <= 180, true);
-  assert.equal(data.storeImages.length, 3);
+  assert.deepEqual(data.storeImages, []);
   assert.equal(data.storeImages.length <= 9, true);
   assert.equal(data.wechatQrImages.length, 1);
   assert.equal(data.wechatQrImages.length <= 2, true);
   assert.equal(data.wechatQrImage, data.wechatQrImages[0]);
   assert.deepEqual(data.phoneNumbers, []);
 
-  [...data.storeImages, ...data.wechatQrImages].forEach((assetPath) => {
+  data.wechatQrImages.forEach((assetPath) => {
     const absolutePath = resolve(miniRoot, assetPath.replace(/^\//, ""));
     assert.equal(existsSync(absolutePath), true, `${assetPath} should exist`);
   });
-  const packageBytes = [...data.storeImages, ...data.wechatQrImages].reduce(
+  const packageBytes = data.wechatQrImages.reduce(
     (total, assetPath) =>
       total + statSync(resolve(miniRoot, assetPath.replace(/^\//, ""))).size,
     0
@@ -253,11 +253,12 @@ await test("contact page merges valid cloud fields and exposes the admin editor"
     { displayNumber: "0851-12345678", dialNumber: "085112345678" },
   ]);
   assert.equal(page.data.activeStoreImageIndex, 0);
+  assert.equal(page.data.storeImagesLoading, false);
+  assert.equal(page.data.storeImagesError, false);
   assert.equal(navigatedTo, "/pages/contact-admin/edit");
 });
 
-await test("empty cloud images preserve local assets and request failures restore fallback", async () => {
-  const staticData = plain(loadContactData());
+await test("empty or failed cloud reads never restore old store images", async () => {
   const page = loadContactPage({}, {
     async fetchPublicContact() {
       return {
@@ -269,16 +270,17 @@ await test("empty cloud images preserve local assets and request failures restor
       };
     },
   });
+  page.data.storeImages = ["https://example.test/previous-cloud.jpg"];
 
   await page.loadPublicContact();
-  assert.deepEqual(plain(page.data.storeImages), staticData.storeImages);
-  assert.deepEqual(plain(page.data.wechatQrImages), staticData.wechatQrImages);
-  assert.equal(page.data.wechatQrImage, staticData.wechatQrImage);
+  assert.deepEqual(plain(page.data.storeImages), []);
+  assert.equal(page.data.storeImagesLoading, false);
+  assert.equal(page.data.storeImagesError, false);
   assert.deepEqual(plain(page.data.phoneNumbers), []);
 
-  page.data.storeImages = ["https://example.test/stale.jpg"];
-  page.data.wechatQrImages = ["https://example.test/stale-qr.jpg"];
-  page.data.wechatQrImage = "https://example.test/stale-qr.jpg";
+  page.data.storeImages = ["https://example.test/current-cloud.jpg"];
+  page.data.wechatQrImages = ["https://example.test/current-cloud-qr.jpg"];
+  page.data.wechatQrImage = "https://example.test/current-cloud-qr.jpg";
   page.data.phoneNumbers = [
     { displayNumber: "123", dialNumber: "123" },
   ];
@@ -292,14 +294,57 @@ await test("empty cloud images preserve local assets and request failures restor
 
   await offlinePage.loadPublicContact();
 
-  assert.deepEqual(plain(offlinePage.data.storeImages), staticData.storeImages);
-  assert.deepEqual(
-    plain(offlinePage.data.wechatQrImages),
-    staticData.wechatQrImages
-  );
-  assert.equal(offlinePage.data.wechatQrImage, staticData.wechatQrImage);
-  assert.deepEqual(plain(offlinePage.data.phoneNumbers), []);
+  assert.deepEqual(plain(offlinePage.data.storeImages), []);
+  assert.equal(offlinePage.data.storeImagesLoading, false);
+  assert.equal(offlinePage.data.storeImagesError, true);
+  assert.deepEqual(plain(offlinePage.data.wechatQrImages), [
+    "https://example.test/current-cloud-qr.jpg",
+  ]);
+  assert.deepEqual(plain(offlinePage.data.phoneNumbers), [
+    { displayNumber: "123", dialNumber: "123" },
+  ]);
   assert.equal(offlinePage.data.isAdmin, false);
+
+  const freshOfflinePage = loadContactPage({}, {
+    async fetchPublicContact() {
+      throw new Error("offline");
+    },
+  });
+  await freshOfflinePage.loadPublicContact();
+  assert.deepEqual(plain(freshOfflinePage.data.storeImages), []);
+  assert.equal(freshOfflinePage.data.storeImagesLoading, false);
+  assert.equal(freshOfflinePage.data.storeImagesError, true);
+});
+
+await test("contact refresh clears previously rendered images before new cloud data arrives", async () => {
+  let resolveContact;
+  const page = loadContactPage({}, {
+    fetchPublicContact() {
+      return new Promise((resolveContactRequest) => {
+        resolveContact = resolveContactRequest;
+      });
+    },
+  });
+  page.data.storeImages = ["https://example.test/previous-cloud.jpg"];
+
+  const loading = page.loadPublicContact();
+
+  assert.deepEqual(plain(page.data.storeImages), []);
+  assert.equal(page.data.storeImagesLoading, true);
+  resolveContact({
+    isAdmin: false,
+    storeImages: ["https://example.test/new-cloud.jpg"],
+    wechatQrImages: [],
+    wechatQrImage: "",
+    phoneNumbers: [],
+  });
+  await loading;
+
+  assert.deepEqual(plain(page.data.storeImages), [
+    "https://example.test/new-cloud.jpg",
+  ]);
+  assert.equal(page.data.storeImagesLoading, false);
+  assert.equal(page.data.storeImagesError, false);
 });
 
 await test("contact page previews store images and the WeChat QR image", () => {
@@ -309,6 +354,10 @@ await test("contact page previews store images and the WeChat QR image", () => {
       previews.push(options);
     },
   });
+  page.data.storeImages = [
+    "https://example.test/store-1.jpg",
+    "https://example.test/store-2.jpg",
+  ];
   page.data.wechatQrImages = [
     "https://example.test/qr-1.png",
     "https://example.test/qr-2.png",
@@ -322,6 +371,19 @@ await test("contact page previews store images and the WeChat QR image", () => {
   assert.deepEqual(plain(previews[0].urls), plain(page.data.storeImages));
   assert.equal(previews[1].current, page.data.wechatQrImages[1]);
   assert.deepEqual(plain(previews[1].urls), plain(page.data.wechatQrImages));
+});
+
+await test("contact page ignores store preview taps while no cloud image is available", () => {
+  let previewCount = 0;
+  const page = loadContactPage({
+    previewImage() {
+      previewCount += 1;
+    },
+  });
+
+  page.previewStoreImage({ currentTarget: { dataset: { index: 0 } } });
+
+  assert.equal(previewCount, 0);
 });
 
 await test("contact page dials either configured phone and ignores cancellations", () => {
@@ -410,18 +472,31 @@ await test("contact page exposes friend and timeline sharing", () => {
   assert.deepEqual(plain(page.onShareAppMessage()), {
     title: "联系我们｜金亿诚包装科技",
     path: "/pages/contact/index",
-    imageUrl: page.data.storeImages[0],
   });
   assert.deepEqual(plain(page.onShareTimeline()), {
     title: "联系我们｜金亿诚包装科技",
-    imageUrl: page.data.storeImages[0],
   });
+
+  page.data.storeImages = ["https://example.test/current-cloud.jpg"];
+  assert.equal(
+    page.onShareAppMessage().imageUrl,
+    "https://example.test/current-cloud.jpg"
+  );
+  assert.equal(
+    page.onShareTimeline().imageUrl,
+    "https://example.test/current-cloud.jpg"
+  );
 });
 
 await test("contact page enables gallery and long-press QR behavior", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
 
   assert.equal(wxml.includes('wx:for="{{storeImages}}"'), true);
+  assert.equal(wxml.includes('wx:if="{{storeImages.length}}"'), true);
+  assert.equal(wxml.includes('wx:elif="{{storeImagesLoading}}"'), true);
+  assert.equal(wxml.includes('wx:elif="{{storeImagesError}}"'), true);
+  assert.equal(wxml.includes("门店图片暂时无法加载，请稍后重试"), true);
+  assert.equal(wxml.includes("门店图片暂未配置"), true);
   assert.equal(wxml.includes('bindtap="previewStoreImage"'), true);
   assert.equal(wxml.includes('bindtap="openStoreLocation"'), true);
   assert.equal(wxml.includes("map-button-icon"), false);

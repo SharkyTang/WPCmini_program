@@ -61,7 +61,7 @@
           </view>
         </view>
       </view>
-      <view wx:else class="empty-tip">未配置云端门店图时，公开页面继续使用内置占位图。</view>
+      <view wx:else class="empty-tip">未配置云端门店图时，公开页面不会展示门店图片。</view>
 
       <button
         class="secondary-button"
