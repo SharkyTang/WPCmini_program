@@ -11,7 +11,11 @@ const {
   toggleFavorite,
 } = require("../../utils/favoriteService");
 const { recordCaseView } = require("../../utils/historyService");
-const { ensureProfileIdentity } = require("../../utils/userService");
+const {
+  requestLibraryAccess,
+  resumePendingLibraryAction,
+} = require("../../utils/libraryAccessService");
+const { resumePendingProfileAction } = require("../../utils/userService");
 
 function buildInfoRows(caseItem) {
   return [
@@ -127,6 +131,10 @@ Page({
     this.loadCase(options.id);
   },
 
+  onShow() {
+    return this.resumePendingFavoriteAction();
+  },
+
   onShareAppMessage() {
     const share = buildCaseShare(this.data);
     const result = {
@@ -237,14 +245,79 @@ Page({
     });
 
     try {
-      const identity = await ensureProfileIdentity({
-        resume: () => this.toggleFavorite(),
+      const access = await requestLibraryAccess({
+        kind: "favorites",
+        source: "detail_favorite",
+        resume: () =>
+          this.performToggleFavorite({ resumedAfterProfileSetup: true }),
       });
-      if (!identity.ready) {
-        this.setData({ favoriteLoading: false });
+      if (access && access.status === "ready") {
+        await this.performToggleFavorite();
         return;
       }
 
+      if (access && access.status === "redirected") {
+        return;
+      }
+
+      this.setData({ favoriteLoading: false });
+      if (access && access.status === "error") {
+        wx.showToast({
+          title:
+            access.stage === "navigation"
+              ? "暂时无法打开资料页，请重试"
+              : "暂时无法验证资料，请重试",
+          icon: "none",
+        });
+      }
+    } catch (error) {
+      console.error("收藏访问检查失败", error);
+      this.setData({ favoriteLoading: false });
+      wx.showToast({
+        title: "暂时无法验证资料，请重试",
+        icon: "none",
+      });
+    }
+  },
+
+  async resumePendingFavoriteAction() {
+    try {
+      const resumeResult = await resumePendingLibraryAction("detail_favorite");
+      const libraryResumed = resumeResult === true
+        || Boolean(resumeResult && resumeResult.resumed);
+      if (libraryResumed) return true;
+
+      const legacyResumeResult = await resumePendingProfileAction();
+      const legacyResumed = legacyResumeResult === true
+        || Boolean(legacyResumeResult && legacyResumeResult.resumed);
+      if (!legacyResumed && this.data.favoriteLoading) {
+        this.setData({ favoriteLoading: false });
+      }
+      return legacyResumed;
+    } catch (error) {
+      console.error("恢复收藏操作失败", error);
+      this.setData({ favoriteLoading: false });
+      wx.showToast({
+        title: "收藏操作失败",
+        icon: "none",
+      });
+      return false;
+    }
+  },
+
+  async performToggleFavorite(options = {}) {
+    if (!this.data.caseItem) {
+      this.setData({ favoriteLoading: false });
+      if (options.resumedAfterProfileSetup) {
+        wx.showToast({
+          title: "资料已完成，收藏失败，请重试",
+          icon: "none",
+        });
+      }
+      return false;
+    }
+
+    try {
       const result = await toggleFavorite(this.data.caseItem, this.data.favorite);
       this.setData({
         favoriteLoading: false,
@@ -257,24 +330,36 @@ Page({
           title: "收藏已满，可先取消一些收藏",
           icon: "none",
         });
-        return;
+        return false;
       }
 
-      if (result.action === "cancelled") return;
+      if (result.action === "cancelled") {
+        if (options.resumedAfterProfileSetup) {
+          wx.showToast({
+            title: "资料已完成，收藏失败，请重试",
+            icon: "none",
+          });
+        }
+        return false;
+      }
 
       wx.showToast({
         title: result.isFavorited ? "已收藏" : "已取消收藏",
         icon: "success",
       });
+      return true;
     } catch (error) {
       console.error("收藏操作失败", error);
       this.setData({
         favoriteLoading: false,
       });
       wx.showToast({
-        title: "收藏操作失败",
+        title: options.resumedAfterProfileSetup
+          ? "资料已完成，收藏失败，请重试"
+          : "收藏操作失败",
         icon: "none",
       });
+      return false;
     }
   },
 

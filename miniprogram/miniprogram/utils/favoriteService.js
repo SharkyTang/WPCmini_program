@@ -5,7 +5,7 @@ const {
   mergeFavoritesWithCases,
   normalizeSelectedFavoriteIds,
 } = require("./favoriteData");
-const { ensureProfileIdentity } = require("./userService");
+const { checkLibraryAccess } = require("./libraryAccessService");
 const { fetchUserLibrary } = require("./caseCatalogService");
 
 const FAVORITE_COLLECTION = "favorites";
@@ -45,11 +45,8 @@ function isCaseNotFoundError(error) {
 
 async function ensureIdentityForRead(options = {}) {
   try {
-    const identity = await ensureProfileIdentity({
-      redirectToSetup: false,
-      showError: false,
-    });
-    return identity.ready ? identity.openid : "";
+    const access = await checkLibraryAccess("favorites", options);
+    return access.status === "ready" ? access.openid : "";
   } catch (error) {
     console.warn("静默读取微信身份失败", error);
     return "";
@@ -70,11 +67,8 @@ async function fetchFavoriteForCase(caseItem, options = {}) {
 }
 
 async function addFavorite(caseItem) {
-  const identity = await ensureProfileIdentity({
-    redirectToSetup: false,
-    showError: false,
-  });
-  const openid = identity.ready ? identity.openid : "";
+  const access = await checkLibraryAccess("favorites");
+  const openid = access.status === "ready" ? access.openid : "";
   if (!openid) return null;
 
   const existing = await fetchFavoriteForCase(caseItem);

@@ -8,12 +8,29 @@ const {
 const {
   cacheCompletedProfileIdentity,
   cacheOpenId,
+  resumePendingProfileAction,
 } = require("../../utils/userService");
+const {
+  requestLibraryAccess,
+  resumePendingLibraryAction,
+} = require("../../utils/libraryAccessService");
 const {
   CUSTOMER_SERVICE_SOURCE,
   buildCustomerSessionFrom,
 } = require("../../utils/customerServiceData");
 const HOME_SHARE_TITLE = "金亿诚包装科技｜酒包装灵感库";
+const LIBRARY_QUICK_ACTIONS = {
+  favorites: {
+    kind: "favorites",
+    source: "profile_favorites",
+    url: "/pages/favorites/index",
+  },
+  history: {
+    kind: "history",
+    source: "profile_history",
+    url: "/pages/history/index",
+  },
+};
 const DEFAULT_PROFILE_INFO = {
   nickname: DEFAULT_NICKNAME,
   avatarUrl: "",
@@ -31,7 +48,13 @@ function toProfileInfo(profile = {}) {
   };
 }
 
+function wasPendingActionResumed(result) {
+  return result === true || Boolean(result && result.resumed);
+}
+
 Page({
+  quickActionPendingKey: "",
+
   data: {
     profileInfo: DEFAULT_PROFILE_INFO,
     hasCompletedProfile: false,
@@ -74,6 +97,7 @@ Page({
 
   onShow() {
     this.loadProfileInfo();
+    return this.resumePendingLibraryNavigation();
   },
 
   onPullDownRefresh() {
@@ -125,6 +149,13 @@ Page({
           profileInfo: toProfileInfo(profile),
           hasCompletedProfile: true,
         });
+      } else {
+        const currentProfile = profile || {};
+        cacheProfile(currentProfile);
+        this.setData({
+          profileInfo: toProfileInfo(currentProfile),
+          hasCompletedProfile: false,
+        });
       }
     } catch (error) {
       console.error("读取个人资料失败", error);
@@ -148,14 +179,87 @@ Page({
     });
   },
 
-  handleQuickAction(event) {
-    const key = event.currentTarget.dataset.key;
-    if (key === "favorites") {
-      wx.navigateTo({ url: "/pages/favorites/index" });
-      return;
+  async resumePendingLibraryNavigation() {
+    try {
+      const resumedFavorites = await resumePendingLibraryAction("profile_favorites");
+      if (!wasPendingActionResumed(resumedFavorites)) {
+        const resumedHistory = await resumePendingLibraryAction("profile_history");
+        if (!wasPendingActionResumed(resumedHistory)) {
+          await resumePendingProfileAction();
+        }
+      }
+    } catch (error) {
+      console.error("恢复资料完成后的入口失败", error);
+    } finally {
+      this.quickActionPendingKey = "";
     }
-    if (key === "history") {
-      wx.navigateTo({ url: "/pages/history/index" });
+  },
+
+  navigateToLibraryAction(libraryAction) {
+    return new Promise((resolve, reject) => {
+      wx.navigateTo({
+        url: libraryAction.url,
+        success: resolve,
+        fail: (error) => {
+          wx.showToast({
+            title: "页面暂时无法打开，请重试",
+            icon: "none",
+          });
+          reject(error);
+        },
+        complete: () => {
+          this.quickActionPendingKey = "";
+        },
+      });
+    });
+  },
+
+  async handleQuickAction(event) {
+    const key = event.currentTarget.dataset.key;
+    const libraryAction = LIBRARY_QUICK_ACTIONS[key];
+    if (libraryAction) {
+      if (this.quickActionPendingKey) return;
+      this.quickActionPendingKey = key;
+      const navigate = () => this.navigateToLibraryAction(libraryAction);
+      let keepPending = false;
+      try {
+        if (this.data.hasCompletedProfile) {
+          keepPending = true;
+          navigate().catch((error) => {
+            console.error("用户列表页面跳转失败", error);
+          });
+          return;
+        }
+
+        const result = await requestLibraryAccess({
+          kind: libraryAction.kind,
+          source: libraryAction.source,
+          resume: navigate,
+        });
+        if (result && (result.ready === true || result.status === "ready")) {
+          keepPending = true;
+          navigate().catch((error) => {
+            console.error("用户列表页面跳转失败", error);
+          });
+        } else if (result && result.status === "redirected") {
+          keepPending = true;
+        } else if (result && result.status === "error") {
+          wx.showToast({
+            title: result.stage === "navigation"
+              ? "暂时无法打开资料页，请重试"
+              : "暂时无法验证资料，请重试",
+            icon: "none",
+          });
+        }
+      } catch (error) {
+        console.error("用户列表访问检查失败", error);
+        wx.showToast({
+          title: "暂时无法验证资料，请重试",
+          icon: "none",
+        });
+      } finally {
+        if (!keepPending) this.quickActionPendingKey = "";
+      }
       return;
     }
     if (key === "notice") {

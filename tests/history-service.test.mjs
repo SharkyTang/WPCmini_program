@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { loadOpenIdLibraryAccessService } from "./library-openid-test-helper.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const modulePath = resolve(
@@ -48,8 +49,15 @@ function loadHistoryService(recordsByCondition = {}, options = {}) {
       }
       if (path === "./userService") {
         return {
-          ensureProfileIdentity: async () => ({ ready: true, openid: "openid_1" }),
           getCachedOpenId: () => "openid_1",
+        };
+      }
+      if (path === "./libraryAccessService") {
+        if (options.libraryAccessService) return options.libraryAccessService;
+        return {
+          checkLibraryAccess:
+            options.checkLibraryAccess ||
+            (async () => ({ status: "ready", openid: "openid_1" })),
         };
       }
       throw new Error(`Unexpected require: ${path}`);
@@ -190,4 +198,44 @@ await test("fetchHistoryCases removes records whose cases no longer exist", asyn
 
   assert.deepEqual(plain(removedIds), ["history_missing"]);
   assert.deepEqual(plain(cases), [{ _id: "doc_live", caseId: "case_001" }]);
+});
+
+await test("openid build flag supports history write, read, update, and delete without a profile", async () => {
+  const access = loadOpenIdLibraryAccessService("history");
+  const { service, removedIds, updates } = loadHistoryService({
+    [JSON.stringify({ _openid: "openid_1", caseDocId: "doc_001" })]: [
+      { _id: "history_1", caseDocId: "doc_001", caseId: "case_001", viewCount: 2 },
+    ],
+  }, {
+    libraryAccessService: access.service,
+    fetchUserLibrary: async () => [{
+      recordId: "history_1",
+      viewCount: 3,
+      caseItem: { id: "doc_001", caseId: "case_001" },
+    }],
+  });
+
+  const created = await service.recordCaseView({
+    id: "doc_002",
+    caseId: "case_002",
+  });
+  const updated = await service.recordCaseView({
+    id: "doc_001",
+    caseId: "case_001",
+  });
+  const cases = await service.fetchHistoryCases();
+  const removedCount = await service.removeHistoryRecords(["history_1"]);
+
+  assert.equal(created._id, "history_new");
+  assert.equal(updated.viewCount, 3);
+  assert.equal(updates.length, 1);
+  assert.deepEqual(plain(cases), [{
+    historyId: "history_1",
+    viewCount: 3,
+    caseItem: { id: "doc_001", caseId: "case_001" },
+  }]);
+  assert.equal(removedCount, 1);
+  assert.deepEqual(plain(removedIds), ["history_1"]);
+  assert.equal(access.profileChecks, 0);
+  assert.equal(access.openidChecks > 0, true);
 });

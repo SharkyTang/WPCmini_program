@@ -5,7 +5,8 @@ const {
   mergeHistoryWithCases,
   normalizeSelectedIds,
 } = require("./historyData");
-const { ensureProfileIdentity, getCachedOpenId } = require("./userService");
+const { checkLibraryAccess } = require("./libraryAccessService");
+const { getCachedOpenId } = require("./userService");
 const { fetchUserLibrary } = require("./caseCatalogService");
 
 const HISTORY_COLLECTION = "browse_history";
@@ -45,11 +46,8 @@ function isCaseNotFoundError(error) {
 
 async function ensureIdentityForHistory() {
   try {
-    const identity = await ensureProfileIdentity({
-      redirectToSetup: false,
-      showError: false,
-    });
-    return identity.ready ? identity.openid : "";
+    const access = await checkLibraryAccess("history");
+    return access.status === "ready" ? access.openid : "";
   } catch (error) {
     console.warn("浏览记录身份恢复失败", error);
     return "";

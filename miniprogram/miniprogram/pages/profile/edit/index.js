@@ -10,8 +10,40 @@ const {
   cacheCompletedProfileIdentity,
   clearPendingProfileAction,
   fetchOpenId,
-  resumePendingProfileAction,
 } = require("../../../utils/userService");
+const {
+  clearPendingLibraryAction,
+  getProfileSetupCopy,
+  reportLibraryEvent,
+} = require("../../../utils/libraryAccessService");
+
+const PROFILE_SETUP_SOURCES = new Set([
+  "detail_favorite",
+  "profile_favorites",
+  "profile_history",
+]);
+
+function normalizeProfileSetupSource(value) {
+  return PROFILE_SETUP_SOURCES.has(value) ? value : "";
+}
+
+function getSetupPresentation(source) {
+  if (!source) {
+    return {
+      subtitle: "使用微信头像和名称，方便记录你的收藏",
+      buttonText: "完成资料",
+    };
+  }
+  const copy = getProfileSetupCopy(source);
+  return {
+    subtitle: copy.subtitle,
+    buttonText: copy.buttonText,
+  };
+}
+
+function getLibraryKind(source) {
+  return source === "profile_history" ? "history" : "favorites";
+}
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -47,6 +79,8 @@ Page({
     hasUnsavedChanges: false,
     identityGate: false,
     profileSaved: false,
+    source: "",
+    saveButtonText: "保存资料",
     topTips: {
       show: false,
       message: "",
@@ -55,14 +89,20 @@ Page({
   },
 
   onLoad(options = {}) {
+    this.profileSetupStartedAt = Date.now();
     const mode = options.mode === "setup" ? "setup" : "edit";
     const pageTitle = mode === "setup" ? "完善资料" : "个人资料";
+    const identityGate = options.identityGate === "1";
+    const source = identityGate ? normalizeProfileSetupSource(options.source) : "";
+    const setupPresentation = getSetupPresentation(source);
     this.setData({
       mode,
       pageTitle,
-      pageSubtitle: mode === "setup" ? "使用微信头像和名称，方便记录你的收藏" : "修改你的头像和名称",
-      identityGate: options.identityGate === "1",
+      pageSubtitle: mode === "setup" ? setupPresentation.subtitle : "修改你的头像和名称",
+      identityGate,
       profileSaved: false,
+      source,
+      saveButtonText: mode === "setup" ? setupPresentation.buttonText : "保存资料",
     });
     if (wx.setNavigationBarTitle) wx.setNavigationBarTitle({ title: pageTitle });
     this.loadProfile();
@@ -70,8 +110,10 @@ Page({
 
   onUnload() {
     if (wx.disableAlertBeforeUnload) wx.disableAlertBeforeUnload();
-    if (this.data.identityGate && !this.data.profileSaved) {
-      clearPendingProfileAction({ dismissed: true });
+    if (this.data.identityGate && !this.data.profileSaved && this.data.source) {
+      clearPendingLibraryAction(this.data.source);
+    } else if (this.data.identityGate && !this.data.profileSaved) {
+      clearPendingProfileAction();
     }
   },
 
@@ -94,15 +136,22 @@ Page({
       const profile = await fetchProfile();
       if (profile && hasCompletedProfile(profile)) {
         const profileDraft = createDraft(profile);
+        const keepGatePresentation = this.data.identityGate && Boolean(this.data.source);
+        const pageTitle = keepGatePresentation ? "完善资料" : "个人资料";
         cacheProfile(profile);
         this.setData({
-          mode: "edit",
-          pageTitle: "个人资料",
-          pageSubtitle: "修改你的头像和名称",
+          mode: keepGatePresentation ? "setup" : "edit",
+          pageTitle,
+          pageSubtitle: keepGatePresentation
+            ? this.data.pageSubtitle
+            : "修改你的头像和名称",
+          saveButtonText: keepGatePresentation
+            ? this.data.saveButtonText
+            : "保存资料",
           profileDraft,
           initialDraft: createDraft(profileDraft),
         });
-        if (wx.setNavigationBarTitle) wx.setNavigationBarTitle({ title: "个人资料" });
+        if (wx.setNavigationBarTitle) wx.setNavigationBarTitle({ title: pageTitle });
       }
     } catch (error) {
       console.error("读取个人资料失败", error);
@@ -164,6 +213,16 @@ Page({
     });
   },
 
+  reportProfileSetup(eventName, result) {
+    if (!this.data.identityGate || !this.data.source) return;
+    reportLibraryEvent(eventName, {
+      kind: getLibraryKind(this.data.source),
+      source: this.data.source,
+      result,
+      durationMs: Date.now() - (this.profileSetupStartedAt || Date.now()),
+    });
+  },
+
   async saveProfileDraft() {
     if (this.data.isSaving) return;
     const draft = this.data.profileDraft;
@@ -189,6 +248,7 @@ Page({
       } catch (error) {
         console.error("头像上传失败", error);
         this.setData({ isSaving: false });
+        this.reportProfileSetup("profile_setup_fail", "fail");
         this.showTopTips("头像上传失败，请重新选择后再试");
         return;
       }
@@ -212,21 +272,27 @@ Page({
         profileSaved: true,
       });
       if (wx.disableAlertBeforeUnload) wx.disableAlertBeforeUnload();
+      this.reportProfileSetup("profile_setup_success", "success");
+      if (this.data.identityGate) {
+        this.navigateBackAfterSave();
+        return;
+      }
       wx.showToast({ title: "已保存", icon: "success" });
-      setTimeout(() => {
-        let resumed = false;
-        const finish = () => {
-          if (resumed) return;
-          resumed = true;
-          resumePendingProfileAction();
-        };
-        wx.navigateBack({ complete: finish });
-        setTimeout(finish, 0);
-      }, 500);
+      setTimeout(() => this.navigateBackAfterSave(), 500);
     } catch (error) {
       console.error("保存个人资料失败", error);
       this.setData({ isSaving: false });
+      this.reportProfileSetup("profile_setup_fail", "fail");
       this.showTopTips(error && error.message ? error.message : "保存失败，请重试");
     }
+  },
+
+  navigateBackAfterSave() {
+    wx.navigateBack({
+      fail: (error) => {
+        console.error("资料已保存但返回失败", error);
+        this.showTopTips("资料已保存，请返回继续操作");
+      },
+    });
   },
 });

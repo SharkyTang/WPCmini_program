@@ -3,7 +3,13 @@ const {
   fetchFavoriteCases,
   removeFavoriteRecords,
 } = require("../../utils/favoriteService");
-const { ensureProfileIdentity, getCachedOpenId } = require("../../utils/userService");
+const {
+  checkLibraryAccess,
+  reportLibraryEvent,
+  requestLibraryAccess,
+  resumePendingLibraryAction,
+} = require("../../utils/libraryAccessService");
+const { resumePendingProfileAction } = require("../../utils/userService");
 
 function buildFavoriteCards(items, selectedIds = []) {
   const selectedMap = selectedIds.reduce((map, id) => {
@@ -32,7 +38,7 @@ Page({
   data: {
     loading: false,
     errorMessage: "",
-    profileBlocked: false,
+    accessState: "checking",
     manageMode: false,
     selectedCount: 0,
     selectedFavoriteIds: [],
@@ -47,64 +53,116 @@ Page({
     },
   },
 
-  onShow() {
-    this.ensureProfileAndLoad();
+  async onShow() {
+    const resumed = await resumePendingLibraryAction("profile_favorites");
+    if (resumed === true || (resumed && resumed.resumed)) return;
+    const legacyResumed = await resumePendingProfileAction();
+    if (legacyResumed === true || (legacyResumed && legacyResumed.resumed)) return;
+    return this.ensureProfileAndLoad();
   },
 
   async ensureProfileAndLoad() {
     this.setData({
       loading: true,
       errorMessage: "",
-      profileBlocked: false,
+      accessState: "checking",
     });
-    const identity = await ensureProfileIdentity();
-    if (!identity.ready) {
+
+    const access = await checkLibraryAccess("favorites");
+    if (access.status === "error") {
       this.setData({
         loading: false,
-        profileBlocked: !identity.error,
+        accessState: "error",
+        errorMessage: "暂时无法验证资料，请检查网络后重试。",
+        manageMode: false,
+        selectedCount: 0,
+        selectedFavoriteIds: [],
+      });
+      return false;
+    }
+
+    if (access.status === "profile_required") {
+      this.setData({
+        loading: false,
+        accessState: "profile_required",
         manageMode: false,
         selectedCount: 0,
         selectedFavoriteIds: [],
         favoriteCards: [],
       });
-      return;
+      return false;
     }
-    this.loadFavorites();
+
+    return this.loadFavorites();
   },
 
   async loadFavorites() {
-    if (!getCachedOpenId()) {
-      this.setData({
-        loading: false,
-        profileBlocked: true,
-        manageMode: false,
-        selectedCount: 0,
-        selectedFavoriteIds: [],
-        favoriteCards: [],
-      });
-      return;
-    }
-
+    const startedAt = Date.now();
     this.setData({
       loading: true,
       errorMessage: "",
-      profileBlocked: false,
+      accessState: "ready",
     });
 
     try {
       const items = await fetchFavoriteCases();
       this.setData({
         loading: false,
+        accessState: "ready",
         manageMode: false,
         selectedCount: 0,
         selectedFavoriteIds: [],
         favoriteCards: buildFavoriteCards(items),
       });
+      reportLibraryEvent("library_load_result", {
+        kind: "favorites",
+        source: "profile_favorites",
+        result: "success",
+        durationMs: Date.now() - startedAt,
+      });
+      return true;
     } catch (error) {
       console.error("收藏列表读取失败", error);
       this.setData({
         loading: false,
+        accessState: "error",
         errorMessage: "暂时读取不到收藏，请稍后重试。",
+      });
+      reportLibraryEvent("library_load_result", {
+        kind: "favorites",
+        source: "profile_favorites",
+        result: "error",
+        durationMs: Date.now() - startedAt,
+      });
+      return false;
+    }
+  },
+
+  async requestProfileAccess() {
+    if (this.profileAccessPending) return;
+    this.profileAccessPending = true;
+    let result;
+    try {
+      result = await requestLibraryAccess({
+        kind: "favorites",
+        source: "profile_favorites",
+        resume: () => this.ensureProfileAndLoad(),
+      });
+    } catch (error) {
+      console.error("收藏资料访问请求失败", error);
+      result = { status: "error", stage: "access_check" };
+    } finally {
+      this.profileAccessPending = false;
+    }
+    if (result && result.status === "ready") {
+      return this.loadFavorites();
+    }
+    if (result && result.status === "error") {
+      wx.showToast({
+        title: result.stage === "navigation"
+          ? "暂时无法打开资料页，请重试"
+          : "暂时无法验证资料，请重试",
+        icon: "none",
       });
     }
   },

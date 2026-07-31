@@ -60,6 +60,6 @@
   </view>
 
   <view wx:if="{{!isLoading && !loadError}}" class="save-button {{isSaving ? 'save-button-disabled' : ''}}" bindtap="saveProfileDraft">
-    {{isSaving ? '正在保存…' : (mode === 'setup' ? '完成资料' : '保存资料')}}
+    {{isSaving ? '正在保存…' : saveButtonText}}
   </view>
 </view>

@@ -110,3 +110,13 @@ test("returns overflow history ids after the newest records are kept", () => {
 
   assert.deepEqual(plain(overflowIds), ["history_4", "history_5"]);
 });
+
+test("keeps the 50 item history limit unchanged", () => {
+  const records = Array.from({ length: 51 }, (_, index) => ({
+    _id: `history_${index + 1}`,
+  }));
+
+  assert.deepEqual(plain(getOverflowHistoryIds(records.slice(0, 49), 50)), []);
+  assert.deepEqual(plain(getOverflowHistoryIds(records.slice(0, 50), 50)), []);
+  assert.deepEqual(plain(getOverflowHistoryIds(records, 50)), ["history_51"]);
+});

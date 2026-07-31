@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+} from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, "../miniprogram");
@@ -12,6 +18,22 @@ const appConfig = JSON.parse(
 const projectConfig = JSON.parse(
   readFileSync(resolve(projectRoot, "project.config.json"), "utf8")
 );
+
+function collectFiles(directory, excludedRoots = []) {
+  return readdirSync(directory).flatMap((name) => {
+    const filePath = resolve(directory, name);
+    if (
+      excludedRoots.some(
+        (root) => filePath === root || filePath.startsWith(`${root}/`)
+      )
+    ) {
+      return [];
+    }
+    return statSync(filePath).isDirectory()
+      ? collectFiles(filePath, excludedRoots)
+      : [filePath];
+  });
+}
 
 function test(name, fn) {
   try {
@@ -90,4 +112,31 @@ test("subpackage-only services are no longer stored in the main utils directory"
   ].forEach((fileName) => {
     assert.equal(existsSync(resolve(miniRoot, "utils", fileName)), false);
   });
+});
+
+test("main package source and the new access layer stay inside their size budgets", () => {
+  const subpackageRoots = appConfig.subpackages.map((item) =>
+    resolve(miniRoot, item.root)
+  );
+  const mainPackageFiles = collectFiles(miniRoot, subpackageRoots);
+  const mainPackageBytes = mainPackageFiles.reduce(
+    (total, filePath) => total + statSync(filePath).size,
+    0
+  );
+  assert.equal(
+    mainPackageBytes < 350 * 1024,
+    true,
+    `main package source is ${mainPackageBytes} bytes`
+  );
+
+  const accessLayer = Buffer.concat([
+    readFileSync(resolve(miniRoot, "utils/libraryAccessConfig.js")),
+    readFileSync(resolve(miniRoot, "utils/libraryAccessService.js")),
+  ]);
+  const compressedAccessLayerBytes = gzipSync(accessLayer).length;
+  assert.equal(
+    compressedAccessLayerBytes < 10 * 1024,
+    true,
+    `access layer gzip size is ${compressedAccessLayerBytes} bytes`
+  );
 });

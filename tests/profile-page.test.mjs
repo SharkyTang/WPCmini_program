@@ -48,6 +48,19 @@ function loadProfilePage(wxMock = {}, options = {}) {
         return {
           cacheCompletedProfileIdentity: options.cacheCompletedProfileIdentity || (() => {}),
           cacheOpenId: options.cacheOpenId || (() => {}),
+          resumePendingProfileAction:
+            options.resumePendingProfileAction ||
+            (async () => false),
+        };
+      }
+      if (moduleName === "../../utils/libraryAccessService") {
+        return {
+          requestLibraryAccess:
+            options.requestLibraryAccess ||
+            (async () => ({ status: "redirected", ready: false })),
+          resumePendingLibraryAction:
+            options.resumePendingLibraryAction ||
+            (async () => false),
         };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
@@ -124,6 +137,149 @@ await test("configured cloud profile opens the independent edit page", async () 
   assert.equal(cachedIdentity.openid, "openid_1");
 });
 
+await test("completed profiles open favorites and history without the access gate", async () => {
+  const navigations = [];
+  let accessRequests = 0;
+  const page = loadProfilePage(
+    {
+      navigateTo(options) {
+        navigations.push(options.url);
+        if (options.success) options.success({});
+        if (options.complete) options.complete({});
+      },
+    },
+    {
+      fetchProfile: async () => ({
+        nickname: "墨韵 ovo",
+        avatarFileId: "cloud://avatar",
+        avatarUrl: "https://avatar",
+      }),
+      requestLibraryAccess: async () => {
+        accessRequests += 1;
+        return { status: "redirected", ready: false };
+      },
+    }
+  );
+  await page.loadProfileInfo();
+
+  await page.handleQuickAction({ currentTarget: { dataset: { key: "favorites" } } });
+  await page.handleQuickAction({ currentTarget: { dataset: { key: "history" } } });
+
+  assert.deepEqual(navigations, ["/pages/favorites/index", "/pages/history/index"]);
+  assert.equal(accessRequests, 0);
+});
+
+await test("incomplete profiles request access with a resumable library target", async () => {
+  let accessOptions = null;
+  let navigatedUrl = "";
+  const page = loadProfilePage(
+    {
+      navigateTo(options) {
+        navigatedUrl = options.url;
+        if (options.success) options.success({});
+        if (options.complete) options.complete({});
+      },
+    },
+    {
+      requestLibraryAccess: async (options) => {
+        accessOptions = options;
+        return { status: "redirected", ready: false };
+      },
+    }
+  );
+  await page.loadProfileInfo();
+
+  await page.handleQuickAction({ currentTarget: { dataset: { key: "favorites" } } });
+
+  assert.equal(navigatedUrl, "");
+  assert.equal(accessOptions.kind, "favorites");
+  assert.equal(accessOptions.source, "profile_favorites");
+  await accessOptions.resume();
+  assert.equal(navigatedUrl, "/pages/favorites/index");
+});
+
+await test("a ready access response navigates immediately when cached profile state is stale", async () => {
+  let navigatedUrl = "";
+  const page = loadProfilePage(
+    {
+      navigateTo(options) {
+        navigatedUrl = options.url;
+        if (options.success) options.success({});
+        if (options.complete) options.complete({});
+      },
+    },
+    {
+      requestLibraryAccess: async () => ({ status: "ready", ready: true }),
+    }
+  );
+
+  await page.handleQuickAction({ currentTarget: { dataset: { key: "history" } } });
+
+  assert.equal(navigatedUrl, "/pages/history/index");
+});
+
+await test("concurrent library quick taps create only one ready navigation", async () => {
+  let resolveAccess;
+  let accessRequests = 0;
+  let navigationCalls = 0;
+  const page = loadProfilePage(
+    {
+      navigateTo(options) {
+        navigationCalls += 1;
+        if (options.success) options.success({});
+        if (options.complete) options.complete({});
+      },
+    },
+    {
+      requestLibraryAccess: async () => {
+        accessRequests += 1;
+        return new Promise((resolve) => {
+          resolveAccess = resolve;
+        });
+      },
+    }
+  );
+  const event = { currentTarget: { dataset: { key: "favorites" } } };
+
+  const first = page.handleQuickAction(event);
+  const second = page.handleQuickAction(event);
+  assert.equal(accessRequests, 1);
+  resolveAccess({ status: "ready", ready: true });
+  await Promise.all([first, second]);
+
+  assert.equal(navigationCalls, 1);
+  assert.equal(page.quickActionPendingKey, "");
+});
+
+await test("profile onShow resumes either pending library source", async () => {
+  const resumedSources = [];
+  const page = loadProfilePage({}, {
+    resumePendingLibraryAction: async (source) => {
+      resumedSources.push(source);
+      return source === "profile_history";
+    },
+  });
+
+  await page.onShow();
+
+  assert.deepEqual(resumedSources, ["profile_favorites", "profile_history"]);
+});
+
+await test("profile onShow retains the legacy gate resume path when no library action is pending", async () => {
+  let legacyResumeCalls = 0;
+  const page = loadProfilePage({}, {
+    resumePendingLibraryAction: async () => false,
+    resumePendingProfileAction: async () => {
+      legacyResumeCalls += 1;
+      return { resumed: true, success: true };
+    },
+  });
+
+  await page.onShow();
+
+  assert.equal(legacyResumeCalls, 1);
+});
+
 await test("completed cached profile opens the editor on the first tap during refresh", async () => {
   let navigatedUrl = "";
   let resolveProfile;
@@ -144,6 +300,37 @@ await test("completed cached profile opens the editor on the first tap during re
   assert.equal(navigatedUrl, "/pages/profile/edit/index?mode=edit");
   resolveProfile(null);
   await refresh;
+});
+
+await test("an authoritative incomplete cloud profile clears a stale completed fast path", async () => {
+  let accessRequests = 0;
+  const cachedProfiles = [];
+  const page = loadProfilePage({}, {
+    getLegacyProfile: () => ({
+      nickname: "旧账号",
+      avatarFileId: "cloud://old-avatar",
+      avatarUrl: "https://old-avatar",
+    }),
+    fetchProfile: async () => null,
+    cacheProfile(profile) {
+      cachedProfiles.push(profile);
+    },
+    requestLibraryAccess: async () => {
+      accessRequests += 1;
+      return { status: "cancelled" };
+    },
+  });
+
+  await page.loadProfileInfo();
+  await page.handleQuickAction({
+    currentTarget: { dataset: { key: "favorites" } },
+  });
+
+  assert.equal(page.data.hasCompletedProfile, false);
+  assert.equal(page.data.profileInfo.nickname, "微信名称");
+  assert.equal(page.data.profileInfo.avatarUrl, "");
+  assert.equal(accessRequests, 1);
+  assert.deepEqual(plain(cachedProfiles), [{}]);
 });
 
 await test("profile read failures still allow users to open the setup page", async () => {

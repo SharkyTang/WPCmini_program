@@ -29,7 +29,35 @@ function loadEditPage(wxMock = {}, service = {}) {
           cacheCompletedProfileIdentity: service.cacheCompletedProfileIdentity || (() => {}),
           clearPendingProfileAction: service.clearPendingProfileAction || (() => {}),
           fetchOpenId: service.fetchOpenId || (async () => "openid_1"),
-          resumePendingProfileAction: service.resumePendingProfileAction || (() => Promise.resolve()),
+        };
+      }
+      if (moduleName === "../../../utils/libraryAccessService") {
+        return {
+          clearPendingLibraryAction: service.clearPendingLibraryAction || (() => {}),
+          getProfileSetupCopy:
+            service.getProfileSetupCopy ||
+            ((source) => {
+              const copies = {
+                detail_favorite: {
+                  source,
+                  subtitle: "完善后将自动返回并收藏当前案例",
+                  buttonText: "完成并收藏",
+                },
+                profile_favorites: {
+                  source,
+                  subtitle: "完善后将自动进入“我的收藏”",
+                  buttonText: "完成并查看",
+                },
+                profile_history: {
+                  source,
+                  subtitle: "完善后将自动进入“浏览记录”",
+                  buttonText: "完成并查看",
+                },
+              };
+              if (!copies[source]) throw new RangeError("invalid source");
+              return copies[source];
+            }),
+          reportLibraryEvent: service.reportLibraryEvent || (() => false),
         };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
@@ -51,6 +79,10 @@ async function test(name, fn) {
     console.error(`not ok - ${name}`);
     throw error;
   }
+}
+
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 await test("setup page exposes the native avatar chooser and nickname input", () => {
@@ -87,6 +119,66 @@ await test("setup mode uses a legacy nickname as a draft without treating it as 
   assert.equal(page.data.profileDraft.nickname, "旧昵称");
 });
 
+await test("identity gate uses the exact copy for every whitelisted source", async () => {
+  const sourceCopies = {
+    detail_favorite: {
+      subtitle: "完善后将自动返回并收藏当前案例",
+      buttonText: "完成并收藏",
+    },
+    profile_favorites: {
+      subtitle: "完善后将自动进入“我的收藏”",
+      buttonText: "完成并查看",
+    },
+    profile_history: {
+      subtitle: "完善后将自动进入“浏览记录”",
+      buttonText: "完成并查看",
+    },
+  };
+  for (const [source, copy] of Object.entries(sourceCopies)) {
+    const page = loadEditPage();
+    page.onLoad({
+      mode: "setup",
+      identityGate: "1",
+      source,
+    });
+    await page.loadProfile();
+    assert.equal(page.data.source, source);
+    assert.equal(page.data.pageSubtitle, copy.subtitle);
+    assert.equal(page.data.saveButtonText, copy.buttonText);
+  }
+
+  const unknownPage = loadEditPage();
+  unknownPage.onLoad({
+    mode: "setup",
+    identityGate: "1",
+    source: "untrusted_source",
+  });
+  await unknownPage.loadProfile();
+  assert.equal(unknownPage.data.source, "");
+  assert.equal(unknownPage.data.pageSubtitle, "使用微信头像和名称，方便记录你的收藏");
+});
+
+await test("identity gate copy survives a completed profile refresh", async () => {
+  const page = loadEditPage({}, {
+    fetchProfile: async () => ({
+      nickname: "酒友",
+      avatarFileId: "cloud://avatar",
+      avatarUrl: "https://avatar",
+    }),
+  });
+
+  page.onLoad({
+    mode: "setup",
+    identityGate: "1",
+    source: "detail_favorite",
+  });
+  await page.loadProfile();
+
+  assert.equal(page.data.pageTitle, "完善资料");
+  assert.equal(page.data.pageSubtitle, "完善后将自动返回并收藏当前案例");
+  assert.equal(page.data.saveButtonText, "完成并收藏");
+});
+
 await test("choosing a WeChat avatar keeps it local until saving", () => {
   const page = loadEditPage();
   page.onChooseWechatAvatar({ detail: { avatarUrl: "/tmp/wechat-avatar.png" } });
@@ -100,7 +192,6 @@ await test("saving uploads a selected avatar and persists profile data", async (
   let savedInput = null;
   let cached = null;
   let cachedIdentity = null;
-  let resumed = 0;
   let navigatedBack = false;
   const page = loadEditPage(
     { navigateBack() { navigatedBack = true; } },
@@ -110,7 +201,6 @@ await test("saving uploads a selected avatar and persists profile data", async (
       cacheProfile(profile) { cached = profile; },
       fetchOpenId: async () => "openid_1",
       cacheCompletedProfileIdentity(openid, profile) { cachedIdentity = { openid, profile }; },
-      resumePendingProfileAction() { resumed += 1; },
     }
   );
   page.setData({
@@ -123,8 +213,151 @@ await test("saving uploads a selected avatar and persists profile data", async (
   assert.equal(cached.avatarFileId, "cloud://uploaded");
   assert.equal(cachedIdentity.openid, "openid_1");
   assert.equal(cachedIdentity.profile.avatarFileId, "cloud://uploaded");
-  assert.equal(resumed, 1);
   assert.equal(navigatedBack, true);
+});
+
+await test("identity gate saves without a success toast and leaves resume to the source page", async () => {
+  let toastCalls = 0;
+  let navigateBackCalls = 0;
+  let clearCalls = 0;
+  const reportedEvents = [];
+  const page = loadEditPage(
+    {
+      showToast() { toastCalls += 1; },
+      navigateBack() { navigateBackCalls += 1; },
+    },
+    {
+      clearPendingLibraryAction() { clearCalls += 1; },
+      reportLibraryEvent(eventName, payload) {
+        reportedEvents.push({ eventName, payload });
+        return true;
+      },
+    }
+  );
+  page.setData({
+    identityGate: true,
+    source: "profile_favorites",
+    profileDraft: {
+      nickname: "酒友",
+      avatarFileId: "cloud://avatar",
+      avatarUrl: "https://avatar",
+      avatarLocalPath: "",
+    },
+  });
+
+  await page.saveProfileDraft();
+  page.onUnload();
+
+  assert.equal(page.data.profileSaved, true);
+  assert.equal(toastCalls, 0);
+  assert.equal(navigateBackCalls, 1);
+  assert.equal(clearCalls, 0);
+  assert.equal(reportedEvents.length, 1);
+  assert.equal(reportedEvents[0].eventName, "profile_setup_success");
+  assert.equal(reportedEvents[0].payload.kind, "favorites");
+  assert.equal(reportedEvents[0].payload.source, "profile_favorites");
+  assert.equal(reportedEvents[0].payload.result, "success");
+  assert.equal(reportedEvents[0].payload.durationMs >= 0, true);
+});
+
+await test("leaving an unsaved identity gate clears the pending library action", () => {
+  let clearCalls = 0;
+  let clearedSource = "";
+  const page = loadEditPage({}, {
+    clearPendingLibraryAction(source) {
+      clearCalls += 1;
+      clearedSource = source;
+    },
+  });
+  page.setData({
+    identityGate: true,
+    profileSaved: false,
+    source: "profile_favorites",
+  });
+
+  page.onUnload();
+
+  assert.equal(clearCalls, 1);
+  assert.equal(clearedSource, "profile_favorites");
+});
+
+await test("leaving an unsaved legacy identity gate clears the legacy pending action", () => {
+  let legacyClearCalls = 0;
+  const page = loadEditPage({}, {
+    clearPendingProfileAction() {
+      legacyClearCalls += 1;
+    },
+  });
+  page.setData({
+    identityGate: true,
+    profileSaved: false,
+    source: "",
+  });
+
+  page.onUnload();
+
+  assert.equal(legacyClearCalls, 1);
+});
+
+await test("navigateBack failures keep the saved page open with recovery guidance", async () => {
+  const page = loadEditPage({
+    navigateBack(options) {
+      options.fail(new Error("navigation failed"));
+    },
+  });
+  page.setData({
+    identityGate: true,
+    source: "profile_history",
+    profileDraft: {
+      nickname: "酒友",
+      avatarFileId: "cloud://avatar",
+      avatarUrl: "https://avatar",
+      avatarLocalPath: "",
+    },
+  });
+
+  await page.saveProfileDraft();
+
+  assert.equal(page.data.profileSaved, true);
+  assert.equal(page.data.topTips.show, true);
+  assert.equal(page.data.topTips.message, "资料已保存，请返回继续操作");
+});
+
+await test("identity gate reports profile save failures without clearing its pending action", async () => {
+  const reportedEvents = [];
+  let clearCalls = 0;
+  const page = loadEditPage({}, {
+    saveProfile: async () => {
+      throw new Error("save failed");
+    },
+    clearPendingLibraryAction() { clearCalls += 1; },
+    reportLibraryEvent(eventName, payload) {
+      reportedEvents.push({ eventName, payload });
+      return true;
+    },
+  });
+  page.setData({
+    identityGate: true,
+    source: "profile_history",
+    profileDraft: {
+      nickname: "酒友",
+      avatarFileId: "cloud://avatar",
+      avatarUrl: "https://avatar",
+      avatarLocalPath: "",
+    },
+  });
+
+  await page.saveProfileDraft();
+
+  assert.equal(page.data.profileSaved, false);
+  assert.equal(page.data.topTips.message, "save failed");
+  assert.equal(clearCalls, 0);
+  assert.equal(reportedEvents.length, 1);
+  assert.equal(reportedEvents[0].eventName, "profile_setup_fail");
+  assert.equal(reportedEvents[0].payload.kind, "history");
+  assert.equal(reportedEvents[0].payload.source, "profile_history");
+  assert.equal(reportedEvents[0].payload.result, "fail");
+  assert.equal(reportedEvents[0].payload.durationMs >= 0, true);
 });
 
 await test("profile validation uses top tips instead of a toast", async () => {

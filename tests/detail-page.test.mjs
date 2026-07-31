@@ -104,6 +104,302 @@ async function asyncTest(name, fn) {
   }
 }
 
+function loadDetailInteractionPage(options = {}) {
+  let page;
+  const accessRequests = [];
+  const resumeSources = [];
+  const toasts = [];
+  const caseItem = options.caseItem || {
+    id: "case_1",
+    title: "鎏金礼盒",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+  };
+  const sandbox = {
+    Page(config) {
+      page = config;
+    },
+    console: {
+      error() {},
+      log() {},
+      warn() {},
+    },
+    require(moduleName) {
+      if (moduleName === "../../utils/cloudData") {
+        return { fetchCaseById: async () => caseItem };
+      }
+      if (moduleName === "../../utils/caseCatalogService") {
+        return { fetchCaseDetail: async () => caseItem };
+      }
+      if (moduleName === "../../utils/caseData") {
+        return {
+          formatJoined: (values, fallback = "") =>
+            (Array.isArray(values) ? values : [values]).filter(Boolean).join("/") || fallback,
+        };
+      }
+      if (moduleName === "../../utils/customerServiceData") {
+        return {
+          CUSTOMER_SERVICE_SOURCE: { DETAIL: "detail" },
+          buildCustomerMessageCard: () => ({
+            enabled: false,
+            title: "",
+            path: "",
+            imageUrl: "",
+          }),
+          buildCustomerSessionFrom: () => "",
+        };
+      }
+      if (moduleName === "../../utils/favoriteService") {
+        return {
+          fetchFavoriteForCase: async () => null,
+          toggleFavorite:
+            options.toggleFavorite ||
+            (async () => ({
+              action: "added",
+              favorite: { _id: "favorite_1" },
+              isFavorited: true,
+            })),
+        };
+      }
+      if (moduleName === "../../utils/historyService") {
+        return { recordCaseView: async () => {} };
+      }
+      if (moduleName === "../../utils/libraryAccessService") {
+        return {
+          async requestLibraryAccess(request) {
+            accessRequests.push(request);
+            if (options.requestLibraryAccess) {
+              return options.requestLibraryAccess(request);
+            }
+            return { status: "ready" };
+          },
+          async resumePendingLibraryAction(source) {
+            resumeSources.push(source);
+            if (options.resumePendingLibraryAction) {
+              return options.resumePendingLibraryAction(source);
+            }
+            return false;
+          },
+        };
+      }
+      if (moduleName === "../../utils/userService") {
+        return {
+          resumePendingProfileAction:
+            options.resumePendingProfileAction ||
+            (async () => false),
+        };
+      }
+      throw new Error(`Unexpected require: ${moduleName}`);
+    },
+    wx: {
+      showToast(payload) {
+        toasts.push(payload);
+      },
+    },
+  };
+
+  vm.runInNewContext(readFileSync(pagePath, "utf8"), sandbox, {
+    filename: pagePath,
+  });
+  page.setData = function setData(patch) {
+    this.data = { ...this.data, ...patch };
+  };
+  page.setData({
+    caseItem,
+    favorite: options.favorite || null,
+    isFavorited: Boolean(options.favorite),
+    favoriteLoading: false,
+  });
+  return {
+    page,
+    accessRequests,
+    resumeSources,
+    toasts,
+  };
+}
+
+await asyncTest("detail favorite requests access and performs immediately when ready", async () => {
+  let toggleCalls = 0;
+  const context = loadDetailInteractionPage({
+    async toggleFavorite() {
+      toggleCalls += 1;
+      return {
+        action: "added",
+        favorite: { _id: "favorite_1" },
+        isFavorited: true,
+      };
+    },
+  });
+
+  await context.page.toggleFavorite();
+
+  assert.equal(context.accessRequests.length, 1);
+  assert.equal(context.accessRequests[0].kind, "favorites");
+  assert.equal(context.accessRequests[0].source, "detail_favorite");
+  assert.equal(typeof context.accessRequests[0].resume, "function");
+  assert.equal(toggleCalls, 1);
+  assert.equal(context.page.data.favoriteLoading, false);
+  assert.equal(context.page.data.isFavorited, true);
+  assert.equal(context.page.data.favorite._id, "favorite_1");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.toasts)),
+    [{ title: "已收藏", icon: "success" }]
+  );
+});
+
+await asyncTest("cancelling the access prompt unlocks the favorite action for the next tap", async () => {
+  let toggleCalls = 0;
+  const context = loadDetailInteractionPage({
+    requestLibraryAccess: async () => ({ status: "cancelled" }),
+    toggleFavorite: async () => {
+      toggleCalls += 1;
+      return {};
+    },
+  });
+
+  await context.page.toggleFavorite();
+  assert.equal(context.page.data.favoriteLoading, false);
+  await context.page.toggleFavorite();
+
+  assert.equal(context.accessRequests.length, 2);
+  assert.equal(toggleCalls, 0);
+  assert.equal(context.page.data.favoriteLoading, false);
+  assert.equal(context.toasts.length, 0);
+});
+
+await asyncTest("returning after profile setup resumes the pending favorite exactly once", async () => {
+  let pendingResume = null;
+  let toggleCalls = 0;
+  const context = loadDetailInteractionPage({
+    requestLibraryAccess: async (request) => {
+      pendingResume = request.resume;
+      return { status: "redirected" };
+    },
+    resumePendingLibraryAction: async () => {
+      if (!pendingResume) return false;
+      const resume = pendingResume;
+      pendingResume = null;
+      await resume();
+      return true;
+    },
+    toggleFavorite: async () => {
+      toggleCalls += 1;
+      return {
+        action: "added",
+        favorite: { _id: "favorite_1" },
+        isFavorited: true,
+      };
+    },
+  });
+
+  await context.page.toggleFavorite();
+  assert.equal(context.page.data.favoriteLoading, true);
+  assert.equal(toggleCalls, 0);
+
+  assert.equal(await context.page.onShow(), true);
+  assert.equal(context.resumeSources[0], "detail_favorite");
+  assert.equal(toggleCalls, 1);
+  assert.equal(context.page.data.favoriteLoading, false);
+  assert.equal(context.page.data.isFavorited, true);
+
+  assert.equal(await context.page.onShow(), false);
+  assert.equal(toggleCalls, 1);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.toasts)),
+    [{ title: "已收藏", icon: "success" }]
+  );
+});
+
+await asyncTest("a resumed favorite failure explains that profile setup succeeded", async () => {
+  let pendingResume = null;
+  const context = loadDetailInteractionPage({
+    requestLibraryAccess: async (request) => {
+      pendingResume = request.resume;
+      return { status: "redirected" };
+    },
+    resumePendingLibraryAction: async () => {
+      if (!pendingResume) return false;
+      const resume = pendingResume;
+      pendingResume = null;
+      await resume();
+      return true;
+    },
+    toggleFavorite: async () => {
+      throw new Error("write failed after setup");
+    },
+  });
+
+  await context.page.toggleFavorite();
+  assert.equal(await context.page.onShow(), true);
+
+  assert.equal(context.page.data.favoriteLoading, false);
+  assert.equal(context.page.data.isFavorited, false);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.toasts)),
+    [{ title: "资料已完成，收藏失败，请重试", icon: "none" }]
+  );
+});
+
+await asyncTest("returning without a saved profile unlocks the favorite action", async () => {
+  const accessStatuses = ["redirected", "cancelled"];
+  const context = loadDetailInteractionPage({
+    requestLibraryAccess: async () => ({
+      status: accessStatuses.shift() || "cancelled",
+    }),
+    resumePendingLibraryAction: async () => false,
+  });
+
+  await context.page.toggleFavorite();
+  assert.equal(context.page.data.favoriteLoading, true);
+
+  assert.equal(await context.page.onShow(), false);
+  assert.equal(context.page.data.favoriteLoading, false);
+
+  await context.page.toggleFavorite();
+  assert.equal(context.accessRequests.length, 2);
+  assert.equal(context.page.data.favoriteLoading, false);
+});
+
+await asyncTest("access failures use verification and navigation specific copy", async () => {
+  const accessResults = [
+    { status: "error", stage: "access_check" },
+    { status: "error", stage: "navigation" },
+  ];
+  const context = loadDetailInteractionPage({
+    requestLibraryAccess: async () => accessResults.shift(),
+  });
+
+  await context.page.toggleFavorite();
+  await context.page.toggleFavorite();
+
+  assert.equal(context.page.data.favoriteLoading, false);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.toasts)),
+    [
+      { title: "暂时无法验证资料，请重试", icon: "none" },
+      { title: "暂时无法打开资料页，请重试", icon: "none" },
+    ]
+  );
+});
+
+await asyncTest("favorite mutation failures unlock and show one failure toast", async () => {
+  const context = loadDetailInteractionPage({
+    toggleFavorite: async () => {
+      throw new Error("write failed");
+    },
+  });
+
+  await context.page.toggleFavorite();
+
+  assert.equal(context.page.data.favoriteLoading, false);
+  assert.equal(context.page.data.isFavorited, false);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.toasts)),
+    [{ title: "收藏操作失败", icon: "none" }]
+  );
+});
+
 await asyncTest("detail loads one display image and upgrades only the selected target", async () => {
   let page;
   const messageCardCalls = [];
@@ -162,8 +458,14 @@ await asyncTest("detail loads one display image and upgrades only the selected t
       if (moduleName === "../../utils/historyService") {
         return { recordCaseView: async () => {} };
       }
+      if (moduleName === "../../utils/libraryAccessService") {
+        return {
+          requestLibraryAccess: async () => ({ status: "cancelled" }),
+          resumePendingLibraryAction: async () => false,
+        };
+      }
       if (moduleName === "../../utils/userService") {
-        return { ensureProfileIdentity: async () => ({ ready: false }) };
+        return { resumePendingProfileAction: async () => false };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
@@ -275,8 +577,14 @@ await asyncTest("detail shares the selected case with a direct-entry path", asyn
       if (moduleName === "../../utils/historyService") {
         return { recordCaseView: async () => {} };
       }
+      if (moduleName === "../../utils/libraryAccessService") {
+        return {
+          requestLibraryAccess: async () => ({ status: "cancelled" }),
+          resumePendingLibraryAction: async () => false,
+        };
+      }
       if (moduleName === "../../utils/userService") {
-        return { ensureProfileIdentity: async () => ({ ready: false }) };
+        return { resumePendingProfileAction: async () => false };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
     },

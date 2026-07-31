@@ -3,7 +3,13 @@ const {
   fetchHistoryCases,
   removeHistoryRecords,
 } = require("../../utils/historyService");
-const { ensureProfileIdentity, getCachedOpenId } = require("../../utils/userService");
+const {
+  checkLibraryAccess,
+  reportLibraryEvent,
+  requestLibraryAccess,
+  resumePendingLibraryAction,
+} = require("../../utils/libraryAccessService");
+const { resumePendingProfileAction } = require("../../utils/userService");
 
 function buildHistoryCards(items, selectedIds = []) {
   const selectedMap = selectedIds.reduce((map, id) => {
@@ -32,7 +38,7 @@ Page({
   data: {
     loading: false,
     errorMessage: "",
-    profileBlocked: false,
+    accessState: "checking",
     manageMode: false,
     selectedCount: 0,
     selectedHistoryIds: [],
@@ -47,61 +53,116 @@ Page({
     },
   },
 
-  onShow() {
-    this.ensureProfileAndLoad();
+  async onShow() {
+    const resumed = await resumePendingLibraryAction("profile_history");
+    if (resumed === true || (resumed && resumed.resumed)) return;
+    const legacyResumed = await resumePendingProfileAction();
+    if (legacyResumed === true || (legacyResumed && legacyResumed.resumed)) return;
+    return this.ensureProfileAndLoad();
   },
 
   async ensureProfileAndLoad() {
     this.setData({
       loading: true,
       errorMessage: "",
-      profileBlocked: false,
+      accessState: "checking",
     });
-    const identity = await ensureProfileIdentity();
-    if (!identity.ready) {
+
+    const access = await checkLibraryAccess("history");
+    if (access.status === "error") {
       this.setData({
         loading: false,
-        profileBlocked: !identity.error,
+        accessState: "error",
+        errorMessage: "暂时无法验证资料，请检查网络后重试。",
+        manageMode: false,
+        selectedCount: 0,
+        selectedHistoryIds: [],
+      });
+      return false;
+    }
+
+    if (access.status === "profile_required") {
+      this.setData({
+        loading: false,
+        accessState: "profile_required",
         manageMode: false,
         selectedCount: 0,
         selectedHistoryIds: [],
         historyCards: [],
       });
-      return;
+      return false;
     }
-    this.loadHistory();
+
+    return this.loadHistory();
   },
 
   async loadHistory() {
-    if (!getCachedOpenId()) {
-      this.setData({
-        loading: false,
-        profileBlocked: true,
-        historyCards: [],
-      });
-      return;
-    }
-
+    const startedAt = Date.now();
     this.setData({
       loading: true,
       errorMessage: "",
-      profileBlocked: false,
+      accessState: "ready",
     });
 
     try {
       const items = await fetchHistoryCases();
       this.setData({
         loading: false,
+        accessState: "ready",
         manageMode: false,
         selectedCount: 0,
         selectedHistoryIds: [],
         historyCards: buildHistoryCards(items),
       });
+      reportLibraryEvent("library_load_result", {
+        kind: "history",
+        source: "profile_history",
+        result: "success",
+        durationMs: Date.now() - startedAt,
+      });
+      return true;
     } catch (error) {
       console.error("浏览记录读取失败", error);
       this.setData({
         loading: false,
+        accessState: "error",
         errorMessage: "暂时读取不到浏览记录，请稍后重试。",
+      });
+      reportLibraryEvent("library_load_result", {
+        kind: "history",
+        source: "profile_history",
+        result: "error",
+        durationMs: Date.now() - startedAt,
+      });
+      return false;
+    }
+  },
+
+  async requestProfileAccess() {
+    if (this.profileAccessPending) return;
+    this.profileAccessPending = true;
+    let result;
+    try {
+      result = await requestLibraryAccess({
+        kind: "history",
+        source: "profile_history",
+        resume: () => this.ensureProfileAndLoad(),
+      });
+    } catch (error) {
+      console.error("历史资料访问请求失败", error);
+      result = { status: "error", stage: "access_check" };
+    } finally {
+      this.profileAccessPending = false;
+    }
+    if (result && result.status === "ready") {
+      return this.loadHistory();
+    }
+    if (result && result.status === "error") {
+      wx.showToast({
+        title: result.stage === "navigation"
+          ? "暂时无法打开资料页，请重试"
+          : "暂时无法验证资料，请重试",
+        icon: "none",
       });
     }
   },

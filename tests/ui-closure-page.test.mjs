@@ -23,7 +23,7 @@ function setPageData(nextData) {
   });
 }
 
-function loadCollectionPage(kind, serviceOverrides = {}) {
+function loadCollectionPage(kind, serviceOverrides = {}, accessOverrides = {}) {
   const modulePath = resolve(miniRoot, `pages/${kind}/index.js`);
   let pageConfig;
   const serviceModule = kind === "favorites"
@@ -49,11 +49,17 @@ function loadCollectionPage(kind, serviceOverrides = {}) {
     },
     require(moduleName) {
       if (moduleName === serviceModule) return service;
-      if (moduleName === "../../utils/userService") {
+      if (moduleName === "../../utils/libraryAccessService") {
         return {
-          ensureProfileIdentity: async () => ({ ready: true }),
-          getCachedOpenId: () => "openid_1",
+          checkLibraryAccess: async () => ({ status: "ready", openid: "openid_1" }),
+          reportLibraryEvent() {},
+          requestLibraryAccess: async () => ({ status: "ready" }),
+          resumePendingLibraryAction: async () => ({ resumed: false }),
+          ...accessOverrides,
         };
+      }
+      if (moduleName === "../../utils/userService") {
+        return { resumePendingProfileAction: async () => false };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
@@ -177,6 +183,62 @@ await test("cancelling history deletion does not call the service", async () => 
   page.loadHistory = async () => {};
   await page.handleConfirmDialogTap({ detail: { index: 1 } });
   assert.equal(removeCalls, 1);
+});
+
+await test("collection pages distinguish profile requirements and identity errors from empty data", async () => {
+  for (const [kind, libraryKind] of [
+    ["favorites", "favorites"],
+    ["history", "history"],
+  ]) {
+    let fetchCalls = 0;
+    const fetchOverride = kind === "favorites"
+      ? { fetchFavoriteCases: async () => { fetchCalls += 1; return []; } }
+      : { fetchHistoryCases: async () => { fetchCalls += 1; return []; } };
+
+    const blockedPage = loadCollectionPage(kind, fetchOverride, {
+      checkLibraryAccess: async (requestedKind) => {
+        assert.equal(requestedKind, libraryKind);
+        return { status: "profile_required", mode: "profile" };
+      },
+    });
+    await blockedPage.ensureProfileAndLoad();
+    assert.equal(blockedPage.data.accessState, "profile_required");
+    assert.equal(fetchCalls, 0);
+
+    const errorPage = loadCollectionPage(kind, fetchOverride, {
+      checkLibraryAccess: async () => ({ status: "error", error: new Error("offline") }),
+    });
+    const cardsKey = kind === "favorites" ? "favoriteCards" : "historyCards";
+    errorPage.setData({
+      [cardsKey]: [{ id: "cached_case", title: "保留的列表数据" }],
+    });
+    await errorPage.ensureProfileAndLoad();
+    assert.equal(errorPage.data.accessState, "error");
+    assert.match(errorPage.data.errorMessage, /暂时无法验证资料/);
+    assert.equal(errorPage.data[cardsKey].length, 1);
+    assert.equal(fetchCalls, 0);
+  }
+});
+
+await test("a resumed collection action suppresses the fallback load on onShow", async () => {
+  for (const resumeResult of [
+    true,
+    { resumed: true, success: false },
+  ]) {
+    for (const kind of ["favorites", "history"]) {
+      let fetchCalls = 0;
+      const fetchOverride = kind === "favorites"
+        ? { fetchFavoriteCases: async () => { fetchCalls += 1; return []; } }
+        : { fetchHistoryCases: async () => { fetchCalls += 1; return []; } };
+      const page = loadCollectionPage(kind, fetchOverride, {
+        resumePendingLibraryAction: async () => resumeResult,
+      });
+
+      await page.onShow();
+
+      assert.equal(fetchCalls, 0);
+    }
+  }
 });
 
 await test("inquiry status changes only after dialog confirmation", async () => {
