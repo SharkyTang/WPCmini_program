@@ -42,6 +42,8 @@ function loadCollectionPage(kind, serviceOverrides = {}, accessOverrides = {}) {
       removeHistoryRecords: async () => {},
       ...serviceOverrides,
     };
+  const nativeLoadingEvents = [];
+  const toastCalls = [];
 
   const sandbox = {
     Page(config) {
@@ -65,16 +67,24 @@ function loadCollectionPage(kind, serviceOverrides = {}, accessOverrides = {}) {
     },
     console,
     wx: {
-      hideLoading() {},
+      hideLoading() {
+        nativeLoadingEvents.push({ type: "hide" });
+      },
       navigateTo() {},
-      showLoading() {},
-      showToast() {},
+      showLoading(payload) {
+        nativeLoadingEvents.push({ type: "show", payload });
+      },
+      showToast(payload) {
+        toastCalls.push(payload);
+      },
       switchTab() {},
     },
   };
 
   vm.runInNewContext(readFileSync(modulePath, "utf8"), sandbox, { filename: modulePath });
   pageConfig.setData = setPageData;
+  pageConfig.__nativeLoadingEvents = nativeLoadingEvents;
+  pageConfig.__toastCalls = toastCalls;
   return pageConfig;
 }
 
@@ -138,7 +148,74 @@ await test("favorites and history use WeUI dialogs and messages", () => {
     assert.equal(pageJson.usingComponents["mp-msg"], "weui-miniprogram/msg/msg");
     assert.equal(wxml.includes("<mp-dialog"), true);
     assert.equal(wxml.includes("<mp-msg"), true);
+    assert.equal(wxml.includes('type="waiting"'), false);
+    assert.equal(wxml.includes("正在读取收藏"), false);
+    assert.equal(wxml.includes("正在读取浏览记录"), false);
+    assert.equal(wxml.includes("!loading"), true);
   });
+});
+
+await test("favorites and history use the native loading overlay for reads", async () => {
+  for (const kind of ["favorites", "history"]) {
+    const page = loadCollectionPage(kind);
+
+    assert.equal(await page.onShow(), true);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(page.__nativeLoadingEvents)),
+      [
+        { type: "show", payload: { title: "加载中", mask: true } },
+        { type: "hide" },
+      ]
+    );
+    assert.equal(page.data.loading, false);
+    assert.equal(page.data.accessState, "ready");
+  }
+});
+
+await test("collection native loading closes on read failures and page unload", async () => {
+  for (const kind of ["favorites", "history"]) {
+    const fetchKey = kind === "favorites" ? "fetchFavoriteCases" : "fetchHistoryCases";
+    const failedPage = loadCollectionPage(kind, {
+      [fetchKey]: async () => {
+        throw new Error("offline");
+      },
+    });
+
+    assert.equal(await failedPage.ensureProfileAndLoad(), false);
+    assert.equal(failedPage.data.accessState, "error");
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(failedPage.__nativeLoadingEvents)),
+      [
+        { type: "show", payload: { title: "加载中", mask: true } },
+        { type: "hide" },
+      ]
+    );
+
+    let resolveFetch;
+    const pendingPage = loadCollectionPage(kind, {
+      [fetchKey]: () =>
+        new Promise((resolveRequest) => {
+          resolveFetch = resolveRequest;
+        }),
+    });
+    const load = kind === "favorites"
+      ? pendingPage.loadFavorites()
+      : pendingPage.loadHistory();
+    pendingPage.onUnload();
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(pendingPage.__nativeLoadingEvents)),
+      [
+        { type: "show", payload: { title: "加载中", mask: true } },
+        { type: "hide" },
+      ]
+    );
+    resolveFetch([]);
+    await load;
+    assert.equal(
+      pendingPage.__nativeLoadingEvents.filter((event) => event.type === "hide").length,
+      1
+    );
+  }
 });
 
 await test("cancelling favorite deletion does not call the service", async () => {

@@ -34,6 +34,35 @@ function getAllFavoriteIds(cards) {
   return (cards || []).map((card) => card.favoriteId).filter(Boolean);
 }
 
+function beginNativeLoading(page) {
+  const epoch = page._nativeLoadingEpoch || 0;
+  page._nativeLoadingCount = (page._nativeLoadingCount || 0) + 1;
+  if (page._nativeLoadingCount === 1) {
+    page._nativeLoadingVisible = true;
+    wx.showLoading({
+      title: "加载中",
+      mask: true,
+    });
+  }
+  return epoch;
+}
+
+function endNativeLoading(page, epoch) {
+  if (epoch !== (page._nativeLoadingEpoch || 0)) return;
+  page._nativeLoadingCount = Math.max((page._nativeLoadingCount || 0) - 1, 0);
+  if (page._nativeLoadingCount || !page._nativeLoadingVisible) return;
+  page._nativeLoadingVisible = false;
+  wx.hideLoading();
+}
+
+function resetNativeLoading(page) {
+  page._nativeLoadingEpoch = (page._nativeLoadingEpoch || 0) + 1;
+  page._nativeLoadingCount = 0;
+  if (!page._nativeLoadingVisible) return;
+  page._nativeLoadingVisible = false;
+  wx.hideLoading();
+}
+
 Page({
   data: {
     loading: false,
@@ -54,49 +83,64 @@ Page({
   },
 
   async onShow() {
-    const resumed = await resumePendingLibraryAction("profile_favorites");
-    if (resumed === true || (resumed && resumed.resumed)) return;
-    const legacyResumed = await resumePendingProfileAction();
-    if (legacyResumed === true || (legacyResumed && legacyResumed.resumed)) return;
-    return this.ensureProfileAndLoad();
+    const loadingEpoch = beginNativeLoading(this);
+    try {
+      const resumed = await resumePendingLibraryAction("profile_favorites");
+      if (resumed === true || (resumed && resumed.resumed)) return;
+      const legacyResumed = await resumePendingProfileAction();
+      if (legacyResumed === true || (legacyResumed && legacyResumed.resumed)) return;
+      return await this.ensureProfileAndLoad();
+    } finally {
+      endNativeLoading(this, loadingEpoch);
+    }
+  },
+
+  onUnload() {
+    resetNativeLoading(this);
   },
 
   async ensureProfileAndLoad() {
-    this.setData({
-      loading: true,
-      errorMessage: "",
-      accessState: "checking",
-    });
-
-    const access = await checkLibraryAccess("favorites");
-    if (access.status === "error") {
+    const loadingEpoch = beginNativeLoading(this);
+    try {
       this.setData({
-        loading: false,
-        accessState: "error",
-        errorMessage: "暂时无法验证资料，请检查网络后重试。",
-        manageMode: false,
-        selectedCount: 0,
-        selectedFavoriteIds: [],
+        loading: true,
+        errorMessage: "",
+        accessState: "checking",
       });
-      return false;
-    }
 
-    if (access.status === "profile_required") {
-      this.setData({
-        loading: false,
-        accessState: "profile_required",
-        manageMode: false,
-        selectedCount: 0,
-        selectedFavoriteIds: [],
-        favoriteCards: [],
-      });
-      return false;
-    }
+      const access = await checkLibraryAccess("favorites");
+      if (access.status === "error") {
+        this.setData({
+          loading: false,
+          accessState: "error",
+          errorMessage: "暂时无法验证资料，请检查网络后重试。",
+          manageMode: false,
+          selectedCount: 0,
+          selectedFavoriteIds: [],
+        });
+        return false;
+      }
 
-    return this.loadFavorites();
+      if (access.status === "profile_required") {
+        this.setData({
+          loading: false,
+          accessState: "profile_required",
+          manageMode: false,
+          selectedCount: 0,
+          selectedFavoriteIds: [],
+          favoriteCards: [],
+        });
+        return false;
+      }
+
+      return await this.loadFavorites();
+    } finally {
+      endNativeLoading(this, loadingEpoch);
+    }
   },
 
   async loadFavorites() {
+    const loadingEpoch = beginNativeLoading(this);
     const startedAt = Date.now();
     this.setData({
       loading: true,
@@ -135,6 +179,8 @@ Page({
         durationMs: Date.now() - startedAt,
       });
       return false;
+    } finally {
+      endNativeLoading(this, loadingEpoch);
     }
   },
 
@@ -332,11 +378,11 @@ Page({
     try {
       await removeFavoriteRecords(ids);
       wx.hideLoading();
+      await this.loadFavorites();
       wx.showToast({
         title: "已删除收藏",
         icon: "success",
       });
-      this.loadFavorites();
     } catch (error) {
       console.error("批量删除收藏失败", error);
       wx.hideLoading();

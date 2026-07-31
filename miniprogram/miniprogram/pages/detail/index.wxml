@@ -1,12 +1,5 @@
 <view class="page">
-  <view wx:if="{{loading}}" class="state-shell">
-    <mp-msg
-      ext-class="brand-msg"
-      type="waiting"
-      title="正在读取案例"
-      desc="正在准备图片和案例信息"
-    />
-  </view>
+  <block wx:if="{{loading}}"></block>
   <view wx:elif="{{errorMessage}}" class="state-shell state-shell-error">
     <mp-msg
       ext-class="brand-msg"
@@ -16,7 +9,7 @@
     />
     <view class="back-button" bindtap="goBack">返回案例库</view>
   </view>
-  <view wx:else class="detail">
+  <view wx:elif="{{caseItem}}" class="detail">
     <view wx:if="{{galleryItems.length}}" class="hero-image-wrap">
       <swiper
         class="hero-gallery"

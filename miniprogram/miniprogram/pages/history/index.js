@@ -34,6 +34,35 @@ function getAllHistoryIds(cards) {
   return (cards || []).map((card) => card.historyId).filter(Boolean);
 }
 
+function beginNativeLoading(page) {
+  const epoch = page._nativeLoadingEpoch || 0;
+  page._nativeLoadingCount = (page._nativeLoadingCount || 0) + 1;
+  if (page._nativeLoadingCount === 1) {
+    page._nativeLoadingVisible = true;
+    wx.showLoading({
+      title: "加载中",
+      mask: true,
+    });
+  }
+  return epoch;
+}
+
+function endNativeLoading(page, epoch) {
+  if (epoch !== (page._nativeLoadingEpoch || 0)) return;
+  page._nativeLoadingCount = Math.max((page._nativeLoadingCount || 0) - 1, 0);
+  if (page._nativeLoadingCount || !page._nativeLoadingVisible) return;
+  page._nativeLoadingVisible = false;
+  wx.hideLoading();
+}
+
+function resetNativeLoading(page) {
+  page._nativeLoadingEpoch = (page._nativeLoadingEpoch || 0) + 1;
+  page._nativeLoadingCount = 0;
+  if (!page._nativeLoadingVisible) return;
+  page._nativeLoadingVisible = false;
+  wx.hideLoading();
+}
+
 Page({
   data: {
     loading: false,
@@ -54,49 +83,64 @@ Page({
   },
 
   async onShow() {
-    const resumed = await resumePendingLibraryAction("profile_history");
-    if (resumed === true || (resumed && resumed.resumed)) return;
-    const legacyResumed = await resumePendingProfileAction();
-    if (legacyResumed === true || (legacyResumed && legacyResumed.resumed)) return;
-    return this.ensureProfileAndLoad();
+    const loadingEpoch = beginNativeLoading(this);
+    try {
+      const resumed = await resumePendingLibraryAction("profile_history");
+      if (resumed === true || (resumed && resumed.resumed)) return;
+      const legacyResumed = await resumePendingProfileAction();
+      if (legacyResumed === true || (legacyResumed && legacyResumed.resumed)) return;
+      return await this.ensureProfileAndLoad();
+    } finally {
+      endNativeLoading(this, loadingEpoch);
+    }
+  },
+
+  onUnload() {
+    resetNativeLoading(this);
   },
 
   async ensureProfileAndLoad() {
-    this.setData({
-      loading: true,
-      errorMessage: "",
-      accessState: "checking",
-    });
-
-    const access = await checkLibraryAccess("history");
-    if (access.status === "error") {
+    const loadingEpoch = beginNativeLoading(this);
+    try {
       this.setData({
-        loading: false,
-        accessState: "error",
-        errorMessage: "暂时无法验证资料，请检查网络后重试。",
-        manageMode: false,
-        selectedCount: 0,
-        selectedHistoryIds: [],
+        loading: true,
+        errorMessage: "",
+        accessState: "checking",
       });
-      return false;
-    }
 
-    if (access.status === "profile_required") {
-      this.setData({
-        loading: false,
-        accessState: "profile_required",
-        manageMode: false,
-        selectedCount: 0,
-        selectedHistoryIds: [],
-        historyCards: [],
-      });
-      return false;
-    }
+      const access = await checkLibraryAccess("history");
+      if (access.status === "error") {
+        this.setData({
+          loading: false,
+          accessState: "error",
+          errorMessage: "暂时无法验证资料，请检查网络后重试。",
+          manageMode: false,
+          selectedCount: 0,
+          selectedHistoryIds: [],
+        });
+        return false;
+      }
 
-    return this.loadHistory();
+      if (access.status === "profile_required") {
+        this.setData({
+          loading: false,
+          accessState: "profile_required",
+          manageMode: false,
+          selectedCount: 0,
+          selectedHistoryIds: [],
+          historyCards: [],
+        });
+        return false;
+      }
+
+      return await this.loadHistory();
+    } finally {
+      endNativeLoading(this, loadingEpoch);
+    }
   },
 
   async loadHistory() {
+    const loadingEpoch = beginNativeLoading(this);
     const startedAt = Date.now();
     this.setData({
       loading: true,
@@ -135,6 +179,8 @@ Page({
         durationMs: Date.now() - startedAt,
       });
       return false;
+    } finally {
+      endNativeLoading(this, loadingEpoch);
     }
   },
 
@@ -332,11 +378,11 @@ Page({
     try {
       await removeHistoryRecords(ids);
       wx.hideLoading();
+      await this.loadHistory();
       wx.showToast({
         title: "已删除",
         icon: "success",
       });
-      this.loadHistory();
     } catch (error) {
       console.error("删除浏览记录失败", error);
       wx.hideLoading();

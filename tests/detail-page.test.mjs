@@ -34,9 +34,14 @@ function test(name, fn) {
 
 test("detail page exposes one clear return action for unavailable cases", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
+  const source = readFileSync(pagePath, "utf8");
 
   assert.equal(wxml.includes("返回继续筛选"), false);
   assert.equal(wxml.includes("返回案例库"), true);
+  assert.equal(wxml.includes('type="waiting"'), false);
+  assert.equal(wxml.includes("正在读取案例"), false);
+  assert.equal(source.includes("wx.showLoading"), true);
+  assert.match(source, /title:\s*"加载中",\s*\n\s*mask:\s*true/);
 });
 
 test("detail consult action opens official customer service", () => {
@@ -109,6 +114,7 @@ function loadDetailInteractionPage(options = {}) {
   const accessRequests = [];
   const resumeSources = [];
   const toasts = [];
+  const nativeLoadingEvents = [];
   const caseItem = options.caseItem || {
     id: "case_1",
     title: "鎏金礼盒",
@@ -127,10 +133,14 @@ function loadDetailInteractionPage(options = {}) {
     },
     require(moduleName) {
       if (moduleName === "../../utils/cloudData") {
-        return { fetchCaseById: async () => caseItem };
+        return {
+          fetchCaseById: options.fetchCaseById || (async () => caseItem),
+        };
       }
       if (moduleName === "../../utils/caseCatalogService") {
-        return { fetchCaseDetail: async () => caseItem };
+        return {
+          fetchCaseDetail: options.fetchCaseDetail || (async () => caseItem),
+        };
       }
       if (moduleName === "../../utils/caseData") {
         return {
@@ -193,6 +203,12 @@ function loadDetailInteractionPage(options = {}) {
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     wx: {
+      showLoading(payload) {
+        nativeLoadingEvents.push({ type: "show", payload });
+      },
+      hideLoading() {
+        nativeLoadingEvents.push({ type: "hide" });
+      },
       showToast(payload) {
         toasts.push(payload);
       },
@@ -216,8 +232,91 @@ function loadDetailInteractionPage(options = {}) {
     accessRequests,
     resumeSources,
     toasts,
+    nativeLoadingEvents,
   };
 }
+
+await asyncTest("detail case reads use the native loading overlay on success and failure", async () => {
+  const success = loadDetailInteractionPage();
+
+  assert.equal(await success.page.loadCase("case_1"), true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(success.nativeLoadingEvents)),
+    [
+      { type: "show", payload: { title: "加载中", mask: true } },
+      { type: "hide" },
+    ]
+  );
+
+  const failure = loadDetailInteractionPage({
+    fetchCaseDetail: async () => {
+      throw new Error("catalog unavailable");
+    },
+    fetchCaseById: async () => {
+      throw new Error("detail unavailable");
+    },
+  });
+
+  assert.equal(await failure.page.loadCase("case_2"), false);
+  assert.equal(failure.page.data.loading, false);
+  assert.match(failure.page.data.errorMessage, /暂时读取不到/);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(failure.nativeLoadingEvents)),
+    [
+      { type: "show", payload: { title: "加载中", mask: true } },
+      { type: "hide" },
+    ]
+  );
+});
+
+await asyncTest("detail case loading ignores stale requests and cleans up on unload", async () => {
+  const pending = new Map();
+  const context = loadDetailInteractionPage({
+    fetchCaseDetail: (id) =>
+      new Promise((resolveRequest) => {
+        pending.set(id, resolveRequest);
+      }),
+  });
+  const buildCase = (id) => ({
+    id,
+    title: id,
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+  });
+
+  const firstLoad = context.page.loadCase("old_case");
+  const secondLoad = context.page.loadCase("new_case");
+  pending.get("new_case")(buildCase("new_case"));
+  assert.equal(await secondLoad, true);
+  assert.equal(context.page.data.caseItem.id, "new_case");
+  assert.equal(
+    context.nativeLoadingEvents.filter((event) => event.type === "hide").length,
+    1
+  );
+
+  pending.get("old_case")(buildCase("old_case"));
+  assert.equal(await firstLoad, false);
+  assert.equal(context.page.data.caseItem.id, "new_case");
+  assert.equal(
+    context.nativeLoadingEvents.filter((event) => event.type === "hide").length,
+    1
+  );
+
+  const unloadLoad = context.page.loadCase("unload_case");
+  context.page.onUnload();
+  assert.equal(
+    context.nativeLoadingEvents.filter((event) => event.type === "hide").length,
+    2
+  );
+  pending.get("unload_case")(buildCase("unload_case"));
+  assert.equal(await unloadLoad, false);
+  assert.equal(context.page.data.caseItem.id, "new_case");
+  assert.equal(
+    context.nativeLoadingEvents.filter((event) => event.type === "hide").length,
+    2
+  );
+});
 
 await asyncTest("detail favorite requests access and performs immediately when ready", async () => {
   let toggleCalls = 0;
@@ -469,7 +568,10 @@ await asyncTest("detail loads one display image and upgrades only the selected t
       }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
-    wx: {},
+    wx: {
+      showLoading() {},
+      hideLoading() {},
+    },
   };
   vm.runInNewContext(readFileSync(pagePath, "utf8"), sandbox, {
     filename: pagePath,
@@ -588,7 +690,10 @@ await asyncTest("detail shares the selected case with a direct-entry path", asyn
       }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
-    wx: {},
+    wx: {
+      showLoading() {},
+      hideLoading() {},
+    },
   };
 
   vm.runInNewContext(readFileSync(pagePath, "utf8"), sandbox, {

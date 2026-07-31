@@ -102,6 +102,38 @@ function buildCaseShare(pageData = {}) {
   };
 }
 
+function beginCaseLoading(page) {
+  const requestId = (page._caseLoadSequence || 0) + 1;
+  page._caseLoadSequence = requestId;
+  page._activeCaseLoadRequestId = requestId;
+  page._caseLoadingVisible = true;
+  wx.showLoading({
+    title: "加载中",
+    mask: true,
+  });
+  return requestId;
+}
+
+function isCurrentCaseLoad(page, requestId) {
+  return page._activeCaseLoadRequestId === requestId;
+}
+
+function finishCaseLoading(page, requestId) {
+  if (!isCurrentCaseLoad(page, requestId)) return;
+  page._activeCaseLoadRequestId = 0;
+  if (!page._caseLoadingVisible) return;
+  page._caseLoadingVisible = false;
+  wx.hideLoading();
+}
+
+function cancelCaseLoading(page) {
+  page._caseLoadSequence = (page._caseLoadSequence || 0) + 1;
+  page._activeCaseLoadRequestId = 0;
+  if (!page._caseLoadingVisible) return;
+  page._caseLoadingVisible = false;
+  wx.hideLoading();
+}
+
 Page({
   data: {
     loading: true,
@@ -135,6 +167,10 @@ Page({
     return this.resumePendingFavoriteAction();
   },
 
+  onUnload() {
+    cancelCaseLoading(this);
+  },
+
   onShareAppMessage() {
     const share = buildCaseShare(this.data);
     const result = {
@@ -161,13 +197,15 @@ Page({
 
   async loadCase(id) {
     if (!id) {
+      cancelCaseLoading(this);
       this.setData({
         loading: false,
         errorMessage: "没有找到这个案例的 ID。",
       });
-      return;
+      return false;
     }
 
+    const requestId = beginCaseLoading(this);
     this.setData({
       loading: true,
       errorMessage: "",
@@ -179,9 +217,11 @@ Page({
       try {
         caseItem = await fetchCaseDetail(decodedId);
       } catch (catalogError) {
+        if (!isCurrentCaseLoad(this, requestId)) return false;
         console.warn("详情聚合接口不可用，使用兼容读取", catalogError);
         caseItem = await fetchCaseById(decodedId);
       }
+      if (!isCurrentCaseLoad(this, requestId)) return false;
       const galleryItems = buildGalleryItems(caseItem);
       const customerServiceMessageCard = buildCustomerMessageCard({
         caseItem,
@@ -208,12 +248,17 @@ Page({
       });
       this.loadFavoriteState(caseItem);
       this.recordView(caseItem);
+      return true;
     } catch (error) {
+      if (!isCurrentCaseLoad(this, requestId)) return false;
       console.error("案例详情读取失败", error);
       this.setData({
         loading: false,
         errorMessage: "暂时读取不到这个案例，请返回后重试。",
       });
+      return false;
+    } finally {
+      finishCaseLoading(this, requestId);
     }
   },
 

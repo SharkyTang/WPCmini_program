@@ -18,16 +18,14 @@
     <view class="state-button" bindtap="requestProfileAccess">去完善资料</view>
   </view>
 
-  <view wx:elif="{{accessState === 'checking' || loading}}" class="state-shell">
-    <mp-msg type="waiting" title="正在读取收藏" desc="正在整理你保存的案例" />
-  </view>
+  <block wx:elif="{{accessState === 'checking' || loading}}"></block>
 
   <view wx:elif="{{accessState === 'error'}}" class="state-shell state-error">
     <mp-msg type="warn" title="收藏读取失败" desc="{{errorMessage}}" />
     <view class="state-button" bindtap="ensureProfileAndLoad">重新验证</view>
   </view>
 
-  <view wx:elif="{{accessState === 'ready' && !favoriteCards.length}}" class="state-shell">
+  <view wx:elif="{{accessState === 'ready' && !loading && !favoriteCards.length}}" class="state-shell">
     <mp-msg type="info" title="还没有收藏案例" desc="进入案例详情页，点击收藏后会出现在这里" />
     <view class="state-button" bindtap="goToCategory">去看案例</view>
   </view>
