@@ -150,6 +150,10 @@ async function main() {
   }
   const secretId = process.env.TENCENTCLOUD_SECRET_ID;
   const secretKey = process.env.TENCENTCLOUD_SECRET_KEY;
+  const sessionToken =
+    process.env.TENCENTCLOUD_SESSION_TOKEN ||
+    process.env.TENCENTCLOUD_SESSIONTOKEN ||
+    "";
   if (!secretId || !secretKey) {
     throw new Error("缺少腾讯云凭证，请配置 .env.local 后重试");
   }
@@ -164,7 +168,12 @@ async function main() {
   mkdirSync(outputDir, { recursive: true });
 
   const { default: cloudbase } = await import("@cloudbase/node-sdk");
-  const app = cloudbase.init({ env: envId, secretId, secretKey });
+  const app = cloudbase.init({
+    env: envId,
+    secretId,
+    secretKey,
+    ...(sessionToken ? { sessionToken } : {}),
+  });
   const db = app.database();
   const manifest = {
     envId,

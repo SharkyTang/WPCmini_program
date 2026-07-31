@@ -161,13 +161,22 @@ export async function restoreBackup(database, sourceDirectory, options = {}) {
 async function createDatabase(envId) {
   const secretId = process.env.TENCENTCLOUD_SECRET_ID;
   const secretKey = process.env.TENCENTCLOUD_SECRET_KEY;
+  const sessionToken =
+    process.env.TENCENTCLOUD_SESSION_TOKEN ||
+    process.env.TENCENTCLOUD_SESSIONTOKEN ||
+    "";
   if (!secretId || !secretKey) {
     throw new Error(
       "缺少服务端凭证：请在 .env.local 中设置 TENCENTCLOUD_SECRET_ID 和 TENCENTCLOUD_SECRET_KEY"
     );
   }
   const { default: cloudbase } = await import("@cloudbase/node-sdk");
-  const app = cloudbase.init({ env: envId, secretId, secretKey });
+  const app = cloudbase.init({
+    env: envId,
+    secretId,
+    secretKey,
+    ...(sessionToken ? { sessionToken } : {}),
+  });
   return app.database();
 }
 

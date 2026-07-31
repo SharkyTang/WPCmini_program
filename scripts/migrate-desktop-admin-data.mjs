@@ -175,7 +175,14 @@ export function buildMigrationPlan(records = [], currentMeta = null) {
     const currentOrder = isPlainObject(record.homeSectionOrder)
       ? record.homeSectionOrder
       : null;
-    if (!currentOrder || !sameObject(currentOrder, nextOrder)) {
+    const hasNextOrder = Object.keys(nextOrder).length > 0;
+    // CloudBase may omit empty objects when persisting a document. Treat a
+    // missing order and an empty order as equivalent so the migration remains
+    // idempotent for cases that are not assigned to a homepage section.
+    if (
+      (currentOrder && !sameObject(currentOrder, nextOrder)) ||
+      (!currentOrder && hasNextOrder)
+    ) {
       changes.homeSectionOrder = nextOrder;
     }
 
@@ -406,13 +413,22 @@ function printSummary(result) {
 async function createDatabase(envId) {
   const secretId = process.env.TENCENTCLOUD_SECRET_ID;
   const secretKey = process.env.TENCENTCLOUD_SECRET_KEY;
+  const sessionToken =
+    process.env.TENCENTCLOUD_SESSION_TOKEN ||
+    process.env.TENCENTCLOUD_SESSIONTOKEN ||
+    "";
   if (!secretId || !secretKey) {
     throw new Error(
       "缺少服务端凭证：请在 .env.local 中设置 TENCENTCLOUD_SECRET_ID 和 TENCENTCLOUD_SECRET_KEY"
     );
   }
   const { default: cloudbase } = await import("@cloudbase/node-sdk");
-  const app = cloudbase.init({ env: envId, secretId, secretKey });
+  const app = cloudbase.init({
+    env: envId,
+    secretId,
+    secretKey,
+    ...(sessionToken ? { sessionToken } : {}),
+  });
   return app.database();
 }
 

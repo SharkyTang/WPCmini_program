@@ -130,8 +130,8 @@ test("builds version and homepage order patches without changing current display
     popular: 4,
     latest: 2,
   });
-  assert.deepEqual(patches.doc_deleted.homeSectionOrder, {});
-  assert.deepEqual(patches.doc_plain.homeSectionOrder, {});
+  assert.equal(patches.doc_deleted.homeSectionOrder, undefined);
+  assert.equal(patches.doc_plain.homeSectionOrder, undefined);
   assert.deepEqual(patches.doc_hidden.homeSectionOrder, {});
   assert.equal(patches.doc_timestamp.version, 1);
   assert.deepEqual(plan.sectionCounts, { banner: 2, popular: 4, latest: 4 });
@@ -197,8 +197,8 @@ test("duplicate homepage orders are rebuilt in legacy display order and capped",
       { popular: 2 },
       { popular: 3 },
       { popular: 4 },
-      {},
-      {},
+      undefined,
+      undefined,
     ]
   );
   assert.equal(plan.sectionCounts.popular, 4);

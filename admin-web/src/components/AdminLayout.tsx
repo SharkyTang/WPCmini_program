@@ -77,6 +77,7 @@ export function AdminLayout() {
         </button>
 
         <Menu
+          theme="dark"
           mode="inline"
           items={menuItems}
           selectedKeys={[selectedKey]}

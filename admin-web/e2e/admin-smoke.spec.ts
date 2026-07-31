@@ -10,6 +10,16 @@ async function signIn(page: import("@playwright/test").Page) {
 test("管理员可浏览全部首版路由并筛选案例", async ({ page }) => {
   await signIn(page);
 
+  const menuItems = page.getByRole("menuitem");
+  await expect(menuItems).toHaveCount(4);
+  for (const item of await menuItems.all()) {
+    await expect(item).toBeVisible();
+    const color = await item.evaluate((element) => getComputedStyle(element).color);
+    expect(color, "未选中的侧栏菜单也应使用深色导航上的浅色文字").toMatch(
+      /^rgba?\((?:2[0-5]\d|1\d\d),\s*(?:2[0-5]\d|1\d\d),\s*(?:2[0-5]\d|1\d\d)/,
+    );
+  }
+
   await expect(page.getByText("共 21 个案例")).toBeVisible();
   const search = page.getByPlaceholder("搜索标题、编号、标签或备注");
   await search.fill("青瓷");
