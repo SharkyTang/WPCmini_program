@@ -192,18 +192,18 @@ page {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10rpx;
   font-size: 27rpx;
   font-weight: 800;
+  text-align: center;
 }
 
 .map-button:active {
   opacity: 0.86;
 }
 
-.map-button-icon {
-  font-size: 34rpx;
-  line-height: 1;
+.map-button-label {
+  width: 100%;
+  text-align: center;
 }
 
 .phone-list {
@@ -277,6 +277,12 @@ page {
 
 .qr-tip {
   margin: 10rpx 0 22rpx 18rpx;
+}
+
+.qr-image-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20rpx;
 }
 
 .qr-image-shell {

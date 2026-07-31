@@ -25,7 +25,7 @@
 
     <view class="section">
       <view class="section-title">门店图片</view>
-      <view class="section-subtitle">最多 4 张，第一张为联系页和分享封面</view>
+      <view class="section-subtitle">最多 9 张，第一张为联系页和分享封面</view>
 
       <view wx:if="{{storeImages.length}}" class="gallery-grid">
         <view wx:for="{{storeImages}}" wx:key="key" class="gallery-item">
@@ -68,39 +68,40 @@
         disabled="{{saving || storeImages.length >= galleryMax}}"
         bindtap="chooseStoreImages"
       >
-        {{storeImages.length >= galleryMax ? '已达到 4 张上限' : '从相册选择或拍摄门店图片'}}
+        {{storeImages.length >= galleryMax ? '已达到 9 张上限' : '从相册选择或拍摄门店图片'}}
       </button>
     </view>
 
     <view class="section">
       <view class="section-title">微信二维码</view>
-      <view class="section-subtitle">请选择清晰原图，保存后请在真机长按验证</view>
+      <view class="section-subtitle">最多 2 张；请选择清晰原图，保存后请在真机长按验证</view>
 
-      <view wx:if="{{wechatQr}}" class="qr-preview-shell">
-        <image
-          class="qr-preview"
-          src="{{wechatQr.url}}"
-          mode="widthFix"
-          show-menu-by-longpress="{{true}}"
-          bindtap="previewWechatQr"
-        />
-        <view wx:if="{{wechatQr.isPending}}" class="qr-pending">待上传</view>
+      <view wx:if="{{wechatQrs.length}}" class="qr-preview-list">
+        <view wx:for="{{wechatQrs}}" wx:key="key" class="qr-preview-shell">
+          <image
+            class="qr-preview"
+            src="{{item.url}}"
+            mode="widthFix"
+            show-menu-by-longpress="{{true}}"
+            data-index="{{index}}"
+            bindtap="previewWechatQr"
+          />
+          <view wx:if="{{item.isPending}}" class="qr-pending">待上传</view>
+          <button
+            class="qr-remove-button"
+            disabled="{{saving}}"
+            data-index="{{index}}"
+            bindtap="removeWechatQr"
+          >移除二维码 {{index + 1}}</button>
+        </view>
       </view>
       <view wx:else class="empty-tip">未配置云端二维码时，公开页面继续使用内置占位图。</view>
 
-      <view class="button-row">
-        <button
-          class="secondary-button button-row-item"
-          disabled="{{saving}}"
-          bindtap="chooseWechatQr"
-        >{{wechatQr ? '更换二维码' : '选择二维码'}}</button>
-        <button
-          wx:if="{{wechatQr}}"
-          class="secondary-button danger-button button-row-item"
-          disabled="{{saving}}"
-          bindtap="removeWechatQr"
-        >移除云端二维码</button>
-      </view>
+      <button
+        class="secondary-button"
+        disabled="{{saving || wechatQrs.length >= wechatQrMax}}"
+        bindtap="chooseWechatQr"
+      >{{wechatQrs.length >= wechatQrMax ? '已达到 2 张上限' : '选择或继续添加二维码'}}</button>
     </view>
 
     <view class="section">

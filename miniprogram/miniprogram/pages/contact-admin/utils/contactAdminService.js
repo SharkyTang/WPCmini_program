@@ -33,11 +33,18 @@ async function fetchContactAdminDraft() {
   return callContactAdmin("getContactDraft");
 }
 
-async function saveContactAdmin(contact, revision) {
-  return callContactAdmin("saveContact", {
+async function saveContactAdmin(contact, revision, clientStoreImageLimit) {
+  const payload = {
     contact,
     revision,
-  });
+  };
+  if (
+    Number.isInteger(clientStoreImageLimit) &&
+    clientStoreImageLimit > 0
+  ) {
+    payload.clientStoreImageLimit = clientStoreImageLimit;
+  }
+  return callContactAdmin("saveContact", payload);
 }
 
 async function cleanupContactFiles(fileIDs = []) {

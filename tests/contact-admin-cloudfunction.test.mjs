@@ -15,8 +15,14 @@ const STORE_2 = "cloud://test-env/contact-assets/store/store-2.jpg";
 const STORE_3 = "cloud://test-env/contact-assets/store/store-3.jpg";
 const STORE_4 = "cloud://test-env/contact-assets/store/store-4.jpg";
 const STORE_5 = "cloud://test-env/contact-assets/store/store-5.jpg";
+const STORE_6 = "cloud://test-env/contact-assets/store/store-6.jpg";
+const STORE_7 = "cloud://test-env/contact-assets/store/store-7.jpg";
+const STORE_8 = "cloud://test-env/contact-assets/store/store-8.jpg";
+const STORE_9 = "cloud://test-env/contact-assets/store/store-9.jpg";
+const STORE_10 = "cloud://test-env/contact-assets/store/store-10.jpg";
 const QR_1 = "cloud://test-env/contact-assets/wechat/qr-1.png";
 const QR_2 = "cloud://test-env/contact-assets/wechat/qr-2.png";
+const QR_3 = "cloud://test-env/contact-assets/wechat/qr-3.png";
 
 function clone(value) {
   if (value === undefined) return undefined;
@@ -154,7 +160,7 @@ function loadContactAdminFunction(options = {}) {
 function validConfig(overrides = {}) {
   return {
     storeImageFileIds: [STORE_1, STORE_2],
-    wechatQrFileId: QR_1,
+    wechatQrFileIds: [QR_1],
     phoneNumbers: [
       {
         displayNumber: "0851-2233 4455",
@@ -183,7 +189,7 @@ await test("getPublicContact is public and never exposes cloud file IDs", async 
     document: {
       _id: "current",
       storeImageFileIds: [STORE_1, STORE_2],
-      wechatQrFileId: QR_1,
+      wechatQrFileIds: [QR_1, QR_2],
       phoneNumbers: [{
         displayNumber: "0851-22334455",
         dialNumber: "085122334455",
@@ -211,6 +217,14 @@ await test("getPublicContact is public and never exposes cloud file IDs", async 
     clone(result.config.storeImageUrls),
     clone(result.config.storeImages)
   );
+  assert.deepEqual(clone(result.config.wechatQrImages), [
+    `https://temp.example/${encodeURIComponent(QR_1)}`,
+    `https://temp.example/${encodeURIComponent(QR_2)}`,
+  ]);
+  assert.deepEqual(
+    clone(result.config.wechatQrImageUrls),
+    clone(result.config.wechatQrImages)
+  );
   assert.equal(
     result.config.wechatQrImage,
     `https://temp.example/${encodeURIComponent(QR_1)}`
@@ -225,7 +239,7 @@ await test("getPublicContact is public and never exposes cloud file IDs", async 
   }]);
   assert.equal(JSON.stringify(result).includes("secret_admin_openid"), false);
   assert.equal(JSON.stringify(result).includes("cloud://"), false);
-  assert.deepEqual(calls.tempFileRequests, [STORE_1, STORE_2, QR_1]);
+  assert.deepEqual(calls.tempFileRequests, [STORE_1, STORE_2, QR_1, QR_2]);
 });
 
 await test("getPublicContact returns an empty version-zero config before initialization", async () => {
@@ -239,9 +253,52 @@ await test("getPublicContact returns an empty version-zero config before initial
 
   assert.equal(result.ok, true);
   assert.deepEqual(clone(result.config.storeImages), []);
+  assert.deepEqual(clone(result.config.wechatQrImages), []);
+  assert.deepEqual(clone(result.config.wechatQrImageUrls), []);
   assert.equal(result.config.wechatQrImage, "");
   assert.deepEqual(clone(result.config.phoneNumbers), []);
   assert.equal(result.config.revision, 0);
+});
+
+await test("legacy singular QR fields remain readable during migration", async () => {
+  const legacyFileId = loadContactAdminFunction({
+    openid: "visitor_openid",
+    document: {
+      wechatQrFileId: QR_1,
+      revision: 1,
+    },
+  });
+  const legacyObject = loadContactAdminFunction({
+    openid: "visitor_openid",
+    document: {
+      wechatQr: {
+        fileID: QR_2,
+      },
+      revision: 2,
+    },
+  });
+
+  const fileIdResult = await legacyFileId.main({
+    action: "getPublicContact",
+  });
+  const objectResult = await legacyObject.main({
+    action: "getPublicContact",
+  });
+
+  assert.deepEqual(clone(fileIdResult.config.wechatQrImages), [
+    `https://temp.example/${encodeURIComponent(QR_1)}`,
+  ]);
+  assert.equal(
+    fileIdResult.config.wechatQrImage,
+    fileIdResult.config.wechatQrImages[0]
+  );
+  assert.deepEqual(clone(objectResult.config.wechatQrImages), [
+    `https://temp.example/${encodeURIComponent(QR_2)}`,
+  ]);
+  assert.equal(
+    objectResult.config.wechatQrImageUrl,
+    objectResult.config.wechatQrImages[0]
+  );
 });
 
 await test("contact-specific admins override the general admin fallback", async () => {
@@ -303,7 +360,7 @@ await test("getContactDraft returns file IDs only to admins with preview URLs", 
   const { main } = loadContactAdminFunction({
     document: {
       storeImageFileIds: [STORE_1, STORE_2],
-      wechatQrFileId: QR_1,
+      wechatQrFileIds: [QR_1, QR_2],
       phoneNumbers: [{
         displayNumber: "400-123-4567",
         dialNumber: "4001234567",
@@ -329,6 +386,21 @@ await test("getContactDraft returns file IDs only to admins with preview URLs", 
     },
   ]);
   assert.deepEqual(clone(result.storeImageFileIds), [STORE_1, STORE_2]);
+  assert.deepEqual(clone(result.item.wechatQrs), [
+    {
+      fileID: QR_1,
+      url: `https://temp.example/${encodeURIComponent(QR_1)}`,
+    },
+    {
+      fileID: QR_2,
+      url: `https://temp.example/${encodeURIComponent(QR_2)}`,
+    },
+  ]);
+  assert.deepEqual(clone(result.wechatQrFileIds), [QR_1, QR_2]);
+  assert.deepEqual(clone(result.wechatQrImageUrls), [
+    `https://temp.example/${encodeURIComponent(QR_1)}`,
+    `https://temp.example/${encodeURIComponent(QR_2)}`,
+  ]);
   assert.deepEqual(clone(result.item.wechatQr), {
     fileID: QR_1,
     url: `https://temp.example/${encodeURIComponent(QR_1)}`,
@@ -352,7 +424,7 @@ await test("saveContact accepts contact and revision aliases and normalizes phon
         },
       ],
       storeImageFileIds: undefined,
-      wechatQrFileId: undefined,
+      wechatQrFileIds: undefined,
       wechatQr: {
         fileID: QR_1,
       },
@@ -370,6 +442,7 @@ await test("saveContact accepts contact and revision aliases and normalizes phon
   assert.equal(result.revision, 1);
   assert.equal(calls.transactions, 1);
   assert.deepEqual(clone(state.document.storeImageFileIds), [STORE_1]);
+  assert.deepEqual(clone(state.document.wechatQrFileIds), [QR_1]);
   assert.equal(state.document.wechatQrFileId, QR_1);
   assert.deepEqual(clone(state.document.phoneNumbers), [
     {
@@ -384,17 +457,46 @@ await test("saveContact accepts contact and revision aliases and normalizes phon
   assert.equal(state.document.updatedByOpenid, "admin_openid");
 });
 
-await test("saveContact supports zero phones and at most four contact assets", async () => {
+await test("saveContact accepts the legacy singular QR file ID alias", async () => {
   const { main, state } = loadContactAdminFunction();
 
   const result = await main({
     action: "saveContact",
     config: validConfig({
-      storeImageFileIds: [STORE_1, STORE_2, STORE_3, STORE_4],
-      wechatQrFileId: "",
+      wechatQrFileIds: undefined,
+      wechatQrFileId: QR_2,
+    }),
+    expectedRevision: 0,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(clone(state.document.wechatQrFileIds), [QR_2]);
+  assert.deepEqual(clone(result.config.wechatQrFileIds), [QR_2]);
+  assert.equal(result.config.wechatQrFileId, QR_2);
+});
+
+await test("saveContact supports zero phones and at most nine store images", async () => {
+  const { main, state } = loadContactAdminFunction();
+
+  const result = await main({
+    action: "saveContact",
+    config: validConfig({
+      storeImageFileIds: [
+        STORE_1,
+        STORE_2,
+        STORE_3,
+        STORE_4,
+        STORE_5,
+        STORE_6,
+        STORE_7,
+        STORE_8,
+        STORE_9,
+      ],
+      wechatQrFileIds: [],
       phoneNumbers: [],
     }),
     expectedRevision: 0,
+    clientStoreImageLimit: 9,
   });
 
   assert.equal(result.ok, true);
@@ -403,9 +505,90 @@ await test("saveContact supports zero phones and at most four contact assets", a
     STORE_2,
     STORE_3,
     STORE_4,
+    STORE_5,
+    STORE_6,
+    STORE_7,
+    STORE_8,
+    STORE_9,
   ]);
+  assert.deepEqual(clone(state.document.wechatQrFileIds), []);
   assert.equal(state.document.wechatQrFileId, "");
   assert.deepEqual(clone(state.document.phoneNumbers), []);
+});
+
+await test("saving more than four images requires the new client capability", async () => {
+  const { main, calls } = loadContactAdminFunction();
+
+  const result = await main({
+    action: "saveContact",
+    config: validConfig({
+      storeImageFileIds: [STORE_1, STORE_2, STORE_3, STORE_4, STORE_5],
+    }),
+    expectedRevision: 0,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "CLIENT_UPDATE_REQUIRED");
+  assert.equal(calls.transactions, 0);
+  assert.equal(calls.writes.length, 0);
+  assert.deepEqual(calls.deletes, []);
+});
+
+await test("legacy admin clients cannot truncate an existing nine-image gallery", async () => {
+  const originalStoreImages = [
+    STORE_1,
+    STORE_2,
+    STORE_3,
+    STORE_4,
+    STORE_5,
+    STORE_6,
+    STORE_7,
+    STORE_8,
+    STORE_9,
+  ];
+  const { main, state, calls } = loadContactAdminFunction({
+    document: {
+      storeImageFileIds: originalStoreImages,
+      wechatQrFileIds: [QR_1],
+      phoneNumbers: [],
+      revision: 3,
+    },
+  });
+
+  const legacyResult = await main({
+    action: "saveContact",
+    config: validConfig({
+      storeImageFileIds: originalStoreImages.slice(0, 4),
+      phoneNumbers: [],
+    }),
+    expectedRevision: 3,
+  });
+
+  assert.equal(legacyResult.ok, false);
+  assert.equal(legacyResult.code, "CLIENT_UPDATE_REQUIRED");
+  assert.equal(calls.writes.length, 0);
+  assert.deepEqual(calls.deletes, []);
+  assert.deepEqual(clone(state.document.storeImageFileIds), originalStoreImages);
+
+  const currentClientResult = await main({
+    action: "saveContact",
+    config: validConfig({
+      storeImageFileIds: originalStoreImages.slice(0, 4),
+      phoneNumbers: [],
+    }),
+    expectedRevision: 3,
+    clientStoreImageLimit: 9,
+  });
+
+  assert.equal(currentClientResult.ok, true);
+  assert.deepEqual(
+    clone(state.document.storeImageFileIds),
+    originalStoreImages.slice(0, 4)
+  );
+  assert.deepEqual(
+    calls.deletes.sort(),
+    originalStoreImages.slice(4).sort()
+  );
 });
 
 await test("saveContact rejects invalid asset locations without starting a transaction", async () => {
@@ -416,10 +599,18 @@ await test("saveContact rejects invalid asset locations without starting a trans
       ],
     }),
     validConfig({
-      storeImageFileIds: [STORE_1, STORE_2, STORE_3, STORE_4, STORE_5],
-    }),
-    validConfig({
-      wechatQrFileId: "cloud://test-env/contact-assets/store/not-a-qr.png",
+      storeImageFileIds: [
+        STORE_1,
+        STORE_2,
+        STORE_3,
+        STORE_4,
+        STORE_5,
+        STORE_6,
+        STORE_7,
+        STORE_8,
+        STORE_9,
+        STORE_10,
+      ],
     }),
     validConfig({
       storeImageFileIds: [
@@ -436,6 +627,49 @@ await test("saveContact rejects invalid asset locations without starting a trans
       expectedRevision: 0,
     });
     assert.equal(result.ok, false);
+    assert.equal(calls.transactions, 0);
+  }
+});
+
+await test("saveContact strictly rejects invalid QR arrays", async () => {
+  const invalidCases = [
+    {
+      wechatQrFileIds: [QR_1, QR_2, QR_3],
+      code: "INVALID_WECHAT_QRS",
+    },
+    {
+      wechatQrFileIds: [QR_1, QR_1],
+      code: "DUPLICATE_WECHAT_QR",
+    },
+    {
+      wechatQrFileIds: [
+        "cloud://test-env/contact-assets/store/not-a-qr.png",
+      ],
+      code: "INVALID_WECHAT_QR",
+    },
+    {
+      wechatQrFileIds: [
+        "cloud://test-env/contact-assets/wechat/../private.png",
+      ],
+      code: "INVALID_WECHAT_QR",
+    },
+    {
+      wechatQrFileIds: QR_1,
+      code: "INVALID_WECHAT_QRS",
+    },
+  ];
+
+  for (const { wechatQrFileIds, code } of invalidCases) {
+    const { main, calls } = loadContactAdminFunction();
+    const result = await main({
+      action: "saveContact",
+      config: validConfig({
+        wechatQrFileIds,
+      }),
+      expectedRevision: 0,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, code);
     assert.equal(calls.transactions, 0);
   }
 });
@@ -517,7 +751,7 @@ await test("saveContact writes first, then deletes only replaced contact assets"
   const { main, calls, state } = loadContactAdminFunction({
     document: {
       storeImageFileIds: [STORE_1, STORE_2],
-      wechatQrFileId: QR_1,
+      wechatQrFileIds: [QR_1, QR_2],
       phoneNumbers: [],
       revision: 2,
     },
@@ -527,7 +761,7 @@ await test("saveContact writes first, then deletes only replaced contact assets"
     action: "saveContact",
     config: validConfig({
       storeImageFileIds: [STORE_2, STORE_3],
-      wechatQrFileId: QR_2,
+      wechatQrFileIds: [QR_2, QR_3],
     }),
     expectedRevision: 2,
   });
@@ -537,17 +771,18 @@ await test("saveContact writes first, then deletes only replaced contact assets"
   assert.deepEqual(calls.deletes.sort(), [QR_1, STORE_1].sort());
   assert.deepEqual(clone(result.deletedFileIds).sort(), [QR_1, STORE_1].sort());
   assert.equal(calls.deletes.includes(STORE_2), false);
+  assert.equal(calls.deletes.includes(QR_2), false);
 });
 
 await test("cleanupUnreferencedFiles ignores other directories and preserves current references", async () => {
   const unusedStore = STORE_3;
-  const unusedQr = QR_2;
+  const unusedQr = QR_3;
   const unrelated = "cloud://test-env/case-images/case-1.jpg";
   const traversal = "cloud://test-env/contact-assets/store/../case-2.jpg";
   const { main, calls } = loadContactAdminFunction({
     document: {
       storeImageFileIds: [STORE_1],
-      wechatQrFileId: QR_1,
+      wechatQrFileIds: [QR_1, QR_2],
       phoneNumbers: [],
       revision: 1,
     },
@@ -558,6 +793,7 @@ await test("cleanupUnreferencedFiles ignores other directories and preserves cur
     fileIDs: [
       STORE_1,
       QR_1,
+      QR_2,
       unusedStore,
       unusedQr,
       unrelated,

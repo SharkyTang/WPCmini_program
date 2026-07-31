@@ -24,7 +24,14 @@ Page({
         patch.storeImages = contact.storeImages;
         patch.activeStoreImageIndex = 0;
       }
-      if (contact.wechatQrImage) {
+      if (
+        Array.isArray(contact.wechatQrImages) &&
+        contact.wechatQrImages.length
+      ) {
+        patch.wechatQrImages = contact.wechatQrImages;
+        patch.wechatQrImage = contact.wechatQrImages[0];
+      } else if (contact.wechatQrImage) {
+        patch.wechatQrImages = [contact.wechatQrImage];
         patch.wechatQrImage = contact.wechatQrImage;
       }
       if (Array.isArray(contact.phoneNumbers)) {
@@ -71,10 +78,22 @@ Page({
     });
   },
 
-  previewWechatQr() {
+  previewWechatQr(event) {
+    const urls = Array.isArray(this.data.wechatQrImages)
+      ? this.data.wechatQrImages.filter(Boolean).slice(0, 2)
+      : [];
+    if (!urls.length && this.data.wechatQrImage) {
+      urls.push(this.data.wechatQrImage);
+    }
+    if (!urls.length) return;
+    const index = Number(
+      event && event.currentTarget && event.currentTarget.dataset.index
+    );
+    const safeIndex =
+      Number.isInteger(index) && index >= 0 && index < urls.length ? index : 0;
     wx.previewImage({
-      current: this.data.wechatQrImage,
-      urls: [this.data.wechatQrImage],
+      current: urls[safeIndex],
+      urls,
     });
   },
 

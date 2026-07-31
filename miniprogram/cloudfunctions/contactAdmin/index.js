@@ -7,7 +7,9 @@ cloud.init({
 const db = cloud.database();
 const CONTACT_COLLECTION = "contact_settings";
 const CONTACT_DOCUMENT_ID = "current";
-const STORE_IMAGE_LIMIT = 4;
+const STORE_IMAGE_LIMIT = 9;
+const LEGACY_STORE_IMAGE_LIMIT = 4;
+const WECHAT_QR_LIMIT = 2;
 const PHONE_LIMIT = 2;
 const PHONE_DISPLAY_MAX_LENGTH = 32;
 const PHONE_DIGIT_MIN_LENGTH = 5;
@@ -171,6 +173,31 @@ function normalizeRevision(value) {
   return Number.isInteger(revision) && revision >= 0 ? revision : 0;
 }
 
+function getLegacyWechatQrFileId(item = {}) {
+  const wechatQr = item.wechatQr && typeof item.wechatQr === "object"
+    ? item.wechatQr
+    : item.WechatQr && typeof item.WechatQr === "object"
+      ? item.WechatQr
+      : {};
+  return trimText(
+    item.wechatQrFileId
+    || item.wechatQrImageFileId
+    || wechatQr.fileID
+    || wechatQr.fileId
+  );
+}
+
+function getStoredWechatQrValues(item = {}) {
+  if (Array.isArray(item.wechatQrFileIds)) {
+    return item.wechatQrFileIds;
+  }
+  if (Array.isArray(item.wechatQrs)) {
+    return item.wechatQrs;
+  }
+  const legacyFileId = getLegacyWechatQrFileId(item);
+  return legacyFileId ? [legacyFileId] : [];
+}
+
 function normalizeStoredContact(item = {}) {
   const phoneResult = normalizePhoneNumbers(item.phoneNumbers || []);
   return {
@@ -179,11 +206,11 @@ function normalizeStoredContact(item = {}) {
       isStoreImageFileId,
       STORE_IMAGE_LIMIT
     ),
-    wechatQrFileId: isWechatQrFileId(
-      trimText(item.wechatQrFileId || (item.wechatQr && item.wechatQr.fileID))
-    )
-      ? trimText(item.wechatQrFileId || item.wechatQr.fileID)
-      : "",
+    wechatQrFileIds: normalizeUniqueFileIds(
+      getStoredWechatQrValues(item),
+      isWechatQrFileId,
+      WECHAT_QR_LIMIT
+    ),
     phoneNumbers: phoneResult.phoneNumbers || [],
     revision: normalizeRevision(item.revision),
   };
@@ -201,7 +228,7 @@ function validateContactConfig(rawConfig) {
     return fail("INVALID_STORE_IMAGES", "门店图片必须是数组");
   }
   if ((rawStoreImages || []).length > STORE_IMAGE_LIMIT) {
-    return fail("INVALID_STORE_IMAGES", "门店图片最多四张");
+    return fail("INVALID_STORE_IMAGES", "门店图片最多九张");
   }
 
   const storeImageFileIds = [];
@@ -220,14 +247,39 @@ function validateContactConfig(rawConfig) {
     storeImageFileIds.push(fileID);
   }
 
-  const rawWechatQr = rawConfig.wechatQrFileId !== undefined
-    ? rawConfig.wechatQrFileId
-    : rawConfig.wechatQr && typeof rawConfig.wechatQr === "object"
-      ? rawConfig.wechatQr.fileID || rawConfig.wechatQr.fileId
-      : rawConfig.wechatQrImageFileId;
-  const wechatQrFileId = trimText(rawWechatQr);
-  if (wechatQrFileId && !isWechatQrFileId(wechatQrFileId)) {
-    return fail("INVALID_WECHAT_QR", "微信二维码必须来自指定的联系素材目录");
+  let rawWechatQrs;
+  let isWechatQrArray = false;
+  if (rawConfig.wechatQrFileIds !== undefined) {
+    rawWechatQrs = rawConfig.wechatQrFileIds;
+    isWechatQrArray = true;
+  } else if (rawConfig.wechatQrs !== undefined) {
+    rawWechatQrs = rawConfig.wechatQrs;
+    isWechatQrArray = true;
+  } else {
+    const legacyWechatQrFileId = getLegacyWechatQrFileId(rawConfig);
+    rawWechatQrs = legacyWechatQrFileId ? [legacyWechatQrFileId] : [];
+  }
+  if (isWechatQrArray && !Array.isArray(rawWechatQrs)) {
+    return fail("INVALID_WECHAT_QRS", "微信二维码必须是数组");
+  }
+  if (rawWechatQrs.length > WECHAT_QR_LIMIT) {
+    return fail("INVALID_WECHAT_QRS", "微信二维码最多两张");
+  }
+
+  const wechatQrFileIds = [];
+  const wechatQrSet = new Set();
+  for (const value of rawWechatQrs) {
+    const fileID = trimText(
+      value && typeof value === "object" ? value.fileID || value.fileId : value
+    );
+    if (!isWechatQrFileId(fileID)) {
+      return fail("INVALID_WECHAT_QR", "微信二维码必须来自指定的联系素材目录");
+    }
+    if (wechatQrSet.has(fileID)) {
+      return fail("DUPLICATE_WECHAT_QR", "微信二维码不能重复");
+    }
+    wechatQrSet.add(fileID);
+    wechatQrFileIds.push(fileID);
   }
 
   const phoneResult = normalizePhoneNumbers(rawConfig.phoneNumbers || [], {
@@ -238,7 +290,7 @@ function validateContactConfig(rawConfig) {
   return ok({
     config: {
       storeImageFileIds,
-      wechatQrFileId,
+      wechatQrFileIds,
       phoneNumbers: phoneResult.phoneNumbers,
     },
   });
@@ -285,15 +337,20 @@ async function buildPublicConfig(item) {
   const contact = normalizeStoredContact(item || {});
   const urls = await resolveTempFileUrls([
     ...contact.storeImageFileIds,
-    contact.wechatQrFileId,
+    ...contact.wechatQrFileIds,
   ]);
   const storeImages = contact.storeImageFileIds
     .map((fileID) => urls[fileID])
     .filter(Boolean);
-  const wechatQrImage = urls[contact.wechatQrFileId] || "";
+  const wechatQrImages = contact.wechatQrFileIds
+    .map((fileID) => urls[fileID])
+    .filter(Boolean);
+  const wechatQrImage = wechatQrImages[0] || "";
   return {
     storeImages,
     storeImageUrls: storeImages,
+    wechatQrImages,
+    wechatQrImageUrls: wechatQrImages,
     wechatQrImage,
     wechatQrImageUrl: wechatQrImage,
     phoneNumbers: contact.phoneNumbers,
@@ -305,18 +362,17 @@ async function buildDraftItem(item) {
   const contact = normalizeStoredContact(item || {});
   const urls = await resolveTempFileUrls([
     ...contact.storeImageFileIds,
-    contact.wechatQrFileId,
+    ...contact.wechatQrFileIds,
   ]);
   const storeImages = contact.storeImageFileIds.map((fileID) => ({
     fileID,
     url: urls[fileID] || "",
   }));
-  const wechatQr = contact.wechatQrFileId
-    ? {
-        fileID: contact.wechatQrFileId,
-        url: urls[contact.wechatQrFileId] || "",
-      }
-    : {
+  const wechatQrs = contact.wechatQrFileIds.map((fileID) => ({
+    fileID,
+    url: urls[fileID] || "",
+  }));
+  const wechatQr = wechatQrs[0] || {
         fileID: "",
         url: "",
       };
@@ -325,6 +381,9 @@ async function buildDraftItem(item) {
     storeImages,
     storeImageFileIds: contact.storeImageFileIds,
     storeImageUrls: storeImages.map((item) => item.url),
+    wechatQrs,
+    wechatQrFileIds: contact.wechatQrFileIds,
+    wechatQrImageUrls: wechatQrs.map((item) => item.url),
     wechatQr,
     wechatQrFileId: wechatQr.fileID,
     wechatQrImageUrl: wechatQr.url,
@@ -337,7 +396,7 @@ function getReferencedFileIdSet(item) {
   const contact = normalizeStoredContact(item || {});
   return new Set([
     ...contact.storeImageFileIds,
-    contact.wechatQrFileId,
+    ...contact.wechatQrFileIds,
   ].filter(Boolean));
 }
 
@@ -391,6 +450,11 @@ function getExpectedRevision(event) {
   return Number.isInteger(revision) && revision >= 0 ? revision : null;
 }
 
+function getClientStoreImageLimit(event = {}) {
+  const value = Number(event.clientStoreImageLimit);
+  return Number.isInteger(value) && value > 0 ? value : 0;
+}
+
 function createRevisionConflict(currentRevision) {
   const error = new Error("联系信息已被其他管理员更新，请刷新后重试");
   error.contactCode = "REVISION_CONFLICT";
@@ -398,9 +462,25 @@ function createRevisionConflict(currentRevision) {
   return error;
 }
 
+function createClientUpdateRequired() {
+  const error = new Error("当前小程序版本不支持编辑超过 4 张门店图片，请更新后再保存");
+  error.contactCode = "CLIENT_UPDATE_REQUIRED";
+  return error;
+}
+
 async function saveContact(event, openid) {
   const validation = validateContactConfig(event.contact || event.config);
   if (!validation.ok) return validation;
+  const clientStoreImageLimit = getClientStoreImageLimit(event);
+  if (
+    validation.config.storeImageFileIds.length > LEGACY_STORE_IMAGE_LIMIT &&
+    clientStoreImageLimit < STORE_IMAGE_LIMIT
+  ) {
+    return fail(
+      "CLIENT_UPDATE_REQUIRED",
+      "当前小程序版本不支持保存超过 4 张门店图片，请更新后再保存"
+    );
+  }
   const expectedRevision = getExpectedRevision(event);
   if (expectedRevision === null) {
     return fail("INVALID_REVISION", "缺少有效的联系信息版本号");
@@ -423,6 +503,12 @@ async function saveContact(event, openid) {
       }
 
       previousContact = normalizeStoredContact(existing || {});
+      if (
+        previousContact.storeImageFileIds.length > LEGACY_STORE_IMAGE_LIMIT &&
+        clientStoreImageLimit < STORE_IMAGE_LIMIT
+      ) {
+        throw createClientUpdateRequired();
+      }
       if (previousContact.revision !== expectedRevision) {
         conflictCurrentRevision = previousContact.revision;
         throw createRevisionConflict(previousContact.revision);
@@ -430,6 +516,8 @@ async function saveContact(event, openid) {
 
       savedContact = {
         ...validation.config,
+        // 保留首张单值字段，确保回滚旧云函数时仍能读取二维码。
+        wechatQrFileId: validation.config.wechatQrFileIds[0] || "",
         revision: expectedRevision + 1,
         updatedAt: db.serverDate(),
         updatedByOpenid: openid,
@@ -439,6 +527,9 @@ async function saveContact(event, openid) {
       });
     });
   } catch (error) {
+    if (error && error.contactCode === "CLIENT_UPDATE_REQUIRED") {
+      return fail("CLIENT_UPDATE_REQUIRED", error.message);
+    }
     if (
       conflictCurrentRevision !== null
       || (error && error.contactCode === "REVISION_CONFLICT")
@@ -466,7 +557,8 @@ async function saveContact(event, openid) {
     revision: savedContact.revision,
     config: {
       storeImageFileIds: savedContact.storeImageFileIds,
-      wechatQrFileId: savedContact.wechatQrFileId,
+      wechatQrFileIds: savedContact.wechatQrFileIds,
+      wechatQrFileId: savedContact.wechatQrFileIds[0] || "",
       phoneNumbers: savedContact.phoneNumbers,
       revision: savedContact.revision,
     },

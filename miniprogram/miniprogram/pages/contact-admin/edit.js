@@ -1,5 +1,6 @@
 const {
   CONTACT_STORE_IMAGE_MAX,
+  CONTACT_WECHAT_QR_MAX,
   QR_IMAGE_MAX_BYTES,
   STORE_IMAGE_MAX_BYTES,
   buildContactAssetCloudPath,
@@ -77,8 +78,9 @@ Page({
     errorMessage: "",
     inlineMessage: "",
     galleryMax: CONTACT_STORE_IMAGE_MAX,
+    wechatQrMax: CONTACT_WECHAT_QR_MAX,
     storeImages: [],
-    wechatQr: null,
+    wechatQrs: [],
     phoneNumbers: ["", ""],
     revision: 0,
   },
@@ -113,7 +115,7 @@ Page({
         accessChecked: true,
         isAdmin: true,
         storeImages: draft.storeImages,
-        wechatQr: draft.wechatQr,
+        wechatQrs: draft.wechatQrs,
         phoneNumbers: draft.phoneNumbers,
         revision: draft.revision,
       });
@@ -190,23 +192,39 @@ Page({
 
   chooseWechatQr() {
     if (!this.canEdit()) return;
+    const remaining = CONTACT_WECHAT_QR_MAX - this.data.wechatQrs.length;
+    if (remaining <= 0) {
+      wx.showToast({
+        title: `最多上传 ${CONTACT_WECHAT_QR_MAX} 张二维码`,
+        icon: "none",
+      });
+      return;
+    }
     wx.chooseMedia({
-      count: 1,
+      count: remaining,
       mediaType: ["image"],
       sourceType: ["album", "camera"],
       sizeType: ["original"],
       success: (result) => {
-        const file = extractMediaFiles(result, 1, QR_IMAGE_MAX_BYTES)[0];
-        if (!file) return;
-        if (file.oversized) {
+        const files = extractMediaFiles(
+          result,
+          remaining,
+          QR_IMAGE_MAX_BYTES
+        );
+        const accepted = files.filter((file) => !file.oversized);
+        if (files.some((file) => file.oversized)) {
           wx.showToast({
-            title: "二维码图片不能超过 10MB",
+            title: "单张二维码图片不能超过 10MB",
             icon: "none",
           });
-          return;
         }
+        if (!accepted.length) return;
         this.setData({
-          wechatQr: createPendingImage(file.filePath, "wechat"),
+          wechatQrs: this.data.wechatQrs.concat(
+            accepted.map((file) =>
+              createPendingImage(file.filePath, "wechat")
+            )
+          ),
           inlineMessage: "",
         });
       },
@@ -223,11 +241,13 @@ Page({
     });
   },
 
-  previewWechatQr() {
-    if (!this.data.wechatQr || !this.data.wechatQr.url) return;
+  previewWechatQr(event) {
+    const index = Number(event.currentTarget.dataset.index);
+    const urls = this.data.wechatQrs.map((image) => image.url).filter(Boolean);
+    if (!urls.length) return;
     wx.previewImage({
-      current: this.data.wechatQr.url,
-      urls: [this.data.wechatQr.url],
+      current: urls[index] || urls[0],
+      urls,
     });
   },
 
@@ -270,10 +290,16 @@ Page({
     });
   },
 
-  removeWechatQr() {
+  removeWechatQr(event) {
     if (!this.canEdit()) return;
+    const index = Number(event.currentTarget.dataset.index);
+    const wechatQrs = [...this.data.wechatQrs];
+    if (!Number.isInteger(index) || index < 0 || index >= wechatQrs.length) {
+      return;
+    }
+    wechatQrs.splice(index, 1);
     this.setData({
-      wechatQr: null,
+      wechatQrs,
       inlineMessage: "",
     });
   },
@@ -330,13 +356,15 @@ Page({
           });
         }
       });
-      if (this.data.wechatQr && this.data.wechatQr.isPending) {
-        uploadTasks.push({
-          key: this.data.wechatQr.key,
-          kind: "wechat",
-          filePath: this.data.wechatQr.localPath,
-        });
-      }
+      this.data.wechatQrs.forEach((image) => {
+        if (image.isPending) {
+          uploadTasks.push({
+            key: image.key,
+            kind: "wechat",
+            filePath: image.localPath,
+          });
+        }
+      });
 
       const uploadResults = await mapSettledWithConcurrency(
         uploadTasks,
@@ -379,19 +407,22 @@ Page({
           image.isPending ? uploadedByKey[image.key] : image.fileID
         )
         .filter(Boolean);
-      const wechatQrFileId = this.data.wechatQr
-        ? this.data.wechatQr.isPending
-          ? uploadedByKey[this.data.wechatQr.key] || ""
-          : this.data.wechatQr.fileID
-        : "";
+      const wechatQrFileIds = this.data.wechatQrs
+        .map((image) =>
+          image.isPending ? uploadedByKey[image.key] : image.fileID
+        )
+        .filter(Boolean);
 
       await saveContactAdmin(
         {
           storeImageFileIds,
-          wechatQrFileId,
+          wechatQrFileIds,
+          // 旧云函数仍可安全保存第一张，新云函数使用上面的数组。
+          wechatQrFileId: wechatQrFileIds[0] || "",
           phoneNumbers: phoneValidation.phoneNumbers,
         },
-        this.data.revision
+        this.data.revision,
+        CONTACT_STORE_IMAGE_MAX
       );
 
       this.setData({

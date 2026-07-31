@@ -57,8 +57,7 @@
       </view>
     </view>
     <view class="map-button" bindtap="openStoreLocation">
-      <view class="map-button-icon">⌖</view>
-      <view>打开地图导航</view>
+      <view class="map-button-label">打开地图导航</view>
     </view>
   </view>
 
@@ -89,14 +88,21 @@
   <view class="section qr-section">
     <view class="section-title">添加微信咨询</view>
     <view class="section-subtitle qr-tip">点击放大，或长按识别二维码</view>
-    <view class="qr-image-shell">
-      <image
-        class="qr-image"
-        src="{{wechatQrImage}}"
-        mode="widthFix"
-        show-menu-by-longpress="{{true}}"
-        bindtap="previewWechatQr"
-      />
+    <view class="qr-image-list">
+      <view
+        wx:for="{{wechatQrImages}}"
+        wx:key="*this"
+        class="qr-image-shell"
+      >
+        <image
+          class="qr-image"
+          src="{{item}}"
+          mode="widthFix"
+          show-menu-by-longpress="{{true}}"
+          data-index="{{index}}"
+          bindtap="previewWechatQr"
+        />
+      </view>
     </view>
   </view>
 </view>

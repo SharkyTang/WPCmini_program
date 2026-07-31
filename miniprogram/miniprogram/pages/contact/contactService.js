@@ -15,7 +15,17 @@ function normalizeStoreImages(value) {
   return value
     .filter((image) => typeof image === "string" && image.trim())
     .map((image) => image.trim())
-    .slice(0, 4);
+    .slice(0, 9);
+}
+
+function normalizeWechatQrImages(value, legacyValue) {
+  const hasArrayValue = Array.isArray(value);
+  if (!hasArrayValue && typeof legacyValue !== "string") return undefined;
+  const source = hasArrayValue ? value : [legacyValue];
+  return source
+    .filter((image) => typeof image === "string" && image.trim())
+    .map((image) => image.trim())
+    .slice(0, 2);
 }
 
 function normalizePhoneNumbers(value) {
@@ -58,15 +68,26 @@ async function fetchPublicContact() {
   const storeImages = normalizeStoreImages(
     config.storeImages || config.storeImageUrls
   );
+  const qrArrayValue = Array.isArray(config.wechatQrImages)
+    ? config.wechatQrImages
+    : config.wechatQrImageUrls;
+  const legacyWechatQrImage =
+    config.wechatQrImage || config.wechatQrImageUrl;
+  const wechatQrImages = normalizeWechatQrImages(
+    qrArrayValue,
+    legacyWechatQrImage
+  );
   const wechatQrImage =
-    typeof (config.wechatQrImage || config.wechatQrImageUrl) === "string"
-      ? (config.wechatQrImage || config.wechatQrImageUrl).trim()
-      : "";
+    (wechatQrImages && wechatQrImages[0]) ||
+    (typeof legacyWechatQrImage === "string"
+      ? legacyWechatQrImage.trim()
+      : "");
   const phoneNumbers = normalizePhoneNumbers(config.phoneNumbers);
 
   return {
     isAdmin: Boolean(result.isAdmin),
     storeImages,
+    wechatQrImages,
     wechatQrImage,
     phoneNumbers,
   };
@@ -76,4 +97,5 @@ module.exports = {
   fetchPublicContact,
   normalizePhoneNumbers,
   normalizeStoreImages,
+  normalizeWechatQrImages,
 };

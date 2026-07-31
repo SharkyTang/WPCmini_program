@@ -114,8 +114,8 @@ function loadContactAdminPage(options = {}) {
       if (options.cleanupError) throw options.cleanupError;
       return fileIDs;
     },
-    async saveContactAdmin(contact, revision) {
-      calls.saves.push({ contact, revision });
+    async saveContactAdmin(contact, revision, clientStoreImageLimit) {
+      calls.saves.push({ contact, revision, clientStoreImageLimit });
       if (options.saveError) throw options.saveError;
       if (saveDeferred) await saveDeferred.promise;
       return { revision: revision + 1 };
@@ -221,28 +221,48 @@ await test("phone validation rejects invalid characters, misplaced plus and dupl
   assert.equal(duplicate.message, "两个联系电话不能重复");
 });
 
-await test("draft normalization keeps at most four cloud images and two phones", () => {
+await test("draft normalization keeps at most nine store images, two QR images and two phones", () => {
   const draft = dataLogic.normalizeContactAdminDraft({
     item: {
-      storeImages: Array.from({ length: 5 }, (_, index) => ({
+      storeImages: Array.from({ length: 10 }, (_, index) => ({
         fileID: `cloud://env/store-${index}.jpg`,
         url: `https://example.com/store-${index}.jpg`,
       })),
-      wechatQr: {
-        fileID: "cloud://env/qr.png",
-        url: "https://example.com/qr.png",
-      },
+      wechatQrs: Array.from({ length: 3 }, (_, index) => ({
+        fileID: `cloud://env/qr-${index}.png`,
+        url: `https://example.com/qr-${index}.png`,
+      })),
       phoneNumbers: ["1 8888 8888", "400-123-4567", "third"],
       revision: 8,
     },
   });
-  assert.equal(draft.storeImages.length, 4);
-  assert.equal(draft.wechatQr.fileID, "cloud://env/qr.png");
+  assert.equal(draft.storeImages.length, 9);
+  assert.equal(draft.wechatQrs.length, 2);
+  assert.deepEqual(
+    plain(draft.wechatQrs.map((image) => image.fileID)),
+    ["cloud://env/qr-0.png", "cloud://env/qr-1.png"]
+  );
+  assert.equal(draft.wechatQr.fileID, "cloud://env/qr-0.png");
   assert.deepEqual(plain(draft.phoneNumbers), [
     "1 8888 8888",
     "400-123-4567",
   ]);
   assert.equal(draft.revision, 8);
+  assert.equal(dataLogic.CONTACT_STORE_IMAGE_MAX, 9);
+  assert.equal(dataLogic.CONTACT_WECHAT_QR_MAX, 2);
+});
+
+await test("draft normalization keeps legacy single QR fields compatible", () => {
+  const draft = dataLogic.normalizeContactAdminDraft({
+    item: {
+      wechatQrFileId: "cloud://env/legacy-qr.png",
+      wechatQrUrl: "https://example.com/legacy-qr.png",
+    },
+  });
+
+  assert.equal(draft.wechatQrs.length, 1);
+  assert.equal(draft.wechatQrs[0].fileID, "cloud://env/legacy-qr.png");
+  assert.equal(draft.wechatQr.fileID, "cloud://env/legacy-qr.png");
 });
 
 await test("draft normalization restores structured phone numbers returned by cloud", () => {
@@ -314,10 +334,12 @@ await test("service uses contactAdmin actions and native cloud upload", async ()
   await service.saveContactAdmin(
     {
       storeImageFileIds: [],
+      wechatQrFileIds: [],
       wechatQrFileId: "",
       phoneNumbers: [],
     },
-    2
+    2,
+    9
   );
   await service.cleanupContactFiles([
     "cloud://env/a.jpg",
@@ -345,10 +367,12 @@ await test("service uses contactAdmin actions and native cloud upload", async ()
     action: "saveContact",
     contact: {
       storeImageFileIds: [],
+      wechatQrFileIds: [],
       wechatQrFileId: "",
       phoneNumbers: [],
     },
     revision: 2,
+    clientStoreImageLimit: 9,
   });
   assert.deepEqual(plain(calls.functions[3].data.fileIDs), [
     "cloud://env/a.jpg",
@@ -374,7 +398,7 @@ await test("deep links are gated before draft loading, selection and saving", as
   assert.equal(calls.toasts.at(-1).title, "当前微信身份无管理权限");
 });
 
-await test("store picker uses native compressed image selection and honors four-image limit", async () => {
+await test("store picker uses native compressed image selection and honors nine-image limit", async () => {
   const { page, calls } = loadContactAdminPage({
     draft: {
       item: {
@@ -388,7 +412,7 @@ await test("store picker uses native compressed image selection and honors four-
   await page.onLoad();
 
   page.chooseStoreImages();
-  assert.equal(calls.mediaOptions[0].count, 4);
+  assert.equal(calls.mediaOptions[0].count, 9);
   assert.deepEqual(plain(calls.mediaOptions[0].mediaType), ["image"]);
   assert.deepEqual(plain(calls.mediaOptions[0].sourceType), [
     "album",
@@ -403,36 +427,62 @@ await test("store picker uses native compressed image selection and honors four-
       { tempFilePath: "/tmp/store-3.jpg", size: 1000 },
       { tempFilePath: "/tmp/store-4.jpg", size: 1000 },
       { tempFilePath: "/tmp/store-5.jpg", size: 1000 },
+      { tempFilePath: "/tmp/store-6.jpg", size: 1000 },
+      { tempFilePath: "/tmp/store-7.jpg", size: 1000 },
+      { tempFilePath: "/tmp/store-8.jpg", size: 1000 },
+      { tempFilePath: "/tmp/store-9.jpg", size: 1000 },
+      { tempFilePath: "/tmp/store-10.jpg", size: 1000 },
     ],
   });
-  assert.equal(page.data.storeImages.length, 4);
+  assert.equal(page.data.storeImages.length, 9);
   assert.equal(page.data.storeImages.every((image) => image.isPending), true);
 
   page.chooseStoreImages();
   assert.equal(calls.mediaOptions.length, 1);
-  assert.match(calls.toasts.at(-1).title, /最多上传 4 张/);
+  assert.match(calls.toasts.at(-1).title, /最多上传 9 张/);
 });
 
-await test("QR picker requests one original image and previews it", async () => {
-  const { page, calls } = loadContactAdminPage();
+await test("QR picker accepts two original images, previews both and enforces the limit", async () => {
+  const { page, calls } = loadContactAdminPage({
+    draft: {
+      item: {
+        storeImageFileIds: [],
+        wechatQrFileIds: [],
+        phoneNumbers: [],
+        revision: 0,
+      },
+    },
+  });
   await page.onLoad();
 
   page.chooseWechatQr();
   const picker = calls.mediaOptions[0];
-  assert.equal(picker.count, 1);
+  assert.equal(picker.count, 2);
   assert.deepEqual(plain(picker.mediaType), ["image"]);
   assert.deepEqual(plain(picker.sourceType), ["album", "camera"]);
   assert.deepEqual(plain(picker.sizeType), ["original"]);
 
   picker.success({
-    tempFiles: [{ tempFilePath: "/tmp/qr.png", size: 2000 }],
+    tempFiles: [
+      { tempFilePath: "/tmp/qr-1.png", size: 2000 },
+      { tempFilePath: "/tmp/qr-2.png", size: 2000 },
+    ],
   });
-  page.previewWechatQr();
-  assert.equal(page.data.wechatQr.localPath, "/tmp/qr.png");
+  page.previewWechatQr({ currentTarget: { dataset: { index: 1 } } });
+  assert.equal(page.data.wechatQrs.length, 2);
+  assert.equal(page.data.wechatQrs[1].localPath, "/tmp/qr-2.png");
   assert.deepEqual(plain(calls.previews.at(-1)), {
-    current: "/tmp/qr.png",
-    urls: ["/tmp/qr.png"],
+    current: "/tmp/qr-2.png",
+    urls: ["/tmp/qr-1.png", "/tmp/qr-2.png"],
   });
+
+  page.chooseWechatQr();
+  assert.equal(calls.mediaOptions.length, 1);
+  assert.match(calls.toasts.at(-1).title, /最多上传 2 张/);
+
+  page.removeWechatQr({ currentTarget: { dataset: { index: 0 } } });
+  assert.equal(page.data.wechatQrs.length, 1);
+  assert.equal(page.data.wechatQrs[0].localPath, "/tmp/qr-2.png");
 });
 
 await test("store images support preview, reordering and deletion", async () => {
@@ -501,22 +551,32 @@ await test("save uploads pending assets with concurrency two and sends ordered c
       isPending: true,
     },
   ]);
-  page.data.wechatQr = {
-    key: "wechat-local",
-    fileID: "",
-    url: "/tmp/qr.png",
-    localPath: "/tmp/qr.png",
-    isPending: true,
-  };
+  page.data.wechatQrs = [
+    {
+      key: "wechat-local-a",
+      fileID: "",
+      url: "/tmp/qr-a.png",
+      localPath: "/tmp/qr-a.png",
+      isPending: true,
+    },
+    {
+      key: "wechat-local-b",
+      fileID: "",
+      url: "/tmp/qr-b.png",
+      localPath: "/tmp/qr-b.png",
+      isPending: true,
+    },
+  ];
   page.data.phoneNumbers = ["+86（188）1234-5678", "0851-12345678"];
 
   await page.saveContact();
 
-  assert.equal(calls.uploads.length, 3);
+  assert.equal(calls.uploads.length, 4);
   assert.equal(calls.maxConcurrentUploads, 2);
   assert.match(calls.uploads[0].cloudPath, /^contact-assets\/store\//);
   assert.match(calls.uploads[1].cloudPath, /^contact-assets\/store\//);
   assert.match(calls.uploads[2].cloudPath, /^contact-assets\/wechat\//);
+  assert.match(calls.uploads[3].cloudPath, /^contact-assets\/wechat\//);
   assert.equal(calls.saves.length, 1);
   assert.deepEqual(plain(calls.saves[0]), {
     contact: {
@@ -525,10 +585,15 @@ await test("save uploads pending assets with concurrency two and sends ordered c
         "cloud://env/new-0.jpg",
         "cloud://env/new-1.jpg",
       ],
+      wechatQrFileIds: [
+        "cloud://env/new-2.jpg",
+        "cloud://env/new-3.jpg",
+      ],
       wechatQrFileId: "cloud://env/new-2.jpg",
       phoneNumbers: ["+86（188）1234-5678", "0851-12345678"],
     },
     revision: 7,
+    clientStoreImageLimit: 9,
   });
   assert.equal(calls.accessChecks, 2);
   assert.equal(calls.cleanups.length, 0);
@@ -621,6 +686,10 @@ await test("editor markup uses native button, input and image components", () =>
   assert.match(wxml, /<image[\s>]/);
   assert.match(wxml, /bindtap="chooseStoreImages"/);
   assert.match(wxml, /bindtap="chooseWechatQr"/);
+  assert.match(wxml, /wx:for="\{\{wechatQrs\}\}"/);
+  assert.match(wxml, /最多 9 张/);
+  assert.match(wxml, /最多 2 张/);
+  assert.match(wxml, /bindtap="removeWechatQr"/);
   assert.match(wxml, /bindtap="saveContact"/);
   assert.match(wxml, /bindinput="onPhoneInput"/);
   assert.match(wxml, /show-menu-by-longpress="\{\{true\}\}"/);

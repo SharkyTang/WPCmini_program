@@ -1,3 +1,5 @@
+const DEFAULT_WECHAT_QR_IMAGE = "/pages/contact/assets/boss-wechat-qr.jpg";
+
 const CONTACT_DATA = Object.freeze({
   storeName: "金亿诚包装科技",
   address: "贵州省遵义市仁怀市国际商贸中心酒包材市场2栋1楼111-118号",
@@ -9,7 +11,9 @@ const CONTACT_DATA = Object.freeze({
     "/pages/contact/assets/store-2.jpg",
     "/pages/contact/assets/store-3.jpg",
   ]),
-  wechatQrImage: "/pages/contact/assets/boss-wechat-qr.jpg",
+  wechatQrImages: Object.freeze([DEFAULT_WECHAT_QR_IMAGE]),
+  // 保留单张别名，兼容已发布版本与旧分享/预览逻辑。
+  wechatQrImage: DEFAULT_WECHAT_QR_IMAGE,
   phoneNumbers: Object.freeze([]),
 });
 

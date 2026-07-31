@@ -1,4 +1,5 @@
-const CONTACT_STORE_IMAGE_MAX = 4;
+const CONTACT_STORE_IMAGE_MAX = 9;
+const CONTACT_WECHAT_QR_MAX = 2;
 const CONTACT_PHONE_MAX = 2;
 const CONTACT_PHONE_TEXT_MAX_LENGTH = 32;
 const CONTACT_PHONE_DIGITS_MIN = 5;
@@ -105,15 +106,43 @@ function normalizeContactAdminDraft(result = {}) {
     )
     .filter(Boolean);
 
-  const qrSource = item.wechatQr || {};
-  const wechatQrFileId =
-    item.wechatQrFileId || item.wechatQrFileID || qrSource.fileID || "";
-  const wechatQrUrl =
-    item.wechatQrUrl ||
-    item.wechatQrImageUrl ||
-    qrSource.url ||
-    qrSource.tempFileURL ||
-    "";
+  const qrItems = Array.isArray(item.wechatQrs)
+    ? item.wechatQrs
+    : Array.isArray(item.wechatQrImages)
+      ? item.wechatQrImages
+      : [];
+  const legacyQrSource = item.wechatQr || {};
+  const qrFileIDs = Array.isArray(item.wechatQrFileIds)
+    ? item.wechatQrFileIds
+    : Array.isArray(item.wechatQrFileIDs)
+      ? item.wechatQrFileIDs
+      : qrItems.length
+        ? qrItems.map((image) => image && (image.fileID || image.fileId))
+        : [
+            item.wechatQrFileId ||
+            item.wechatQrFileID ||
+            legacyQrSource.fileID ||
+            "",
+          ];
+  const qrUrls = Array.isArray(item.wechatQrImageUrls)
+    ? item.wechatQrImageUrls
+    : Array.isArray(item.wechatQrUrls)
+      ? item.wechatQrUrls
+      : qrItems.length
+        ? qrItems.map((image) => image && (image.url || image.tempFileURL))
+        : [
+            item.wechatQrUrl ||
+            item.wechatQrImageUrl ||
+            legacyQrSource.url ||
+            legacyQrSource.tempFileURL ||
+            "",
+          ];
+  const wechatQrs = qrFileIDs
+    .slice(0, CONTACT_WECHAT_QR_MAX)
+    .map((fileID, index) =>
+      normalizeRemoteImage(fileID, qrUrls[index], index, "wechat")
+    )
+    .filter(Boolean);
 
   const phoneNumbers = Array.isArray(item.phoneNumbers)
     ? item.phoneNumbers
@@ -124,12 +153,9 @@ function normalizeContactAdminDraft(result = {}) {
 
   return {
     storeImages,
-    wechatQr: normalizeRemoteImage(
-      wechatQrFileId,
-      wechatQrUrl,
-      0,
-      "wechat"
-    ),
+    wechatQrs,
+    // 保留单张别名，兼容旧页面测试与旧云函数响应。
+    wechatQr: wechatQrs[0] || null,
     phoneNumbers,
     revision:
       item.revision === undefined || item.revision === null
@@ -172,6 +198,7 @@ module.exports = {
   CONTACT_PHONE_MAX,
   CONTACT_PHONE_TEXT_MAX_LENGTH,
   CONTACT_STORE_IMAGE_MAX,
+  CONTACT_WECHAT_QR_MAX,
   QR_IMAGE_MAX_BYTES,
   STORE_IMAGE_MAX_BYTES,
   buildContactAssetCloudPath,

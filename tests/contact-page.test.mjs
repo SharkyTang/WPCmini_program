@@ -109,14 +109,17 @@ await test("contact data uses complete public store details and bounded assets",
   assert.equal(data.latitude >= -90 && data.latitude <= 90, true);
   assert.equal(data.longitude >= -180 && data.longitude <= 180, true);
   assert.equal(data.storeImages.length, 3);
-  assert.equal(data.storeImages.length <= 4, true);
+  assert.equal(data.storeImages.length <= 9, true);
+  assert.equal(data.wechatQrImages.length, 1);
+  assert.equal(data.wechatQrImages.length <= 2, true);
+  assert.equal(data.wechatQrImage, data.wechatQrImages[0]);
   assert.deepEqual(data.phoneNumbers, []);
 
-  [...data.storeImages, data.wechatQrImage].forEach((assetPath) => {
+  [...data.storeImages, ...data.wechatQrImages].forEach((assetPath) => {
     const absolutePath = resolve(miniRoot, assetPath.replace(/^\//, ""));
     assert.equal(existsSync(absolutePath), true, `${assetPath} should exist`);
   });
-  const packageBytes = [...data.storeImages, data.wechatQrImage].reduce(
+  const packageBytes = [...data.storeImages, ...data.wechatQrImages].reduce(
     (total, assetPath) =>
       total + statSync(resolve(miniRoot, assetPath.replace(/^\//, ""))).size,
     0
@@ -135,8 +138,16 @@ await test("public contact service requests contactAdmin and normalizes its conf
             ok: true,
             isAdmin: true,
             config: {
-              storeImages: [" cloud://store-1 ", "", "cloud://store-2"],
-              wechatQrImage: " cloud://qr ",
+              storeImages: Array.from(
+                { length: 10 },
+                (_, index) => ` cloud://store-${index + 1} `
+              ),
+              wechatQrImages: [
+                " cloud://qr-1 ",
+                "",
+                "cloud://qr-2",
+                "cloud://qr-3",
+              ],
               phoneNumbers: [
                 {
                   displayNumber: "0851-12345678",
@@ -160,13 +171,44 @@ await test("public contact service requests contactAdmin and normalizes its conf
   });
   assert.deepEqual(plain(result), {
     isAdmin: true,
-    storeImages: ["cloud://store-1", "cloud://store-2"],
-    wechatQrImage: "cloud://qr",
+    storeImages: Array.from(
+      { length: 9 },
+      (_, index) => `cloud://store-${index + 1}`
+    ),
+    wechatQrImages: ["cloud://qr-1", "cloud://qr-2"],
+    wechatQrImage: "cloud://qr-1",
     phoneNumbers: [
       { displayNumber: "0851-12345678", dialNumber: "085112345678" },
       { displayNumber: "+86 188 8527 4143", dialNumber: "+8618885274143" },
     ],
   });
+});
+
+await test("public contact service keeps the legacy single QR field compatible", async () => {
+  const service = loadContactService({
+    cloud: {
+      async callFunction() {
+        return {
+          result: {
+            ok: true,
+            config: {
+              wechatQrImage: " https://example.test/legacy-qr.png ",
+            },
+          },
+        };
+      },
+    },
+  });
+
+  const result = await service.fetchPublicContact();
+
+  assert.deepEqual(plain(result.wechatQrImages), [
+    "https://example.test/legacy-qr.png",
+  ]);
+  assert.equal(
+    result.wechatQrImage,
+    "https://example.test/legacy-qr.png"
+  );
 });
 
 await test("contact page merges valid cloud fields and exposes the admin editor", async () => {
@@ -182,7 +224,11 @@ await test("contact page merges valid cloud fields and exposes the admin editor"
         return {
           isAdmin: true,
           storeImages: ["https://example.test/store.jpg"],
-          wechatQrImage: "https://example.test/qr.png",
+          wechatQrImages: [
+            "https://example.test/qr-1.png",
+            "https://example.test/qr-2.png",
+          ],
+          wechatQrImage: "https://example.test/qr-1.png",
           phoneNumbers: [
             { displayNumber: "0851-12345678", dialNumber: "085112345678" },
           ],
@@ -198,7 +244,11 @@ await test("contact page merges valid cloud fields and exposes the admin editor"
   assert.deepEqual(plain(page.data.storeImages), [
     "https://example.test/store.jpg",
   ]);
-  assert.equal(page.data.wechatQrImage, "https://example.test/qr.png");
+  assert.deepEqual(plain(page.data.wechatQrImages), [
+    "https://example.test/qr-1.png",
+    "https://example.test/qr-2.png",
+  ]);
+  assert.equal(page.data.wechatQrImage, "https://example.test/qr-1.png");
   assert.deepEqual(plain(page.data.phoneNumbers), [
     { displayNumber: "0851-12345678", dialNumber: "085112345678" },
   ]);
@@ -213,6 +263,7 @@ await test("empty cloud images preserve local assets and request failures restor
       return {
         isAdmin: false,
         storeImages: [],
+        wechatQrImages: [],
         wechatQrImage: "",
         phoneNumbers: [],
       };
@@ -221,10 +272,12 @@ await test("empty cloud images preserve local assets and request failures restor
 
   await page.loadPublicContact();
   assert.deepEqual(plain(page.data.storeImages), staticData.storeImages);
+  assert.deepEqual(plain(page.data.wechatQrImages), staticData.wechatQrImages);
   assert.equal(page.data.wechatQrImage, staticData.wechatQrImage);
   assert.deepEqual(plain(page.data.phoneNumbers), []);
 
   page.data.storeImages = ["https://example.test/stale.jpg"];
+  page.data.wechatQrImages = ["https://example.test/stale-qr.jpg"];
   page.data.wechatQrImage = "https://example.test/stale-qr.jpg";
   page.data.phoneNumbers = [
     { displayNumber: "123", dialNumber: "123" },
@@ -240,6 +293,10 @@ await test("empty cloud images preserve local assets and request failures restor
   await offlinePage.loadPublicContact();
 
   assert.deepEqual(plain(offlinePage.data.storeImages), staticData.storeImages);
+  assert.deepEqual(
+    plain(offlinePage.data.wechatQrImages),
+    staticData.wechatQrImages
+  );
   assert.equal(offlinePage.data.wechatQrImage, staticData.wechatQrImage);
   assert.deepEqual(plain(offlinePage.data.phoneNumbers), []);
   assert.equal(offlinePage.data.isAdmin, false);
@@ -252,14 +309,19 @@ await test("contact page previews store images and the WeChat QR image", () => {
       previews.push(options);
     },
   });
+  page.data.wechatQrImages = [
+    "https://example.test/qr-1.png",
+    "https://example.test/qr-2.png",
+  ];
+  page.data.wechatQrImage = page.data.wechatQrImages[0];
 
   page.previewStoreImage({ currentTarget: { dataset: { index: 1 } } });
-  page.previewWechatQr();
+  page.previewWechatQr({ currentTarget: { dataset: { index: 1 } } });
 
   assert.equal(previews[0].current, page.data.storeImages[1]);
   assert.deepEqual(plain(previews[0].urls), plain(page.data.storeImages));
-  assert.equal(previews[1].current, page.data.wechatQrImage);
-  assert.deepEqual(plain(previews[1].urls), [page.data.wechatQrImage]);
+  assert.equal(previews[1].current, page.data.wechatQrImages[1]);
+  assert.deepEqual(plain(previews[1].urls), plain(page.data.wechatQrImages));
 });
 
 await test("contact page dials either configured phone and ignores cancellations", () => {
@@ -362,11 +424,17 @@ await test("contact page enables gallery and long-press QR behavior", () => {
   assert.equal(wxml.includes('wx:for="{{storeImages}}"'), true);
   assert.equal(wxml.includes('bindtap="previewStoreImage"'), true);
   assert.equal(wxml.includes('bindtap="openStoreLocation"'), true);
+  assert.equal(wxml.includes("map-button-icon"), false);
+  assert.equal(
+    wxml.includes('<view class="map-button-label">打开地图导航</view>'),
+    true
+  );
   assert.equal(wxml.includes('wx:if="{{isAdmin}}"'), true);
   assert.equal(wxml.includes('bindtap="openContactAdmin"'), true);
   assert.equal(wxml.includes("联系电话暂未配置"), true);
   assert.equal(wxml.includes('bindtap="callPhone"'), true);
   assert.equal(wxml.includes("<button"), true);
   assert.equal(wxml.includes('show-menu-by-longpress="{{true}}"'), true);
+  assert.equal(wxml.includes('wx:for="{{wechatQrImages}}"'), true);
   assert.equal(wxml.includes('bindtap="previewWechatQr"'), true);
 });
