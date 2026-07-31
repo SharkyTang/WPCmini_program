@@ -32,6 +32,16 @@
       "pages": ["index"]
     },
     {
+      "name": "account-contact",
+      "root": "pages/contact",
+      "pages": ["index"]
+    },
+    {
+      "name": "admin-contact",
+      "root": "pages/contact-admin",
+      "pages": ["edit"]
+    },
+    {
       "name": "account-inquiry",
       "root": "pages/inquiry",
       "pages": ["index"]

@@ -75,8 +75,12 @@ function plain(value) { return JSON.parse(JSON.stringify(value)); }
 await test("profile quick actions include feedback with image icon paths", () => {
   const page = loadProfilePage();
   assert.deepEqual(plain(page.data.quickActions.map((action) => action.key)), [
-    "favorites", "history", "notice", "service", "feedback",
+    "favorites", "history", "notice", "service", "feedback", "contact",
   ]);
+  assert.deepEqual(plain(page.data.quickActions.map((action) => action.title)), [
+    "我的收藏", "浏览记录", "消息通知", "咨询客服", "意见反馈", "联系我们",
+  ]);
+  assert.equal(page.data.quickActions[5].iconSrc, "/assets/profile/icon-contact.png");
 });
 
 await test("profile shares the public homepage without exposing personal data", () => {
@@ -168,10 +172,18 @@ await test("feedback quick action navigates to feedback page", () => {
   assert.equal(navigatedUrl, "/pages/feedback/index?source=profile");
 });
 
+await test("contact quick action opens the public contact page", () => {
+  let navigatedUrl = "";
+  const page = loadProfilePage({ navigateTo(options) { navigatedUrl = options.url; } });
+  page.handleQuickAction({ currentTarget: { dataset: { key: "contact" } } });
+  assert.equal(navigatedUrl, "/pages/contact/index");
+});
+
 await test("service quick action keeps the official customer service button", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
   assert.equal(wxml.includes('open-type="contact"'), true);
   assert.equal(wxml.includes('session-from="{{customerServiceSessionFrom}}"'), true);
+  assert.equal(readFileSync(modulePath, "utf8").includes('title: "咨询客服"'), true);
 });
 
 await test("profile shows admin entries only when access is granted", async () => {

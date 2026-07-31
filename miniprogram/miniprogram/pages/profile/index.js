@@ -47,8 +47,9 @@ Page({
       { key: "favorites", iconSrc: "/assets/profile/icon-favorite.png", title: "我的收藏" },
       { key: "history", iconSrc: "/assets/profile/icon-history.png", title: "浏览记录" },
       { key: "notice", iconSrc: "/assets/profile/icon-notice.png", title: "消息通知" },
-      { key: "service", iconSrc: "/assets/profile/icon-service.png", title: "联系客服" },
+      { key: "service", iconSrc: "/assets/profile/icon-service.png", title: "咨询客服" },
       { key: "feedback", iconSrc: "/assets/profile/icon-feedback.png", title: "意见反馈" },
+      { key: "contact", iconSrc: "/assets/profile/icon-contact.png", title: "联系我们" },
     ],
     customerServiceSessionFrom: buildCustomerSessionFrom({
       source: CUSTOMER_SERVICE_SOURCE.PROFILE,
@@ -163,6 +164,10 @@ Page({
     }
     if (key === "feedback") {
       wx.navigateTo({ url: "/pages/feedback/index?source=profile" });
+      return;
+    }
+    if (key === "contact") {
+      wx.navigateTo({ url: "/pages/contact/index" });
       return;
     }
 

@@ -1,0 +1,372 @@
+import assert from "node:assert/strict";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import vm from "node:vm";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pagePath = resolve(__dirname, "../miniprogram/miniprogram/pages/contact/index.js");
+const dataPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/contact/contactData.js"
+);
+const servicePath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/contact/contactService.js"
+);
+const wxmlPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/contact/index.wxml"
+);
+const miniRoot = resolve(__dirname, "../miniprogram/miniprogram");
+
+function loadContactData() {
+  const module = { exports: {} };
+  vm.runInNewContext(readFileSync(dataPath, "utf8"), {
+    module,
+    exports: module.exports,
+  }, {
+    filename: dataPath,
+  });
+  return module.exports.CONTACT_DATA;
+}
+
+function loadContactService(wxMock = {}) {
+  const module = { exports: {} };
+  vm.runInNewContext(readFileSync(servicePath, "utf8"), {
+    module,
+    exports: module.exports,
+    wx: wxMock,
+    Error,
+  }, {
+    filename: servicePath,
+  });
+  return module.exports;
+}
+
+function loadContactPage(wxMock = {}, serviceMock = {}) {
+  let page;
+  const contactData = loadContactData();
+  const fetchPublicContact =
+    serviceMock.fetchPublicContact ||
+    (() => Promise.reject(new Error("offline")));
+  const sandbox = {
+    Page(config) {
+      page = config;
+    },
+    require(moduleName) {
+      if (moduleName === "./contactData") {
+        return { CONTACT_DATA: contactData };
+      }
+      if (moduleName === "./contactService") {
+        return { fetchPublicContact };
+      }
+      throw new Error(`Unexpected require: ${moduleName}`);
+    },
+    wx: {
+      openLocation() {},
+      previewImage() {},
+      setClipboardData() {},
+      showToast() {},
+      makePhoneCall() {},
+      navigateTo() {},
+      ...wxMock,
+    },
+  };
+  vm.runInNewContext(readFileSync(pagePath, "utf8"), sandbox, {
+    filename: pagePath,
+  });
+  page.setData = function setData(patch) {
+    this.data = { ...this.data, ...patch };
+  };
+  return page;
+}
+
+function plain(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+async function test(name, fn) {
+  try {
+    await fn();
+    console.log(`ok - ${name}`);
+  } catch (error) {
+    console.error(`not ok - ${name}`);
+    throw error;
+  }
+}
+
+await test("contact data uses complete public store details and bounded assets", () => {
+  const data = plain(loadContactData());
+
+  assert.equal(data.storeName, "金亿诚包装科技");
+  assert.equal(
+    data.address,
+    "贵州省遵义市仁怀市国际商贸中心酒包材市场2栋1楼111-118号"
+  );
+  assert.equal(Number.isFinite(data.latitude), true);
+  assert.equal(Number.isFinite(data.longitude), true);
+  assert.equal(data.latitude >= -90 && data.latitude <= 90, true);
+  assert.equal(data.longitude >= -180 && data.longitude <= 180, true);
+  assert.equal(data.storeImages.length, 3);
+  assert.equal(data.storeImages.length <= 4, true);
+  assert.deepEqual(data.phoneNumbers, []);
+
+  [...data.storeImages, data.wechatQrImage].forEach((assetPath) => {
+    const absolutePath = resolve(miniRoot, assetPath.replace(/^\//, ""));
+    assert.equal(existsSync(absolutePath), true, `${assetPath} should exist`);
+  });
+  const packageBytes = [...data.storeImages, data.wechatQrImage].reduce(
+    (total, assetPath) =>
+      total + statSync(resolve(miniRoot, assetPath.replace(/^\//, ""))).size,
+    0
+  );
+  assert.equal(packageBytes < 1024 * 1024, true);
+});
+
+await test("public contact service requests contactAdmin and normalizes its config", async () => {
+  let request;
+  const service = loadContactService({
+    cloud: {
+      async callFunction(options) {
+        request = options;
+        return {
+          result: {
+            ok: true,
+            isAdmin: true,
+            config: {
+              storeImages: [" cloud://store-1 ", "", "cloud://store-2"],
+              wechatQrImage: " cloud://qr ",
+              phoneNumbers: [
+                {
+                  displayNumber: "0851-12345678",
+                  dialNumber: "085112345678",
+                },
+                "+86 188 8527 4143",
+                { displayNumber: "", dialNumber: "" },
+              ],
+            },
+          },
+        };
+      },
+    },
+  });
+
+  const result = await service.fetchPublicContact();
+
+  assert.deepEqual(plain(request), {
+    name: "contactAdmin",
+    data: { action: "getPublicContact" },
+  });
+  assert.deepEqual(plain(result), {
+    isAdmin: true,
+    storeImages: ["cloud://store-1", "cloud://store-2"],
+    wechatQrImage: "cloud://qr",
+    phoneNumbers: [
+      { displayNumber: "0851-12345678", dialNumber: "085112345678" },
+      { displayNumber: "+86 188 8527 4143", dialNumber: "+8618885274143" },
+    ],
+  });
+});
+
+await test("contact page merges valid cloud fields and exposes the admin editor", async () => {
+  let navigatedTo = "";
+  const page = loadContactPage(
+    {
+      navigateTo({ url }) {
+        navigatedTo = url;
+      },
+    },
+    {
+      async fetchPublicContact() {
+        return {
+          isAdmin: true,
+          storeImages: ["https://example.test/store.jpg"],
+          wechatQrImage: "https://example.test/qr.png",
+          phoneNumbers: [
+            { displayNumber: "0851-12345678", dialNumber: "085112345678" },
+          ],
+        };
+      },
+    }
+  );
+
+  await page.loadPublicContact();
+  page.openContactAdmin();
+
+  assert.equal(page.data.isAdmin, true);
+  assert.deepEqual(plain(page.data.storeImages), [
+    "https://example.test/store.jpg",
+  ]);
+  assert.equal(page.data.wechatQrImage, "https://example.test/qr.png");
+  assert.deepEqual(plain(page.data.phoneNumbers), [
+    { displayNumber: "0851-12345678", dialNumber: "085112345678" },
+  ]);
+  assert.equal(page.data.activeStoreImageIndex, 0);
+  assert.equal(navigatedTo, "/pages/contact-admin/edit");
+});
+
+await test("empty cloud images preserve local assets and request failures restore fallback", async () => {
+  const staticData = plain(loadContactData());
+  const page = loadContactPage({}, {
+    async fetchPublicContact() {
+      return {
+        isAdmin: false,
+        storeImages: [],
+        wechatQrImage: "",
+        phoneNumbers: [],
+      };
+    },
+  });
+
+  await page.loadPublicContact();
+  assert.deepEqual(plain(page.data.storeImages), staticData.storeImages);
+  assert.equal(page.data.wechatQrImage, staticData.wechatQrImage);
+  assert.deepEqual(plain(page.data.phoneNumbers), []);
+
+  page.data.storeImages = ["https://example.test/stale.jpg"];
+  page.data.wechatQrImage = "https://example.test/stale-qr.jpg";
+  page.data.phoneNumbers = [
+    { displayNumber: "123", dialNumber: "123" },
+  ];
+  page.data.isAdmin = true;
+  const offlinePage = loadContactPage({}, {
+    async fetchPublicContact() {
+      throw new Error("offline");
+    },
+  });
+  offlinePage.data = page.data;
+
+  await offlinePage.loadPublicContact();
+
+  assert.deepEqual(plain(offlinePage.data.storeImages), staticData.storeImages);
+  assert.equal(offlinePage.data.wechatQrImage, staticData.wechatQrImage);
+  assert.deepEqual(plain(offlinePage.data.phoneNumbers), []);
+  assert.equal(offlinePage.data.isAdmin, false);
+});
+
+await test("contact page previews store images and the WeChat QR image", () => {
+  const previews = [];
+  const page = loadContactPage({
+    previewImage(options) {
+      previews.push(options);
+    },
+  });
+
+  page.previewStoreImage({ currentTarget: { dataset: { index: 1 } } });
+  page.previewWechatQr();
+
+  assert.equal(previews[0].current, page.data.storeImages[1]);
+  assert.deepEqual(plain(previews[0].urls), plain(page.data.storeImages));
+  assert.equal(previews[1].current, page.data.wechatQrImage);
+  assert.deepEqual(plain(previews[1].urls), [page.data.wechatQrImage]);
+});
+
+await test("contact page dials either configured phone and ignores cancellations", () => {
+  const calls = [];
+  const toastTitles = [];
+  const page = loadContactPage({
+    makePhoneCall(options) {
+      calls.push(options.phoneNumber);
+      if (calls.length === 1) {
+        options.fail({ errMsg: "makePhoneCall:fail cancel" });
+      } else {
+        options.fail({ errMsg: "makePhoneCall:fail system error" });
+      }
+    },
+    showToast(options) {
+      toastTitles.push(options.title);
+    },
+  });
+  page.data.phoneNumbers = [
+    { displayNumber: "0851-12345678", dialNumber: "085112345678" },
+    { displayNumber: "188 8527 4143", dialNumber: "18885274143" },
+  ];
+
+  page.callPhone({ currentTarget: { dataset: { index: 0 } } });
+  page.callPhone({ currentTarget: { dataset: { index: 1 } } });
+
+  assert.deepEqual(calls, ["085112345678", "18885274143"]);
+  assert.deepEqual(toastTitles, ["暂时无法拨打电话"]);
+});
+
+await test("contact page does not dial without a configured phone", () => {
+  let callCount = 0;
+  const page = loadContactPage({
+    makePhoneCall() {
+      callCount += 1;
+    },
+  });
+
+  page.callPhone({ currentTarget: { dataset: { index: 0 } } });
+
+  assert.equal(callCount, 0);
+});
+
+await test("contact page opens the fixed store location", () => {
+  let locationOptions;
+  const page = loadContactPage({
+    openLocation(options) {
+      locationOptions = options;
+    },
+  });
+
+  page.openStoreLocation();
+
+  assert.equal(locationOptions.latitude, page.data.latitude);
+  assert.equal(locationOptions.longitude, page.data.longitude);
+  assert.equal(locationOptions.name, "金亿诚包装科技");
+  assert.equal(locationOptions.address, page.data.address);
+  assert.equal(locationOptions.scale, 18);
+});
+
+await test("map failures copy the address and show a clear fallback", () => {
+  let copiedAddress = "";
+  let toastTitle = "";
+  const page = loadContactPage({
+    openLocation(options) {
+      options.fail();
+    },
+    setClipboardData(options) {
+      copiedAddress = options.data;
+      options.success();
+    },
+    showToast(options) {
+      toastTitle = options.title;
+    },
+  });
+
+  page.openStoreLocation();
+
+  assert.equal(copiedAddress, page.data.address);
+  assert.equal(toastTitle, "地图打开失败，地址已复制");
+});
+
+await test("contact page exposes friend and timeline sharing", () => {
+  const page = loadContactPage();
+
+  assert.deepEqual(plain(page.onShareAppMessage()), {
+    title: "联系我们｜金亿诚包装科技",
+    path: "/pages/contact/index",
+    imageUrl: page.data.storeImages[0],
+  });
+  assert.deepEqual(plain(page.onShareTimeline()), {
+    title: "联系我们｜金亿诚包装科技",
+    imageUrl: page.data.storeImages[0],
+  });
+});
+
+await test("contact page enables gallery and long-press QR behavior", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+
+  assert.equal(wxml.includes('wx:for="{{storeImages}}"'), true);
+  assert.equal(wxml.includes('bindtap="previewStoreImage"'), true);
+  assert.equal(wxml.includes('bindtap="openStoreLocation"'), true);
+  assert.equal(wxml.includes('wx:if="{{isAdmin}}"'), true);
+  assert.equal(wxml.includes('bindtap="openContactAdmin"'), true);
+  assert.equal(wxml.includes("联系电话暂未配置"), true);
+  assert.equal(wxml.includes('bindtap="callPhone"'), true);
+  assert.equal(wxml.includes("<button"), true);
+  assert.equal(wxml.includes('show-menu-by-longpress="{{true}}"'), true);
+  assert.equal(wxml.includes('bindtap="previewWechatQr"'), true);
+});

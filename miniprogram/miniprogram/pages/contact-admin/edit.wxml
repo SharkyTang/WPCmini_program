@@ -1,0 +1,144 @@
+<view class="page">
+  <view class="hero">
+    <view class="page-title">编辑联系信息</view>
+    <view class="page-subtitle">门店图片、微信二维码与联系电话将在保存后更新</view>
+  </view>
+
+  <view wx:if="{{loading}}" class="state-card">
+    <view class="state-title">正在核验管理员身份</view>
+    <view class="state-desc">请稍候...</view>
+  </view>
+
+  <view wx:elif="{{errorMessage}}" class="state-card">
+    <view class="state-title">读取失败</view>
+    <view class="state-desc">{{errorMessage}}</view>
+    <button class="secondary-button state-button" bindtap="retryLoad">重新加载</button>
+  </view>
+
+  <view wx:elif="{{accessChecked && !isAdmin}}" class="state-card">
+    <view class="state-title">无管理权限</view>
+    <view class="state-desc">当前微信身份不能查看或修改联系信息。</view>
+  </view>
+
+  <view wx:else class="form">
+    <view wx:if="{{inlineMessage}}" class="inline-message">{{inlineMessage}}</view>
+
+    <view class="section">
+      <view class="section-title">门店图片</view>
+      <view class="section-subtitle">最多 4 张，第一张为联系页和分享封面</view>
+
+      <view wx:if="{{storeImages.length}}" class="gallery-grid">
+        <view wx:for="{{storeImages}}" wx:key="key" class="gallery-item">
+          <image
+            class="gallery-image"
+            src="{{item.url}}"
+            mode="aspectFill"
+            data-index="{{index}}"
+            bindtap="previewStoreImage"
+          />
+          <view wx:if="{{index === 0}}" class="cover-badge">封面</view>
+          <view wx:if="{{item.isPending}}" class="pending-badge">待上传</view>
+          <view class="gallery-actions">
+            <button
+              wx:if="{{index > 0}}"
+              class="image-action"
+              data-index="{{index}}"
+              data-direction="left"
+              catchtap="moveStoreImage"
+            >←</button>
+            <button
+              wx:if="{{index < storeImages.length - 1}}"
+              class="image-action"
+              data-index="{{index}}"
+              data-direction="right"
+              catchtap="moveStoreImage"
+            >→</button>
+            <button
+              class="image-action remove-action"
+              data-index="{{index}}"
+              catchtap="removeStoreImage"
+            >×</button>
+          </view>
+        </view>
+      </view>
+      <view wx:else class="empty-tip">未配置云端门店图时，公开页面继续使用内置占位图。</view>
+
+      <button
+        class="secondary-button"
+        disabled="{{saving || storeImages.length >= galleryMax}}"
+        bindtap="chooseStoreImages"
+      >
+        {{storeImages.length >= galleryMax ? '已达到 4 张上限' : '从相册选择或拍摄门店图片'}}
+      </button>
+    </view>
+
+    <view class="section">
+      <view class="section-title">微信二维码</view>
+      <view class="section-subtitle">请选择清晰原图，保存后请在真机长按验证</view>
+
+      <view wx:if="{{wechatQr}}" class="qr-preview-shell">
+        <image
+          class="qr-preview"
+          src="{{wechatQr.url}}"
+          mode="widthFix"
+          show-menu-by-longpress="{{true}}"
+          bindtap="previewWechatQr"
+        />
+        <view wx:if="{{wechatQr.isPending}}" class="qr-pending">待上传</view>
+      </view>
+      <view wx:else class="empty-tip">未配置云端二维码时，公开页面继续使用内置占位图。</view>
+
+      <view class="button-row">
+        <button
+          class="secondary-button button-row-item"
+          disabled="{{saving}}"
+          bindtap="chooseWechatQr"
+        >{{wechatQr ? '更换二维码' : '选择二维码'}}</button>
+        <button
+          wx:if="{{wechatQr}}"
+          class="secondary-button danger-button button-row-item"
+          disabled="{{saving}}"
+          bindtap="removeWechatQr"
+        >移除云端二维码</button>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-title">联系电话</view>
+      <view class="section-subtitle">最多两个；支持手机号、座机、400 电话和 +86</view>
+
+      <view class="phone-field">
+        <view class="field-label">联系电话 1</view>
+        <input
+          class="text-input"
+          type="text"
+          maxlength="32"
+          value="{{phoneNumbers[0]}}"
+          placeholder="例如：188 8888 8888"
+          data-index="0"
+          bindinput="onPhoneInput"
+        />
+      </view>
+      <view class="phone-field">
+        <view class="field-label">联系电话 2（选填）</view>
+        <input
+          class="text-input"
+          type="text"
+          maxlength="32"
+          value="{{phoneNumbers[1]}}"
+          placeholder="例如：0851-12345678"
+          data-index="1"
+          bindinput="onPhoneInput"
+        />
+      </view>
+      <view class="field-hint">可以暂时留空；公开页面只展示已填写的号码。</view>
+    </view>
+
+    <button
+      class="save-button"
+      loading="{{saving}}"
+      disabled="{{saving}}"
+      bindtap="saveContact"
+    >{{saving ? '正在保存...' : '保存联系信息'}}</button>
+  </view>
+</view>

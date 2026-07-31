@@ -52,6 +52,10 @@ test("all subpackage routes resolve and admin packages are not preloaded", () =>
     Object.values(appConfig.preloadRule).every((rule) => rule.network === "wifi"),
     true
   );
+  assert.equal(names.has("account-contact"), true);
+  assert.equal(preloaded.includes("account-contact"), false);
+  assert.equal(names.has("admin-contact"), true);
+  assert.equal(preloaded.includes("admin-contact"), false);
 });
 
 test("project keeps lazy loading, audits and system-file exclusion enabled", () => {
