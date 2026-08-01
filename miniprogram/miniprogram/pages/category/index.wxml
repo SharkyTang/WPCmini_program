@@ -21,7 +21,7 @@
           data-key="{{item.key}}"
           data-value="{{item.value}}"
         >
-          <text>{{item.value}}</text>
+          <text>{{item.label}}</text>
           <text class="selected-pill-remove">×</text>
         </view>
       </view>

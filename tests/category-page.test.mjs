@@ -37,10 +37,24 @@ function loadCategoryPage(
               type: "multiple",
             },
           ],
-          filterCases(items) {
-            return items.filter((item) => item.isVisible);
+          filterCases(items, { selectedFilters = {} } = {}) {
+            return items
+              .filter((item) => item.isVisible)
+              .filter((item) =>
+                Object.entries(selectedFilters).every(([key, values]) => {
+                  if (!values.length) return true;
+                  const caseValue = item[key];
+                  return Array.isArray(caseValue)
+                    ? values.some((value) => caseValue.includes(value))
+                    : values.includes(caseValue);
+                })
+              );
           },
-          selectedFilterCount: () => 0,
+          selectedFilterCount: (selectedFilters = {}) =>
+            Object.values(selectedFilters).reduce(
+              (count, values) => count + values.length,
+              0
+            ),
         };
       }
       if (moduleName === "../../utils/cloudData") {
@@ -164,10 +178,15 @@ function buildCase(id, overrides = {}) {
 
 await test("category sort options use recent and popular labels", () => {
   const source = readFileSync(pagePath, "utf8");
+  const markup = readFileSync(wxmlPath, "utf8");
 
   assert.equal(source.includes("最近上新"), true);
   assert.equal(source.includes("热门产品"), true);
   assert.equal(source.includes("最新优先"), false);
+  assert.equal(markup.includes('bindtap="removeSelectedPill"'), true);
+  assert.equal(markup.includes('data-key="{{item.key}}"'), true);
+  assert.equal(markup.includes('data-value="{{item.value}}"'), true);
+  assert.equal(markup.includes("<text>{{item.label}}</text>"), true);
 });
 
 await test("category page can be shared to friends and timeline", () => {
@@ -194,6 +213,7 @@ await test("category page initializes latest sort from URL options", async () =>
   assert.equal(page.data.selectedSort, "latest");
   assert.equal(page.data.activeNavKey, "sort");
   assert.equal(page.data.expandedNavKey, "sort");
+  assert.equal(page.data.selectedPills[0].label, "最近上新");
   assert.deepEqual(plain(page._filteredCases.map((item) => item.id)), [
     "case_3",
     "case_1",
@@ -211,7 +231,98 @@ await test("category page initializes popular sort from URL options", async () =
 
   assert.equal(page.data.selectedSort, "popular");
   assert.equal(page.data.activeNavKey, "sort");
+  assert.equal(page.data.selectedPills[0].label, "热门产品");
   assert.deepEqual(plain(page._filteredCases.map((item) => item.id)), [
+    "case_3",
+  ]);
+});
+
+await test("category sort choices appear as removable selected pills", async () => {
+  const { page } = loadCategoryPage([
+    buildCase("case_1", { statuses: ["最新产品"] }),
+    buildCase("case_2", { statuses: ["热门产品"] }),
+    buildCase("case_3"),
+  ]);
+
+  await page.onLoad({});
+  page.selectSort({ currentTarget: { dataset: { value: "latest" } } });
+
+  assert.equal(page.data.selectedSort, "latest");
+  assert.deepEqual(plain(page.data.selectedPills), [
+    {
+      id: "sort:latest",
+      key: "sort",
+      value: "latest",
+      label: "最近上新",
+      title: "排序",
+    },
+  ]);
+  assert.deepEqual(plain(page._filteredCases.map((item) => item.id)), [
+    "case_1",
+  ]);
+
+  page.selectSort({ currentTarget: { dataset: { value: "popular" } } });
+
+  assert.equal(page.data.selectedPills.length, 1);
+  assert.equal(page.data.selectedPills[0].label, "热门产品");
+  assert.deepEqual(plain(page._filteredCases.map((item) => item.id)), [
+    "case_2",
+  ]);
+
+  page.selectSort({ currentTarget: { dataset: { value: "default" } } });
+
+  assert.equal(page.data.selectedSort, "default");
+  assert.deepEqual(plain(page.data.selectedPills), []);
+});
+
+await test("removing a sort pill restores default sorting without clearing filters", async () => {
+  const { page } = loadCategoryPage([
+    buildCase("case_1", {
+      packageTypes: ["礼盒"],
+      statuses: ["热门产品"],
+    }),
+    buildCase("case_2", {
+      packageTypes: ["瓶标"],
+      statuses: ["热门产品"],
+    }),
+    buildCase("case_3", { packageTypes: ["礼盒"] }),
+  ]);
+
+  await page.onLoad({});
+  page.toggleFilterOption({
+    currentTarget: { dataset: { key: "packageTypes", value: "礼盒" } },
+  });
+  page.selectSort({ currentTarget: { dataset: { value: "popular" } } });
+
+  assert.deepEqual(
+    plain(page.data.selectedPills.map((pill) => pill.label)),
+    ["热门产品", "礼盒"]
+  );
+  assert.deepEqual(plain(page._filteredCases.map((item) => item.id)), [
+    "case_1",
+  ]);
+
+  page.removeSelectedPill({
+    currentTarget: { dataset: { key: "sort", value: "popular" } },
+  });
+
+  assert.equal(page.data.selectedSort, "default");
+  assert.deepEqual(
+    plain(page.data.filters[0].selectedValues),
+    ["礼盒"]
+  );
+  assert.equal(page.data.filters[0].optionItems[0].selected, true);
+  assert.deepEqual(plain(page.data.selectedPills), [
+    {
+      id: "packageTypes:礼盒",
+      key: "packageTypes",
+      value: "礼盒",
+      label: "礼盒",
+      title: "包装",
+    },
+  ]);
+  assert.deepEqual(plain(page._filteredCases.map((item) => item.id)), [
+    "case_1",
     "case_3",
   ]);
 });

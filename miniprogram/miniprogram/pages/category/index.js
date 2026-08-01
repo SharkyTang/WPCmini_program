@@ -86,18 +86,34 @@ function buildSelectedFilters(filters) {
   }, {});
 }
 
-function buildSelectedPills(filters) {
+function buildSelectedPills(filters, selectedSort) {
+  const selectedSortOption = SORT_OPTIONS.find(
+    (option) => option.key === selectedSort && option.key !== "default"
+  );
+  const initialPills = selectedSortOption
+    ? [
+        {
+          id: `sort:${selectedSortOption.key}`,
+          key: "sort",
+          value: selectedSortOption.key,
+          label: selectedSortOption.title,
+          title: "排序",
+        },
+      ]
+    : [];
+
   return filters.reduce((pills, filter) => {
     filter.selectedValues.forEach((value) => {
       pills.push({
         id: `${filter.key}:${value}`,
         key: filter.key,
         value,
+        label: value,
         title: filter.title,
       });
     });
     return pills;
-  }, []);
+  }, initialPills);
 }
 
 function summarizeTags(caseItem) {
@@ -412,6 +428,10 @@ Page({
 
   refreshPanels() {
     this.setData({
+      selectedPills: buildSelectedPills(
+        this.data.filters,
+        this.data.selectedSort
+      ),
       navItems: buildNavItems(
         this.data.filters,
         this.data.selectedSort,
@@ -453,7 +473,6 @@ Page({
     this._displayLimit = CARD_PAGE_SIZE;
     this.setData({
       filteredCount: this._filteredCases.length,
-      selectedPills: buildSelectedPills(this.data.filters),
       selectedCount: selectedFilterCount(selectedFilters),
     });
     this.refreshPanels();
@@ -659,6 +678,12 @@ Page({
 
   removeSelectedPill(event) {
     const { key, value } = event.currentTarget.dataset;
+    if (key === "sort") {
+      this.setData({ selectedSort: "default" });
+      this.applyFilters();
+      return;
+    }
+
     let focusedFilterValue = this.data.focusedFilterValue;
     const filters = this.data.filters.map((filter) => {
       if (filter.key !== key) return filter;
