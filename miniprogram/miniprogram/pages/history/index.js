@@ -351,15 +351,13 @@ Page({
     try {
       await clearHistory();
       wx.hideLoading();
+      const refreshed = await this.loadHistory();
+      if (!refreshed || this.data.historyCards.length) {
+        throw new Error("浏览记录仍存在，清空结果未生效");
+      }
       wx.showToast({
         title: "已清空",
         icon: "success",
-      });
-      this.setData({
-        manageMode: false,
-        selectedCount: 0,
-        selectedHistoryIds: [],
-        historyCards: [],
       });
     } catch (error) {
       console.error("清空浏览记录失败", error);
@@ -378,7 +376,14 @@ Page({
     try {
       await removeHistoryRecords(ids);
       wx.hideLoading();
-      await this.loadHistory();
+      const refreshed = await this.loadHistory();
+      const requestedIds = new Set((ids || []).filter(Boolean));
+      const hasRemainingHistory = this.data.historyCards.some((card) => (
+        requestedIds.has(card.historyId)
+      ));
+      if (!refreshed || hasRemainingHistory) {
+        throw new Error("浏览记录仍存在，删除结果未生效");
+      }
       wx.showToast({
         title: "已删除",
         icon: "success",

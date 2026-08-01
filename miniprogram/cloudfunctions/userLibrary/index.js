@@ -49,62 +49,65 @@ async function addFavorite(event, openid) {
   const reference = normalizeCaseReference(event.favorite || event.case || event.data);
   if (!reference) return fail("INVALID_CASE_REFERENCE", "收藏案例信息无效");
 
-  const result = await db.runTransaction(async (transaction) => {
-    const existing = await findByReference(
-      transaction,
-      FAVORITE_COLLECTION,
-      openid,
-      reference
-    );
-    if (existing) {
-      return { favorite: existing, created: false, limitReached: false };
-    }
+  const existing = await findByReference(
+    db,
+    FAVORITE_COLLECTION,
+    openid,
+    reference
+  );
+  if (existing) {
+    return ok({ favorite: existing, created: false, limitReached: false });
+  }
 
-    const countResponse = await transaction
-      .collection(FAVORITE_COLLECTION)
-      .where({ _openid: openid })
-      .limit(FAVORITE_LIMIT)
-      .get();
-    if ((countResponse.data || []).length >= FAVORITE_LIMIT) {
-      return { favorite: null, created: false, limitReached: true };
-    }
+  const countResponse = await db
+    .collection(FAVORITE_COLLECTION)
+    .where({ _openid: openid })
+    .limit(FAVORITE_LIMIT)
+    .get();
+  if ((countResponse.data || []).length >= FAVORITE_LIMIT) {
+    return ok({ favorite: null, created: false, limitReached: true });
+  }
 
-    const id = buildLibraryDocumentId("favorites", openid, reference);
-    const storedFavorite = {
-      ...reference,
-      _openid: openid,
-      openid,
-      createdAt: db.serverDate(),
-    };
+  const id = buildLibraryDocumentId("favorites", openid, reference);
+  const storedFavorite = {
+    ...reference,
+    _openid: openid,
+    openid,
+    createdAt: db.serverDate(),
+  };
+  await db.runTransaction(async (transaction) => {
     await transaction.collection(FAVORITE_COLLECTION).doc(id).set({
       data: storedFavorite,
     });
-    const favorite = { _id: id, ...storedFavorite };
-    return { favorite, created: true, limitReached: false };
   });
 
-  return ok(result);
+  return ok({
+    favorite: { _id: id, ...storedFavorite },
+    created: true,
+    limitReached: false,
+  });
 }
 
 async function removeOwnedRecords(collectionName, ids, openid) {
   const requestedIds = normalizeRecordIds(ids);
   if (!requestedIds.length) return 0;
 
-  return db.runTransaction(async (transaction) => {
-    let removedCount = 0;
-    for (const id of requestedIds) {
-      const response = await transaction
+  let removedCount = 0;
+  const batchSize = 8;
+  for (let offset = 0; offset < requestedIds.length; offset += batchSize) {
+    const batch = requestedIds.slice(offset, offset + batchSize);
+    const results = await Promise.all(batch.map((id) => (
+      db
         .collection(collectionName)
         .where({ _id: id, _openid: openid })
-        .limit(1)
-        .get();
-      const record = (response.data || [])[0];
-      if (!record || !record._id) continue;
-      await transaction.collection(collectionName).doc(record._id).remove();
-      removedCount += 1;
-    }
-    return removedCount;
-  });
+        .remove()
+    )));
+    removedCount += results.reduce(
+      (total, result) => total + (Number(result && result.deleted) || 0),
+      0
+    );
+  }
+  return removedCount;
 }
 
 async function clearOwnedRecords(collectionName, openid) {
@@ -119,8 +122,11 @@ async function clearOwnedRecords(collectionName, openid) {
       (response.data || []).map((record) => record._id || record.id)
     );
     if (!ids.length) break;
-    removedCount += await removeOwnedRecords(collectionName, ids, openid);
-    if (ids.length < 100) break;
+    const batchRemoved = await removeOwnedRecords(collectionName, ids, openid);
+    if (!batchRemoved) {
+      throw new Error(`未能清理 ${collectionName} 中当前用户的记录`);
+    }
+    removedCount += batchRemoved;
   }
   return removedCount;
 }
@@ -129,14 +135,14 @@ async function recordHistory(event, openid) {
   const reference = normalizeCaseReference(event.history || event.case || event.data);
   if (!reference) return fail("INVALID_CASE_REFERENCE", "浏览案例信息无效");
 
-  const history = await db.runTransaction(async (transaction) => {
-    const existing = await findByReference(
-      transaction,
-      HISTORY_COLLECTION,
-      openid,
-      reference
-    );
-    if (existing && existing._id) {
+  const existing = await findByReference(
+    db,
+    HISTORY_COLLECTION,
+    openid,
+    reference
+  );
+  if (existing && existing._id) {
+    const history = await db.runTransaction(async (transaction) => {
       await transaction.collection(HISTORY_COLLECTION).doc(existing._id).update({
         data: {
           ...reference,
@@ -151,38 +157,38 @@ async function recordHistory(event, openid) {
         ...reference,
         viewCount: (Number(existing.viewCount) || 0) + 1,
       };
-    }
+    });
+    return ok({ history });
+  }
 
-    const currentResponse = await transaction
-      .collection(HISTORY_COLLECTION)
-      .where({ _openid: openid })
-      .orderBy("lastViewedAt", "desc")
-      .limit(100)
-      .get();
-    const overflow = (currentResponse.data || []).slice(HISTORY_LIMIT - 1);
+  const currentResponse = await db
+    .collection(HISTORY_COLLECTION)
+    .where({ _openid: openid })
+    .orderBy("lastViewedAt", "desc")
+    .limit(100)
+    .get();
+  const overflow = (currentResponse.data || []).slice(HISTORY_LIMIT - 1);
+  const id = buildLibraryDocumentId("history", openid, reference);
+  const storedHistory = {
+    ...reference,
+    _openid: openid,
+    openid,
+    viewCount: 1,
+    createdAt: db.serverDate(),
+    lastViewedAt: db.serverDate(),
+  };
+  await db.runTransaction(async (transaction) => {
     for (const record of overflow) {
       if (record && record._id) {
         await transaction.collection(HISTORY_COLLECTION).doc(record._id).remove();
       }
     }
-
-    const id = buildLibraryDocumentId("history", openid, reference);
-    const storedHistory = {
-      ...reference,
-      _openid: openid,
-      openid,
-      viewCount: 1,
-      createdAt: db.serverDate(),
-      lastViewedAt: db.serverDate(),
-    };
     await transaction.collection(HISTORY_COLLECTION).doc(id).set({
       data: storedHistory,
     });
-    const created = { _id: id, ...storedHistory };
-    return created;
   });
 
-  return ok({ history });
+  return ok({ history: { _id: id, ...storedHistory } });
 }
 
 exports.main = async (event = {}) => {

@@ -351,15 +351,13 @@ Page({
     try {
       await clearFavorites();
       wx.hideLoading();
+      const refreshed = await this.loadFavorites();
+      if (!refreshed || this.data.favoriteCards.length) {
+        throw new Error("收藏仍存在，删除结果未生效");
+      }
       wx.showToast({
         title: "已删除全部收藏",
         icon: "success",
-      });
-      this.setData({
-        manageMode: false,
-        selectedCount: 0,
-        selectedFavoriteIds: [],
-        favoriteCards: [],
       });
     } catch (error) {
       console.error("删除全部收藏失败", error);
@@ -378,7 +376,14 @@ Page({
     try {
       await removeFavoriteRecords(ids);
       wx.hideLoading();
-      await this.loadFavorites();
+      const refreshed = await this.loadFavorites();
+      const requestedIds = new Set((ids || []).filter(Boolean));
+      const hasRemainingFavorite = this.data.favoriteCards.some((card) => (
+        requestedIds.has(card.favoriteId)
+      ));
+      if (!refreshed || hasRemainingFavorite) {
+        throw new Error("收藏仍存在，删除结果未生效");
+      }
       wx.showToast({
         title: "已删除收藏",
         icon: "success",

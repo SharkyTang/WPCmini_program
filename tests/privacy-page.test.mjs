@@ -11,6 +11,7 @@ const pageRoot = resolve(
 );
 const modulePath = resolve(pageRoot, "index.js");
 const wxml = readFileSync(resolve(pageRoot, "index.wxml"), "utf8");
+const wxss = readFileSync(resolve(pageRoot, "index.wxss"), "utf8");
 
 function loadPage(wxMock = {}) {
   let pageConfig;
@@ -49,6 +50,14 @@ await test("privacy page explains collection purposes and deletion path", async 
   assert.equal(wxml.includes("申请删除其他数据"), true);
   assert.equal(wxml.includes('open-type="contact"'), true);
   assert.equal(wxml.includes("原始 OpenID"), true);
+});
+
+await test("privacy contact button centers its label without native button padding", async () => {
+  assert.match(wxss, /\.contact-button\s*\{[^}]*display:\s*flex;/s);
+  assert.match(wxss, /\.contact-button\s*\{[^}]*align-items:\s*center;/s);
+  assert.match(wxss, /\.contact-button\s*\{[^}]*justify-content:\s*center;/s);
+  assert.match(wxss, /\.contact-button\s*\{[^}]*padding:\s*0;/s);
+  assert.match(wxss, /\.contact-button\s*\{[^}]*line-height:\s*1\.2;/s);
 });
 
 await test("privacy data actions only navigate to whitelisted pages", async () => {

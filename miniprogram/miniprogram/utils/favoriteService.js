@@ -196,7 +196,12 @@ async function clearFavorites() {
 
 async function toggleFavorite(caseItem, currentFavorite) {
   if (currentFavorite && currentFavorite._id) {
-    await removeFavorite(currentFavorite._id);
+    const removed = await removeFavorite(currentFavorite._id);
+    if (!removed) {
+      const error = new Error("收藏删除结果未生效");
+      error.code = "FAVORITE_REMOVE_NOT_APPLIED";
+      throw error;
+    }
     return {
       isFavorited: false,
       favorite: null,

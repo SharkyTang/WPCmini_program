@@ -261,3 +261,24 @@ await test("favorite mutations prefer the atomic cloud service when available", 
   ]);
   assert.equal(whereCalls.length, 0);
 });
+
+await test("toggleFavorite keeps the favorite state when cloud deletion removes nothing", async () => {
+  const { service } = loadFavoriteService({}, {
+    userLibraryService: {
+      async callUserLibrary() {
+        return { removedCount: 0 };
+      },
+      isUserLibraryUnavailableError() {
+        return false;
+      },
+    },
+  });
+
+  await assert.rejects(
+    service.toggleFavorite(
+      { id: "doc_atomic", caseId: "case_atomic" },
+      { _id: "fav_atomic" }
+    ),
+    (error) => error && error.code === "FAVORITE_REMOVE_NOT_APPLIED"
+  );
+});

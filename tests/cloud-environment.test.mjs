@@ -45,9 +45,9 @@ test("cloud environments map develop, trial and release through a pure resolver"
   assert.equal(envConfig.resolveCloudEnvironment("release", configured), "cloud-release");
 });
 
-test("develop and release use production while trial stays on staging", () => {
+test("develop, trial and release use the same production environment", () => {
   assert.equal(envConfig.CLOUD_ENVIRONMENT_IDS.develop, envConfig.PRODUCTION_ENV_ID);
-  assert.equal(envConfig.CLOUD_ENVIRONMENT_IDS.trial, envConfig.STAGING_ENV_ID);
+  assert.equal(envConfig.CLOUD_ENVIRONMENT_IDS.trial, envConfig.PRODUCTION_ENV_ID);
   assert.equal(envConfig.CLOUD_ENVIRONMENT_IDS.release, envConfig.PRODUCTION_ENV_ID);
   assert.notEqual(envConfig.STAGING_ENV_ID, envConfig.PRODUCTION_ENV_ID);
 });

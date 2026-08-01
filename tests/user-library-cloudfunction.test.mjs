@@ -70,6 +70,18 @@ function loadUserLibrary(options = {}) {
         }
         return { data: items.slice(0, state.limit).map((item) => ({ ...item })) };
       },
+      async remove() {
+        const removed = recordsByCollection[name].filter((record) =>
+          state.where ? matches(record, state.where) : true
+        );
+        removed.forEach((record) => {
+          calls.removes.push({ name, id: record._id });
+        });
+        recordsByCollection[name] = recordsByCollection[name].filter((record) =>
+          state.where ? !matches(record, state.where) : false
+        );
+        return { deleted: removed.length };
+      },
       doc(id) {
         return {
           async set(payload) {
@@ -118,7 +130,14 @@ function loadUserLibrary(options = {}) {
     collection,
     async runTransaction(callback) {
       calls.transactions += 1;
-      return callback({ collection });
+      return callback({
+        collection(name) {
+          const reference = collection(name);
+          return {
+            doc: reference.doc,
+          };
+        },
+      });
     },
   };
 
@@ -174,7 +193,7 @@ await test("library document ids are stable per user and case", async () => {
   assert.equal(logic.normalizeCaseReference({ caseDocId: "" }), null);
 });
 
-await test("favorite writes use server identity and remain idempotent", async () => {
+await test("favorite writes use server identity and remain sequentially idempotent", async () => {
   const runtime = loadUserLibrary({ openid: "openid_server" });
   const event = {
     action: "addFavorite",
@@ -191,10 +210,10 @@ await test("favorite writes use server identity and remain idempotent", async ()
   assert.equal(runtime.recordsByCollection.favorites.length, 1);
   assert.equal(runtime.recordsByCollection.favorites[0]._openid, "openid_server");
   assert.equal(runtime.recordsByCollection.favorites[0].openid, "openid_server");
-  assert.equal(runtime.calls.transactions, 2);
+  assert.equal(runtime.calls.transactions, 1);
 });
 
-await test("favorite limit is enforced inside the transaction", async () => {
+await test("favorite limit is enforced before the write transaction", async () => {
   const favorites = Array.from({ length: 100 }, (_, index) => ({
     _id: `fav_${index}`,
     _openid: "openid_server",
@@ -268,6 +287,27 @@ await test("record removal cannot delete another user's data", async () => {
   assert.equal(result.removedCount, 1);
   assert.deepEqual(
     runtime.recordsByCollection.favorites.map((record) => record._id),
+    ["theirs"]
+  );
+  assert.equal(runtime.calls.transactions, 0);
+});
+
+await test("clear removes every owned record and leaves other users untouched", async () => {
+  const runtime = loadUserLibrary({
+    recordsByCollection: {
+      browse_history: [
+        { _id: "mine_1", _openid: "openid_server", caseDocId: "doc_1" },
+        { _id: "mine_2", _openid: "openid_server", caseDocId: "doc_2" },
+        { _id: "theirs", _openid: "openid_other", caseDocId: "doc_3" },
+      ],
+    },
+  });
+
+  const result = await runtime.main({ action: "clearHistory" });
+
+  assert.equal(result.removedCount, 2);
+  assert.deepEqual(
+    runtime.recordsByCollection.browse_history.map((record) => record._id),
     ["theirs"]
   );
 });

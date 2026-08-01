@@ -31,15 +31,15 @@ function loadCollectionPage(kind, serviceOverrides = {}, accessOverrides = {}) {
     : "../../utils/historyService";
   const service = kind === "favorites"
     ? {
-      clearFavorites: async () => {},
+      clearFavorites: async () => 0,
       fetchFavoriteCases: async () => [],
-      removeFavoriteRecords: async () => {},
+      removeFavoriteRecords: async () => 0,
       ...serviceOverrides,
     }
     : {
-      clearHistory: async () => {},
+      clearHistory: async () => 0,
       fetchHistoryCases: async () => [],
-      removeHistoryRecords: async () => {},
+      removeHistoryRecords: async () => 0,
       ...serviceOverrides,
     };
   const nativeLoadingEvents = [];
@@ -223,6 +223,7 @@ await test("cancelling favorite deletion does not call the service", async () =>
   const page = loadCollectionPage("favorites", {
     removeFavoriteRecords: async () => {
       removeCalls += 1;
+      return 1;
     },
   });
   page.setData({
@@ -235,7 +236,10 @@ await test("cancelling favorite deletion does not call the service", async () =>
   assert.equal(removeCalls, 0);
 
   page.cancelSelectedFavorites();
-  page.loadFavorites = async () => {};
+  page.loadFavorites = async () => {
+    page.setData({ favoriteCards: [] });
+    return true;
+  };
   await page.handleConfirmDialogTap({ detail: { index: 1 } });
   assert.equal(removeCalls, 1);
 });
@@ -245,6 +249,7 @@ await test("cancelling history deletion does not call the service", async () => 
   const page = loadCollectionPage("history", {
     removeHistoryRecords: async () => {
       removeCalls += 1;
+      return 1;
     },
   });
   page.setData({
@@ -257,9 +262,56 @@ await test("cancelling history deletion does not call the service", async () => 
   assert.equal(removeCalls, 0);
 
   page.deleteSelectedHistory();
-  page.loadHistory = async () => {};
+  page.loadHistory = async () => {
+    page.setData({ historyCards: [] });
+    return true;
+  };
   await page.handleConfirmDialogTap({ detail: { index: 1 } });
   assert.equal(removeCalls, 1);
+});
+
+await test("collection pages do not report success when requested records still exist", async () => {
+  const favoritePage = loadCollectionPage("favorites", {
+    removeFavoriteRecords: async () => 0,
+  });
+  favoritePage.setData({
+    favoriteCards: [{ favoriteId: "favorite_1" }],
+  });
+  favoritePage.loadFavorites = async () => true;
+  await favoritePage.removeFavoriteIds(["favorite_1"]);
+  assert.equal(favoritePage.__toastCalls.at(-1).title, "删除失败，请稍后重试");
+
+  const historyPage = loadCollectionPage("history", {
+    removeHistoryRecords: async () => 0,
+  });
+  historyPage.setData({
+    historyCards: [{ historyId: "history_1" }],
+  });
+  historyPage.loadHistory = async () => true;
+  await historyPage.removeHistoryIds(["history_1"]);
+  assert.equal(historyPage.__toastCalls.at(-1).title, "删除失败，请稍后重试");
+});
+
+await test("collection pages verify the server is empty before reporting clear success", async () => {
+  const favoritePage = loadCollectionPage("favorites", {
+    clearFavorites: async () => 0,
+  });
+  favoritePage.setData({
+    favoriteCards: [{ favoriteId: "favorite_1" }],
+  });
+  favoritePage.loadFavorites = async () => true;
+  await favoritePage.performClearAllFavorites();
+  assert.equal(favoritePage.__toastCalls.at(-1).title, "删除失败，请稍后重试");
+
+  const historyPage = loadCollectionPage("history", {
+    clearHistory: async () => 0,
+  });
+  historyPage.setData({
+    historyCards: [{ historyId: "history_1" }],
+  });
+  historyPage.loadHistory = async () => true;
+  await historyPage.performClearAllHistory();
+  assert.equal(historyPage.__toastCalls.at(-1).title, "清空失败，请稍后重试");
 });
 
 await test("collection pages distinguish profile requirements and identity errors from empty data", async () => {
