@@ -567,7 +567,12 @@ export function CasesPage() {
                     onClick={() => navigate(`/cases/${item._id}/edit`)}
                   >
                     {item.coverImageUrl ? (
-                      <img src={item.coverImageUrl} alt={item.title} />
+                      <img
+                        src={item.coverImageUrl}
+                        alt={item.title}
+                        loading="lazy"
+                        decoding="async"
+                      />
                     ) : (
                       <span>暂无图片</span>
                     )}

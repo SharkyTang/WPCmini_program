@@ -1,20 +1,47 @@
 import { ConfigProvider, Result, Spin } from "antd";
 import zhCN from "antd/locale/zh_CN";
+import { lazy, Suspense, type ReactNode } from "react";
 import {
   createHashRouter,
   Navigate,
   Outlet,
   RouterProvider,
 } from "react-router-dom";
-import { AdminLayout } from "./components/AdminLayout";
 import { AdminConfigProvider } from "./context/AdminConfigContext";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { BRAND } from "./constants";
-import { CasesPage } from "./pages/CasesPage";
-import { HomepagePage } from "./pages/HomepagePage";
-import { LoginPage } from "./pages/LoginPage";
-import { TrashPage } from "./pages/TrashPage";
-import { UploadPage } from "./pages/UploadPage";
+
+const AdminLayout = lazy(() =>
+  import("./components/AdminLayout").then(({ AdminLayout }) => ({ default: AdminLayout })),
+);
+const CasesPage = lazy(() =>
+  import("./pages/CasesPage").then(({ CasesPage }) => ({ default: CasesPage })),
+);
+const HomepagePage = lazy(() =>
+  import("./pages/HomepagePage").then(({ HomepagePage }) => ({ default: HomepagePage })),
+);
+const LoginPage = lazy(() =>
+  import("./pages/LoginPage").then(({ LoginPage }) => ({ default: LoginPage })),
+);
+const TrashPage = lazy(() =>
+  import("./pages/TrashPage").then(({ TrashPage }) => ({ default: TrashPage })),
+);
+const UploadPage = lazy(() =>
+  import("./pages/UploadPage").then(({ UploadPage }) => ({ default: UploadPage })),
+);
+
+function RouteLoading() {
+  return (
+    <div className="app-bootstrap" role="status" aria-live="polite">
+      <Spin size="large" />
+      <span>页面加载中…</span>
+    </div>
+  );
+}
+
+function RouteSuspense({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<RouteLoading />}>{children}</Suspense>;
+}
 
 function ProtectedApp() {
   const { session, loading } = useAuth();
@@ -43,7 +70,13 @@ function LoginRoute() {
       </div>
     );
   }
-  return session ? <Navigate to="/cases" replace /> : <LoginPage />;
+  return session ? (
+    <Navigate to="/cases" replace />
+  ) : (
+    <RouteSuspense>
+      <LoginPage />
+    </RouteSuspense>
+  );
 }
 
 export default function App() {
@@ -104,13 +137,52 @@ const router = createHashRouter([
     element: <ProtectedApp />,
     children: [
       {
-        element: <AdminLayout />,
+        element: (
+          <RouteSuspense>
+            <AdminLayout />
+          </RouteSuspense>
+        ),
         children: [
-          { path: "/cases", element: <CasesPage /> },
-          { path: "/cases/upload", element: <UploadPage /> },
-          { path: "/cases/:id/edit", element: <CasesPage /> },
-          { path: "/homepage", element: <HomepagePage /> },
-          { path: "/trash", element: <TrashPage /> },
+          {
+            path: "/cases",
+            element: (
+              <RouteSuspense>
+                <CasesPage />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "/cases/upload",
+            element: (
+              <RouteSuspense>
+                <UploadPage />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "/cases/:id/edit",
+            element: (
+              <RouteSuspense>
+                <CasesPage />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "/homepage",
+            element: (
+              <RouteSuspense>
+                <HomepagePage />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "/trash",
+            element: (
+              <RouteSuspense>
+                <TrashPage />
+              </RouteSuspense>
+            ),
+          },
         ],
       },
     ],

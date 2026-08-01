@@ -1400,6 +1400,8 @@ code {
   min-height: 102px;
   padding: 12px 22px;
   border-bottom: 1px solid #eee4d8;
+  content-visibility: auto;
+  contain-intrinsic-size: 102px;
 }
 
 .queue-item:hover {

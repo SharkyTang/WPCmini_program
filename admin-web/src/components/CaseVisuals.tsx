@@ -24,6 +24,8 @@ export function CaseImage({
       height={size}
       src={item.coverImageUrl}
       alt={item.title}
+      loading="lazy"
+      decoding="async"
       preview={{ mask: "预览" }}
       fallback=""
     />
