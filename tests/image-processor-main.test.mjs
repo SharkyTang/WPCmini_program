@@ -26,7 +26,7 @@ function loadMain(options = {}) {
     DYNAMIC_CURRENT_ENV: Symbol("DYNAMIC_CURRENT_ENV"),
     init() {},
     getWXContext() {
-      return { OPENID: "admin_1" };
+      return { OPENID: options.openid || "admin_1" };
     },
     async downloadFile() {
       return { fileContent: Buffer.from("source") };
@@ -52,7 +52,12 @@ function loadMain(options = {}) {
     exports: exported,
     process: {
       env: {
-        ADMIN_OPENIDS: "admin_1",
+        ADMIN_OPENIDS: options.adminOpenids === undefined
+          ? "admin_1"
+          : options.adminOpenids,
+        CASE_ADMIN_OPENIDS: options.caseAdminOpenids === undefined
+          ? ""
+          : options.caseAdminOpenids,
       },
     },
     require(moduleName) {
@@ -109,6 +114,28 @@ await test("unknown actions do not load the image dependency", async () => {
 
   assert.equal(result.ok, false);
   assert.equal(result.code, "UNKNOWN_ACTION");
+});
+
+await test("image processing uses CASE_ADMIN_OPENIDS with a general fallback", async () => {
+  const roleAdmin = loadMain({
+    openid: "case_admin",
+    caseAdminOpenids: " case_admin ",
+    adminOpenids: "general_admin",
+  });
+  const excludedGeneralAdmin = loadMain({
+    openid: "general_admin",
+    caseAdminOpenids: "case_admin",
+    adminOpenids: "general_admin",
+  });
+  const fallbackAdmin = loadMain({
+    openid: "general_admin",
+    caseAdminOpenids: "   ",
+    adminOpenids: " general_admin ",
+  });
+
+  assert.equal((await roleAdmin({ action: "probe" })).code, "UNKNOWN_ACTION");
+  assert.equal((await excludedGeneralAdmin({ action: "probe" })).code, "FORBIDDEN");
+  assert.equal((await fallbackAdmin({ action: "probe" })).code, "UNKNOWN_ACTION");
 });
 
 await test("health checks return a structured image dependency error", async () => {

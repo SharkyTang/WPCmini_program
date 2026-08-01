@@ -38,6 +38,10 @@ const inquiryPagePath = resolve(
   __dirname,
   "../miniprogram/miniprogram/pages/inquiry/index.js"
 );
+const inquiryServicePath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/inquiry/utils/inquiryService.js"
+);
 const inquiryJsonPath = resolve(
   __dirname,
   "../miniprogram/miniprogram/pages/inquiry/index.json"
@@ -45,18 +49,33 @@ const inquiryJsonPath = resolve(
 const inquiryData = loadCommonJsModule(inquiryDataPath, {
   "../../../utils/caseData": caseData,
 });
+const inquiryService = loadCommonJsModule(inquiryServicePath, {
+  "./inquiryData": inquiryData,
+  "../../../utils/userDataService": { callUserData() {} },
+});
 
 const {
+  CONTACT_TYPES,
   buildInquiryDraftFromCase,
   buildInquiryRecord,
   normalizeInquiryDraft,
   validateInquiryDraft,
 } = inquiryData;
+const { normalizeSystemInfo: normalizeInquirySystemInfo } = inquiryService;
 
-function loadInquiryPageConfig() {
+function loadInquiryPageConfig(options = {}) {
   let pageConfig;
+  const calls = options.calls || {
+    submissions: [],
+    toastMessages: [],
+    navigations: [],
+  };
   const source = readFileSync(inquiryPagePath, "utf8");
   const sandbox = {
+    console,
+    setTimeout() {
+      return 1;
+    },
     Page(config) {
       pageConfig = config;
     },
@@ -71,17 +90,58 @@ function loadInquiryPageConfig() {
       if (moduleName === "./utils/inquiryData") return inquiryData;
       if (moduleName === "./utils/inquiryService") {
         return {
-          submitInquiry() {
-            throw new Error("submitInquiry should not run while loading the page");
+          async submitInquiry(data, context) {
+            calls.submissions.push({ data: plain(data), context: plain(context) });
+            if (options.submitError) throw options.submitError;
           },
         };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
+    wx: {
+      showToast(toastOptions = {}) {
+        calls.toastMessages.push(toastOptions.title || "");
+      },
+      navigateTo(navigationOptions = {}) {
+        calls.navigations.push(navigationOptions.url || "");
+      },
+      navigateBack() {},
+      switchTab() {},
+    },
   };
 
   vm.runInNewContext(source, sandbox, { filename: inquiryPagePath });
   return pageConfig;
+}
+
+function loadInquiryPage(options = {}) {
+  const calls = {
+    submissions: [],
+    toastMessages: [],
+    navigations: [],
+  };
+  const pageConfig = loadInquiryPageConfig({ ...options, calls });
+  const page = {
+    data: plain(pageConfig.data),
+    setData(patch) {
+      Object.entries(patch).forEach(([key, value]) => {
+        if (!key.includes(".")) {
+          this.data[key] = value;
+          return;
+        }
+        const parts = key.split(".");
+        let target = this.data;
+        parts.slice(0, -1).forEach((part) => {
+          target = target[part];
+        });
+        target[parts[parts.length - 1]] = value;
+      });
+    },
+  };
+  Object.entries(pageConfig).forEach(([key, value]) => {
+    if (typeof value === "function") page[key] = value.bind(page);
+  });
+  return { page, calls };
 }
 
 function test(name, fn) {
@@ -111,6 +171,7 @@ test("normalizes inquiry draft text and array fields", () => {
     scenes: "送礼",
     content: "  想做一套礼盒包装  ",
     contact: "  wx-test  ",
+    contactType: " WECHAT ",
   });
 
   assert.deepEqual(plain(draft), {
@@ -125,6 +186,7 @@ test("normalizes inquiry draft text and array fields", () => {
     scenes: ["送礼"],
     content: "想做一套礼盒包装",
     contact: "wx-test",
+    contactType: "wechat",
   });
 });
 
@@ -143,6 +205,7 @@ test("validates required package types, content, and contact", () => {
       packageTypes: ["礼盒"],
       content: "想做一套礼盒包装",
       contact: "wx-test",
+      contactType: "wechat",
     }).valid,
     true
   );
@@ -157,6 +220,14 @@ test("inquiry page uses WeUI top tips and sectioned form layout", () => {
   assert.equal(wxml.includes("包装方向"), true);
   assert.equal(wxml.includes("需求说明"), true);
   assert.equal(wxml.includes("联系信息"), true);
+  assert.equal(wxml.includes("仅用于就本次需求联系你"), true);
+  assert.match(wxml, /bindtap="openPrivacyNotice"/);
+});
+
+test("inquiry privacy hint opens the privacy notice", () => {
+  const { page, calls } = loadInquiryPage();
+  page.openPrivacyNotice();
+  assert.deepEqual(calls.navigations, ["/pages/privacy/index"]);
 });
 
 test("inquiry contact picker keeps the required order and defaults to WeChat", () => {
@@ -167,6 +238,7 @@ test("inquiry contact picker keeps the required order and defaults to WeChat", (
   assert.equal(pageConfig.data.contactTypeIndex, 0);
   assert.equal(pageConfig.data.selectedContactType, "微信号");
   assert.equal(pageConfig.data.contactPlaceholder, "请输入微信号");
+  assert.equal(pageConfig.data.draft.contactType, "wechat");
   assert.equal(wxml.includes('mode="selector"'), true);
   assert.equal(wxml.includes('range="{{contactTypes}}"'), true);
   assert.equal(wxml.includes('bindchange="changeContactType"'), true);
@@ -188,18 +260,107 @@ test("changing inquiry contact type updates its UI without clearing the value", 
       Object.assign(this.data, nextData);
     },
   };
+  page.updateDraft = pageConfig.updateDraft.bind(page);
 
   pageConfig.changeContactType.call(page, { detail: { value: "1" } });
   assert.equal(page.data.contactTypeIndex, 1);
   assert.equal(page.data.selectedContactType, "手机号");
   assert.equal(page.data.contactPlaceholder, "请输入手机号");
   assert.equal(page.data.draft.contact, "existing-contact");
+  assert.equal(page.data.draft.contactType, "phone");
 
   pageConfig.changeContactType.call(page, { detail: { value: "2" } });
   assert.equal(page.data.contactTypeIndex, 2);
   assert.equal(page.data.selectedContactType, "邮箱");
   assert.equal(page.data.contactPlaceholder, "请输入邮箱");
   assert.equal(page.data.draft.contact, "existing-contact");
+  assert.equal(page.data.draft.contactType, "email");
+});
+
+test("validates whitelisted inquiry contact types without breaking legacy drafts", () => {
+  const base = {
+    packageTypes: ["礼盒"],
+    content: "想做一套礼盒包装",
+  };
+  assert.equal(validateInquiryDraft({ ...base, contact: "legacy-contact" }).valid, true);
+  assert.equal(
+    validateInquiryDraft({ ...base, contact: "wx-user", contactType: CONTACT_TYPES.WECHAT }).valid,
+    true
+  );
+  assert.equal(
+    validateInquiryDraft({ ...base, contact: "138 0013 8000", contactType: CONTACT_TYPES.PHONE }).valid,
+    true
+  );
+  assert.equal(
+    validateInquiryDraft({ ...base, contact: "12345", contactType: CONTACT_TYPES.PHONE }).message,
+    "请输入正确的手机号"
+  );
+  assert.equal(
+    validateInquiryDraft({ ...base, contact: "user@example.com", contactType: CONTACT_TYPES.EMAIL }).valid,
+    true
+  );
+  assert.equal(
+    validateInquiryDraft({ ...base, contact: "user@invalid", contactType: CONTACT_TYPES.EMAIL }).message,
+    "请输入正确的邮箱"
+  );
+  assert.equal(
+    validateInquiryDraft({ ...base, contact: "value", contactType: "sms" }).message,
+    "联系方式类型无效"
+  );
+});
+
+async function asyncTest(name, fn) {
+  try {
+    await fn();
+    console.log(`ok - ${name}`);
+  } catch (error) {
+    console.error(`not ok - ${name}`);
+    throw error;
+  }
+}
+
+await asyncTest("inquiry validation and submit failures use one error surface", async () => {
+  const invalid = loadInquiryPage();
+  invalid.page.updateDraft({
+    ...invalid.page.data.draft,
+    packageTypes: ["礼盒"],
+    content: "太短",
+    contact: "wx-user",
+  });
+  await invalid.page.submitForm();
+  assert.equal(invalid.page.data.topTips.message, "请至少填写 5 个字");
+  assert.deepEqual(invalid.calls.toastMessages, []);
+  assert.equal(invalid.calls.submissions.length, 0);
+
+  const failed = loadInquiryPage({ submitError: new Error("network") });
+  failed.page.updateDraft({
+    ...failed.page.data.draft,
+    packageTypes: ["礼盒"],
+    content: "想做一套礼盒包装",
+    contact: "wx-user",
+  });
+  await failed.page.submitForm();
+  assert.equal(failed.page.data.topTips.message, "提交失败，请稍后重试");
+  assert.deepEqual(failed.calls.toastMessages, []);
+});
+
+test("minimizes inquiry system information before upload", () => {
+  assert.deepEqual(
+    plain(normalizeInquirySystemInfo({
+      brand: "Apple",
+      model: "iPhone",
+      platform: "ios",
+      system: "iOS 19",
+      version: "8.0.60",
+      SDKVersion: "3.10.0",
+    })),
+    {
+      platform: "ios",
+      system: "iOS 19",
+      version: "8.0.60",
+      SDKVersion: "3.10.0",
+    }
+  );
 });
 
 test("validates maximum inquiry content and contact length", () => {
@@ -245,6 +406,7 @@ test("builds default inquiry draft from case item", () => {
     scenes: ["送礼"],
     content: "",
     contact: "",
+    contactType: "",
   });
 });
 
@@ -262,6 +424,7 @@ test("builds inquiry record with defaults and context", () => {
       scenes: ["送礼"],
       content: "想做一套类似包装",
       contact: "wx-test",
+      contactType: "wechat",
     },
     {
       sourcePage: "pages/detail/index",
@@ -283,6 +446,7 @@ test("builds inquiry record with defaults and context", () => {
     scenes: ["送礼"],
     content: "想做一套类似包装",
     contact: "wx-test",
+    contactType: "wechat",
     sourcePage: "pages/detail/index",
     route: "pages/inquiry/index",
     openid: "openid_1",

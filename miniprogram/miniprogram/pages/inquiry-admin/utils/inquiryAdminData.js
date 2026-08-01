@@ -27,6 +27,12 @@ const SOURCE_LABELS = {
   detail: "案例详情",
 };
 
+const CONTACT_TYPE_LABELS = {
+  wechat: "微信号",
+  phone: "手机号",
+  email: "邮箱",
+};
+
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -52,6 +58,20 @@ function normalizeInquiryKeyword(keyword) {
 
 function normalizeAdminNote(note) {
   return trimText(note);
+}
+
+function normalizeContactType(value) {
+  const contactType = trimText(value).toLowerCase();
+  return CONTACT_TYPE_LABELS[contactType] ? contactType : "";
+}
+
+function getContactTypeLabel(value) {
+  return CONTACT_TYPE_LABELS[normalizeContactType(value)] || "类型未标注";
+}
+
+function getContactCopyLabel(value) {
+  const label = CONTACT_TYPE_LABELS[normalizeContactType(value)];
+  return label ? `复制${label}` : "复制联系方式";
 }
 
 function validateAdminNote(note) {
@@ -110,6 +130,7 @@ function normalizeInquiryAdminItem(item) {
   const styles = normalizeStringList(source.styles);
   const scenes = normalizeStringList(source.scenes);
   const content = trimText(source.content);
+  const contactType = normalizeContactType(source.contactType);
 
   return {
     id: trimText(source._id || source.id),
@@ -129,6 +150,9 @@ function normalizeInquiryAdminItem(item) {
     content,
     contentPreview: truncateText(content),
     contact: trimText(source.contact),
+    contactType,
+    contactTypeLabel: getContactTypeLabel(contactType),
+    contactCopyLabel: getContactCopyLabel(contactType),
     openid: trimText(source.openid),
     status,
     statusLabel: getInquiryStatusLabel(status),
@@ -143,13 +167,17 @@ function normalizeInquiryAdminItem(item) {
 
 module.exports = {
   ADMIN_NOTE_MAX_LENGTH,
+  CONTACT_TYPE_LABELS,
   DEFAULT_INQUIRY_STATUS,
   INQUIRY_FILTER_OPTIONS,
   INQUIRY_STATUS_OPTIONS,
   INQUIRY_STATUS_LABELS,
   formatDateTime,
+  getContactCopyLabel,
+  getContactTypeLabel,
   getInquiryStatusLabel,
   normalizeAdminNote,
+  normalizeContactType,
   normalizeInquiryAdminItem,
   normalizeInquiryKeyword,
   normalizeInquiryStatus,

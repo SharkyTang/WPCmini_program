@@ -46,6 +46,19 @@ function loadFavoriteService(recordsByCondition = {}, options = {}) {
             }),
         };
       }
+      if (path === "./userLibraryService") {
+        if (options.userLibraryService) return options.userLibraryService;
+        return {
+          async callUserLibrary() {
+            const error = new Error("function not found");
+            error.code = "FUNCTION_NOT_FOUND";
+            throw error;
+          },
+          isUserLibraryUnavailableError(error) {
+            return error && error.code === "FUNCTION_NOT_FOUND";
+          },
+        };
+      }
       if (path === "./libraryAccessService") {
         if (options.libraryAccessService) return options.libraryAccessService;
         return {
@@ -206,4 +219,45 @@ await test("openid build flag supports favorite query, add, and delete without a
   assert.deepEqual(plain(removedIds), ["fav_1"]);
   assert.equal(access.profileChecks, 0);
   assert.equal(access.openidChecks > 0, true);
+});
+
+await test("favorite mutations prefer the atomic cloud service when available", async () => {
+  const calls = [];
+  const { service, whereCalls } = loadFavoriteService({}, {
+    userLibraryService: {
+      async callUserLibrary(action, payload = {}) {
+        calls.push({ action, payload });
+        if (action === "addFavorite") {
+          return {
+            favorite: {
+              _id: "fav_atomic",
+              caseDocId: payload.favorite.caseDocId,
+              caseId: payload.favorite.caseId,
+            },
+          };
+        }
+        return { removedCount: 1 };
+      },
+      isUserLibraryUnavailableError() {
+        return false;
+      },
+    },
+  });
+
+  const added = await service.addFavorite({ id: "doc_atomic", caseId: "case_atomic" });
+  const removed = await service.removeFavorite("fav_atomic");
+
+  assert.equal(added._id, "fav_atomic");
+  assert.equal(removed, true);
+  assert.deepEqual(plain(calls), [
+    {
+      action: "addFavorite",
+      payload: { favorite: { caseDocId: "doc_atomic", caseId: "case_atomic" } },
+    },
+    {
+      action: "removeFavorites",
+      payload: { ids: ["fav_atomic"] },
+    },
+  ]);
+  assert.equal(whereCalls.length, 0);
 });

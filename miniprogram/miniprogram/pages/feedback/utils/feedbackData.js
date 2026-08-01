@@ -13,23 +13,47 @@ const FEEDBACK_TYPE_LABELS = FEEDBACK_TYPES.reduce((labels, item) => {
 const CONTENT_MIN_LENGTH = 5;
 const CONTENT_MAX_LENGTH = 800;
 const CONTACT_MAX_LENGTH = 120;
+const CONTACT_TYPES = Object.freeze({
+  WECHAT: "wechat",
+  PHONE: "phone",
+  EMAIL: "email",
+});
+const CONTACT_TYPE_VALUES = Object.freeze(Object.values(CONTACT_TYPES));
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeContactType(value) {
+  const contactType = trimText(value).toLowerCase();
+  return CONTACT_TYPE_VALUES.includes(contactType) ? contactType : "";
+}
+
+function isValidPhone(value) {
+  const phone = trimText(value).replace(/[\s-]/g, "");
+  return /^(?:\+?86)?1[3-9]\d{9}$/.test(phone);
+}
+
+function isValidEmail(value) {
+  const email = trimText(value);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
 function normalizeFeedbackDraft(draft = {}) {
   const type = trimText(draft.type);
+  const contact = trimText(draft.contact);
   return {
     type,
     typeLabel: FEEDBACK_TYPE_LABELS[type] || "",
     content: trimText(draft.content),
-    contact: trimText(draft.contact),
+    contact,
+    contactType: contact ? normalizeContactType(draft.contactType) : "",
   };
 }
 
 function validateFeedbackDraft(draft = {}) {
   const normalized = normalizeFeedbackDraft(draft);
+  const rawContactType = trimText(draft.contactType).toLowerCase();
 
   if (!normalized.type || !FEEDBACK_TYPE_LABELS[normalized.type]) {
     return {
@@ -59,6 +83,27 @@ function validateFeedbackDraft(draft = {}) {
     };
   }
 
+  if (normalized.contact && rawContactType && !normalized.contactType) {
+    return {
+      valid: false,
+      message: "联系方式类型无效",
+    };
+  }
+
+  if (normalized.contactType === CONTACT_TYPES.PHONE && !isValidPhone(normalized.contact)) {
+    return {
+      valid: false,
+      message: "请输入正确的手机号",
+    };
+  }
+
+  if (normalized.contactType === CONTACT_TYPES.EMAIL && !isValidEmail(normalized.contact)) {
+    return {
+      valid: false,
+      message: "请输入正确的邮箱",
+    };
+  }
+
   return {
     valid: true,
     message: "",
@@ -73,6 +118,7 @@ function buildFeedbackRecord(draft = {}, context = {}) {
     typeLabel: normalized.typeLabel,
     content: normalized.content,
     contact: normalized.contact,
+    contactType: normalized.contactType,
     sourcePage: trimText(context.sourcePage),
     route: trimText(context.route),
     openid: trimText(context.openid),
@@ -89,7 +135,12 @@ module.exports = {
   CONTENT_MIN_LENGTH,
   CONTENT_MAX_LENGTH,
   CONTACT_MAX_LENGTH,
+  CONTACT_TYPES,
+  CONTACT_TYPE_VALUES,
   buildFeedbackRecord,
+  isValidEmail,
+  isValidPhone,
+  normalizeContactType,
   normalizeFeedbackDraft,
   validateFeedbackDraft,
 };

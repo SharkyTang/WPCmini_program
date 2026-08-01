@@ -23,8 +23,16 @@ function parseOpenidSet(value) {
   );
 }
 
+function resolveAdminOpenidsEnv(roleValue, fallbackValue) {
+  return trimText(roleValue) || trimText(fallbackValue);
+}
+
 function isAdminOpenid(openid, envValue) {
   return Boolean(openid && parseOpenidSet(envValue).has(openid));
+}
+
+function isRoleAdminOpenid(openid, roleValue, fallbackValue) {
+  return isAdminOpenid(openid, resolveAdminOpenidsEnv(roleValue, fallbackValue));
 }
 
 function isCloudFileId(value) {
@@ -172,6 +180,8 @@ module.exports = {
   buildVariantPaths,
   generateVariantBuffers,
   isAdminOpenid,
+  isRoleAdminOpenid,
   normalizeSourceFiles,
+  resolveAdminOpenidsEnv,
   trimText,
 };

@@ -139,7 +139,12 @@ function loadNotificationAdmin(options = {}) {
     console,
     process: {
       env: {
-        ADMIN_OPENIDS: options.adminOpenids || "admin_openid",
+        ADMIN_OPENIDS: options.adminOpenids === undefined
+          ? "admin_openid"
+          : options.adminOpenids,
+        NOTIFICATION_ADMIN_OPENIDS: options.notificationAdminOpenids === undefined
+          ? ""
+          : options.notificationAdminOpenids,
       },
     },
     require(moduleName) {
@@ -269,6 +274,37 @@ await test("non admins cannot create announcements", async () => {
   });
   assert.equal(result.code, "FORBIDDEN");
   assert.equal(collections.app_notifications.length, 0);
+});
+
+await test("notification role overrides the general admin fallback", async () => {
+  const roleAdmin = loadNotificationAdmin({
+    openid: "notification_admin",
+    notificationAdminOpenids: " notification_admin ",
+    adminOpenids: "general_admin",
+  });
+  const excludedGeneralAdmin = loadNotificationAdmin({
+    openid: "general_admin",
+    notificationAdminOpenids: "notification_admin",
+    adminOpenids: "general_admin",
+  });
+  const fallbackAdmin = loadNotificationAdmin({
+    openid: "general_admin",
+    notificationAdminOpenids: "   ",
+    adminOpenids: " general_admin ",
+  });
+
+  assert.deepEqual(clone(await roleAdmin.main({ action: "checkAccess" })), {
+    ok: true,
+    isAdmin: true,
+  });
+  assert.deepEqual(clone(await excludedGeneralAdmin.main({ action: "checkAccess" })), {
+    ok: true,
+    isAdmin: false,
+  });
+  assert.deepEqual(clone(await fallbackAdmin.main({ action: "checkAccess" })), {
+    ok: true,
+    isAdmin: true,
+  });
 });
 
 await test("creating a notification stores a hidden draft", async () => {

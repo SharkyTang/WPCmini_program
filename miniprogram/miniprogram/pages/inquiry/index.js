@@ -16,14 +16,17 @@ const SOURCE_PAGE_MAP = {
 
 const CONTACT_TYPE_OPTIONS = [
   {
+    value: "wechat",
     label: "微信号",
     placeholder: "请输入微信号",
   },
   {
+    value: "phone",
     label: "手机号",
     placeholder: "请输入手机号",
   },
   {
+    value: "email",
     label: "邮箱",
     placeholder: "请输入邮箱",
   },
@@ -64,10 +67,12 @@ Page({
     draft: normalizeInquiryDraft({
       source: "profile",
       wineType: "白酒",
+      contactType: CONTACT_TYPE_OPTIONS[0].value,
     }),
     optionGroups: buildOptionGroups({
       source: "profile",
       wineType: "白酒",
+      contactType: CONTACT_TYPE_OPTIONS[0].value,
     }),
     contentMaxLength: CONTENT_MAX_LENGTH,
     contactMaxLength: CONTACT_MAX_LENGTH,
@@ -119,6 +124,7 @@ Page({
         source: "detail",
         content: this.data.draft.content,
         contact: this.data.draft.contact,
+        contactType: this.data.draft.contactType,
       });
     } catch (error) {
       console.warn("需求页案例读取失败", error);
@@ -179,10 +185,15 @@ Page({
       ? nextIndex
       : 0;
 
+    const selectedOption = CONTACT_TYPE_OPTIONS[validIndex];
     this.setData({
       contactTypeIndex: validIndex,
-      selectedContactType: CONTACT_TYPE_OPTIONS[validIndex].label,
-      contactPlaceholder: CONTACT_TYPE_OPTIONS[validIndex].placeholder,
+      selectedContactType: selectedOption.label,
+      contactPlaceholder: selectedOption.placeholder,
+    });
+    this.updateDraft({
+      ...this.data.draft,
+      contactType: selectedOption.value,
     });
   },
 
@@ -202,16 +213,18 @@ Page({
     });
   },
 
+  openPrivacyNotice() {
+    wx.navigateTo({
+      url: "/pages/privacy/index",
+    });
+  },
+
   async submitForm() {
     if (this.data.submitting) return;
 
     const validation = validateInquiryDraft(this.data.draft);
     if (!validation.valid) {
       this.showTopTips(validation.message);
-      wx.showToast({
-        title: validation.message,
-        icon: "none",
-      });
       return;
     }
 
@@ -242,10 +255,6 @@ Page({
     } catch (error) {
       console.error("需求提交失败", error);
       this.showTopTips(error.code === "INVALID_INQUIRY" ? error.message : "提交失败，请稍后重试");
-      wx.showToast({
-        title: error.code === "INVALID_INQUIRY" ? error.message : "提交失败，请稍后重试",
-        icon: "none",
-      });
     } finally {
       this.setData({
         submitting: false,

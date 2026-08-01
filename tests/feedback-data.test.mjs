@@ -25,6 +25,10 @@ const feedbackJsonPath = resolve(
   __dirname,
   "../miniprogram/miniprogram/pages/feedback/index.json"
 );
+const feedbackServicePath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/feedback/utils/feedbackService.js"
+);
 const source = readFileSync(modulePath, "utf8");
 const sandbox = {
   module: { exports: {} },
@@ -33,13 +37,29 @@ const sandbox = {
 sandbox.exports = sandbox.module.exports;
 vm.runInNewContext(source, sandbox, { filename: modulePath });
 
+const serviceSandbox = {
+  module: { exports: {} },
+  exports: {},
+  require(request) {
+    if (request === "./feedbackData") return sandbox.module.exports;
+    if (request === "../../../utils/userDataService") return { callUserData() {} };
+    throw new Error(`Unexpected require: ${request}`);
+  },
+};
+serviceSandbox.exports = serviceSandbox.module.exports;
+vm.runInNewContext(readFileSync(feedbackServicePath, "utf8"), serviceSandbox, {
+  filename: feedbackServicePath,
+});
+
 const {
+  CONTACT_TYPES,
   CONTENT_MAX_LENGTH,
   FEEDBACK_TYPES,
   buildFeedbackRecord,
   normalizeFeedbackDraft,
   validateFeedbackDraft,
 } = sandbox.module.exports;
+const { normalizeSystemInfo: normalizeFeedbackSystemInfo } = serviceSandbox.module.exports;
 
 function test(name, fn) {
   try {
@@ -55,11 +75,13 @@ function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function loadFeedbackPage() {
+function loadFeedbackPage(options = {}) {
   let pageConfig;
   const calls = {
     validationDrafts: [],
     submissions: [],
+    toastMessages: [],
+    navigations: [],
   };
   const pageSource = readFileSync(feedbackPageJsPath, "utf8");
   const pageSandbox = {
@@ -85,6 +107,7 @@ function loadFeedbackPage() {
               data: plain(data),
               context: plain(context),
             });
+            if (options.submitError) throw options.submitError;
           },
         };
       }
@@ -94,7 +117,12 @@ function loadFeedbackPage() {
       pageConfig = config;
     },
     wx: {
-      showToast() {},
+      showToast(toastOptions = {}) {
+        calls.toastMessages.push(toastOptions.title || "");
+      },
+      navigateTo(navigationOptions = {}) {
+        calls.navigations.push(navigationOptions.url || "");
+      },
       navigateBack() {},
       switchTab() {},
     },
@@ -155,6 +183,7 @@ test("normalizes feedback draft text fields", () => {
     type: "suggestion",
     content: "  页面可以更顺一点  ",
     contact: "  wx-test  ",
+    contactType: " WECHAT ",
   });
 
   assert.deepEqual(plain(draft), {
@@ -162,6 +191,7 @@ test("normalizes feedback draft text fields", () => {
     typeLabel: "体验建议",
     content: "页面可以更顺一点",
     contact: "wx-test",
+    contactType: "wechat",
   });
 });
 
@@ -180,6 +210,8 @@ test("feedback page uses WeUI top tips and sectioned form layout", () => {
   assert.equal(wxml.includes("反馈分类"), true);
   assert.equal(wxml.includes("反馈内容"), true);
   assert.equal(wxml.includes("联系信息"), true);
+  assert.equal(wxml.includes("仅用于就本次反馈联系你"), true);
+  assert.match(wxml, /bindtap="openPrivacyNotice"/);
   assert.equal((wxml.match(/反馈内容/g) || []).length, 1);
   assert.equal((wxml.match(/联系信息/g) || []).length, 1);
   assert.equal(wxml.includes('<view class="field-label">反馈类型</view>'), false);
@@ -192,6 +224,12 @@ test("feedback page uses WeUI top tips and sectioned form layout", () => {
     wxml,
     /form-section-title form-section-title-row[\s\S]*?field-count/
   );
+});
+
+test("feedback privacy hint opens the privacy notice", () => {
+  const { page, calls } = loadFeedbackPage();
+  page.openPrivacyNotice();
+  assert.deepEqual(calls.navigations, ["/pages/privacy/index"]);
 });
 
 test("feedback contact field uses a native selector with a dynamic input", () => {
@@ -222,6 +260,7 @@ test("feedback contact selector defaults to WeChat and keeps the requested order
   assert.equal(page.data.selectedContactTypeIndex, 0);
   assert.equal(page.data.selectedContactType, "微信号");
   assert.equal(page.data.contactPlaceholder, "请输入微信号");
+  assert.equal(page.data.contactType, "wechat");
 });
 
 test("changing feedback contact type only updates its label and placeholder", () => {
@@ -232,14 +271,16 @@ test("changing feedback contact type only updates its label and placeholder", ()
   assert.equal(page.data.selectedContactType, "手机号");
   assert.equal(page.data.contactPlaceholder, "请输入手机号");
   assert.equal(page.data.contact, "wx-user-01");
+  assert.equal(page.data.contactType, "phone");
 
   page.changeContactType({ detail: { value: "2" } });
   assert.equal(page.data.selectedContactType, "邮箱");
   assert.equal(page.data.contactPlaceholder, "请输入邮箱");
   assert.equal(page.data.contact, "wx-user-01");
+  assert.equal(page.data.contactType, "email");
 });
 
-await asyncTest("feedback submission keeps the existing contact-only draft contract", async () => {
+await asyncTest("feedback submission persists the selected stable contact type", async () => {
   const { page, calls } = loadFeedbackPage();
   page.setData({
     selectedType: "suggestion",
@@ -250,11 +291,77 @@ await asyncTest("feedback submission keeps the existing contact-only draft contr
 
   await page.submitForm();
 
-  assert.deepEqual(Object.keys(calls.validationDrafts[0]).sort(), ["contact", "content", "type"]);
+  assert.deepEqual(Object.keys(calls.validationDrafts[0]).sort(), ["contact", "contactType", "content", "type"]);
   assert.equal(calls.validationDrafts[0].contact, "user@example.com");
   assert.equal(calls.submissions[0].data.contact, "user@example.com");
-  assert.equal("contactType" in calls.submissions[0].data, false);
+  assert.equal(calls.submissions[0].data.contactType, "email");
   assert.equal("selectedContactType" in calls.submissions[0].data, false);
+});
+
+await asyncTest("feedback validation and submit failures use one error surface", async () => {
+  const invalid = loadFeedbackPage();
+  invalid.page.setData({
+    selectedType: "bug",
+    content: "卡",
+  });
+  await invalid.page.submitForm();
+  assert.equal(invalid.page.data.topTips.message, "请至少填写 5 个字");
+  assert.deepEqual(invalid.calls.toastMessages, []);
+  assert.equal(invalid.calls.submissions.length, 0);
+
+  const failed = loadFeedbackPage({ submitError: new Error("network") });
+  failed.page.setData({
+    selectedType: "bug",
+    content: "页面加载时偶尔卡顿",
+  });
+  await failed.page.submitForm();
+  assert.equal(failed.page.data.topTips.message, "提交失败，请稍后重试");
+  assert.deepEqual(failed.calls.toastMessages, []);
+});
+
+test("validates optional feedback contacts by the selected type", () => {
+  const base = { type: "bug", content: "页面加载时偶尔卡顿" };
+  assert.equal(validateFeedbackDraft(base).valid, true);
+  assert.equal(validateFeedbackDraft({ ...base, contact: "legacy-contact" }).valid, true);
+  assert.equal(
+    validateFeedbackDraft({ ...base, contact: "13800138000", contactType: CONTACT_TYPES.PHONE }).valid,
+    true
+  );
+  assert.equal(
+    validateFeedbackDraft({ ...base, contact: "12345", contactType: CONTACT_TYPES.PHONE }).message,
+    "请输入正确的手机号"
+  );
+  assert.equal(
+    validateFeedbackDraft({ ...base, contact: "user@example.com", contactType: CONTACT_TYPES.EMAIL }).valid,
+    true
+  );
+  assert.equal(
+    validateFeedbackDraft({ ...base, contact: "user@invalid", contactType: CONTACT_TYPES.EMAIL }).message,
+    "请输入正确的邮箱"
+  );
+  assert.equal(
+    validateFeedbackDraft({ ...base, contact: "value", contactType: "sms" }).message,
+    "联系方式类型无效"
+  );
+});
+
+test("minimizes feedback system information before upload", () => {
+  assert.deepEqual(
+    plain(normalizeFeedbackSystemInfo({
+      brand: "Apple",
+      model: "iPhone",
+      platform: "ios",
+      system: "iOS 19",
+      version: "8.0.60",
+      SDKVersion: "3.10.0",
+    })),
+    {
+      platform: "ios",
+      system: "iOS 19",
+      version: "8.0.60",
+      SDKVersion: "3.10.0",
+    }
+  );
 });
 
 test("validates maximum content and contact length", () => {
@@ -275,6 +382,7 @@ test("builds feedback record with defaults and context", () => {
       type: "case_data",
       content: "case_001 的分类好像不太准确",
       contact: "user@example.com",
+      contactType: "email",
     },
     {
       sourcePage: "pages/profile/index",
@@ -290,6 +398,7 @@ test("builds feedback record with defaults and context", () => {
     typeLabel: "图片或分类不对",
     content: "case_001 的分类好像不太准确",
     contact: "user@example.com",
+    contactType: "email",
     sourcePage: "pages/profile/index",
     route: "pages/feedback/index",
     openid: "openid_1",

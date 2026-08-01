@@ -4,11 +4,32 @@ const INQUIRY_COLLECTION = "inquiries";
 const CONTENT_MIN_LENGTH = 5;
 const CONTENT_MAX_LENGTH = 800;
 const CONTACT_MAX_LENGTH = 120;
+const CONTACT_TYPES = Object.freeze({
+  WECHAT: "wechat",
+  PHONE: "phone",
+  EMAIL: "email",
+});
+const CONTACT_TYPE_VALUES = Object.freeze(Object.values(CONTACT_TYPES));
 
 const INQUIRY_OPTION_KEYS = ["wineType", "packageTypes", "styles", "priceLevel", "scenes"];
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeContactType(value) {
+  const contactType = trimText(value).toLowerCase();
+  return CONTACT_TYPE_VALUES.includes(contactType) ? contactType : "";
+}
+
+function isValidPhone(value) {
+  const phone = trimText(value).replace(/[\s-]/g, "");
+  return /^(?:\+?86)?1[3-9]\d{9}$/.test(phone);
+}
+
+function isValidEmail(value) {
+  const email = trimText(value);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 function cleanArray(value) {
@@ -47,11 +68,13 @@ function normalizeInquiryDraft(draft = {}) {
     scenes: cleanArray(draft.scenes),
     content: trimText(draft.content),
     contact: trimText(draft.contact),
+    contactType: normalizeContactType(draft.contactType),
   };
 }
 
 function validateInquiryDraft(draft = {}) {
   const normalized = normalizeInquiryDraft(draft);
+  const rawContactType = trimText(draft.contactType).toLowerCase();
 
   if (!normalized.packageTypes.length) {
     return {
@@ -77,7 +100,13 @@ function validateInquiryDraft(draft = {}) {
   if (!normalized.contact) {
     return {
       valid: false,
-      message: "请填写联系方式",
+      message: normalized.contactType === CONTACT_TYPES.PHONE
+        ? "请输入手机号"
+        : normalized.contactType === CONTACT_TYPES.EMAIL
+          ? "请输入邮箱"
+          : normalized.contactType === CONTACT_TYPES.WECHAT
+            ? "请输入微信号"
+            : "请填写联系方式",
     };
   }
 
@@ -85,6 +114,28 @@ function validateInquiryDraft(draft = {}) {
     return {
       valid: false,
       message: "联系方式最多 120 个字",
+    };
+  }
+
+  // 旧客户端没有 contactType，继续沿用通用联系方式校验；非空非法值不入库。
+  if (rawContactType && !normalized.contactType) {
+    return {
+      valid: false,
+      message: "联系方式类型无效",
+    };
+  }
+
+  if (normalized.contactType === CONTACT_TYPES.PHONE && !isValidPhone(normalized.contact)) {
+    return {
+      valid: false,
+      message: "请输入正确的手机号",
+    };
+  }
+
+  if (normalized.contactType === CONTACT_TYPES.EMAIL && !isValidEmail(normalized.contact)) {
+    return {
+      valid: false,
+      message: "请输入正确的邮箱",
     };
   }
 
@@ -108,6 +159,7 @@ function buildInquiryDraftFromCase(caseItem = {}) {
     scenes: caseItem.scenes,
     content: "",
     contact: "",
+    contactType: "",
   });
 }
 
@@ -125,6 +177,7 @@ function buildInquiryRecord(draft = {}, context = {}) {
     scenes: normalized.scenes,
     content: normalized.content,
     contact: normalized.contact,
+    contactType: normalized.contactType,
     sourcePage: trimText(context.sourcePage),
     route: trimText(context.route),
     openid: trimText(context.openid),
@@ -141,9 +194,14 @@ module.exports = {
   CONTENT_MIN_LENGTH,
   CONTENT_MAX_LENGTH,
   CONTACT_MAX_LENGTH,
+  CONTACT_TYPES,
+  CONTACT_TYPE_VALUES,
   buildInquiryDraftFromCase,
   buildInquiryRecord,
   getInquiryOptionGroups,
+  isValidEmail,
+  isValidPhone,
+  normalizeContactType,
   normalizeInquiryDraft,
   validateInquiryDraft,
 };

@@ -43,15 +43,25 @@ async function getRevision() {
   try {
     const response = await db.collection(META_COLLECTION).doc(META_DOCUMENT_ID).get();
     const revision = Number(response && response.data && response.data.revision);
-    return Number.isFinite(revision) && revision > 0 ? revision : 1;
+    if (Number.isFinite(revision) && revision > 0) {
+      return { available: true, revision };
+    }
+    return { available: false, revision: 0 };
   } catch (error) {
-    return 1;
+    // A missing or temporarily unreadable revision must never validate cached
+    // catalog data. The caller still returns a full response for availability.
+    return { available: false, revision: 0 };
   }
 }
 
-function isKnownRevision(event, revision) {
+function isKnownRevision(event, revisionState) {
   const knownRevision = Number(event && event.knownRevision);
-  return Number.isFinite(knownRevision) && knownRevision === revision;
+  return Boolean(
+    revisionState
+    && revisionState.available
+    && Number.isFinite(knownRevision)
+    && knownRevision === revisionState.revision
+  );
 }
 
 async function fetchAll(collectionName, options = {}) {
@@ -119,9 +129,9 @@ const CARD_FIELDS = {
 };
 
 async function getHomeFeed(event) {
-  const revision = await getRevision();
-  if (isKnownRevision(event, revision)) {
-    return ok({ revision, notModified: true });
+  const revisionState = await getRevision();
+  if (isKnownRevision(event, revisionState)) {
+    return ok({ revision: revisionState.revision, notModified: true });
   }
   const [caseRecords, bannerRecords] = await Promise.all([
     fetchAll(CASE_COLLECTION, {
@@ -148,16 +158,16 @@ async function getHomeFeed(event) {
     collectHomeImageFileIds(caseRecords, bannerRecords)
   );
   return ok({
-    revision,
+    revision: revisionState.revision,
     notModified: false,
     ...buildHomeFeed(caseRecords, bannerRecords, urlMap),
   });
 }
 
 async function getCatalogSnapshot(event) {
-  const revision = await getRevision();
-  if (isKnownRevision(event, revision)) {
-    return ok({ revision, notModified: true });
+  const revisionState = await getRevision();
+  if (isKnownRevision(event, revisionState)) {
+    return ok({ revision: revisionState.revision, notModified: true });
   }
   const records = await fetchAll(CASE_COLLECTION, {
     where: { isVisible: true },
@@ -165,7 +175,7 @@ async function getCatalogSnapshot(event) {
     orderField: "sortOrder",
   });
   return ok({
-    revision,
+    revision: revisionState.revision,
     notModified: false,
     // Keep the snapshot small and cacheable. Image URLs are hydrated only for
     // the cards currently visible in the category page.

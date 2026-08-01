@@ -87,6 +87,9 @@
         />
       </view>
       <view class="field-helper">{{draft.contact.length}}/{{contactMaxLength}}</view>
+      <view class="field-privacy" bindtap="openPrivacyNotice">
+        仅用于就本次需求联系你 · 查看隐私说明 ›
+      </view>
     </view>
   </view>
 

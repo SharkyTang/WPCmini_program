@@ -38,8 +38,8 @@ function trimText(value) {
 }
 
 function getAdminOpenids() {
-  const contactAdmins = trimText(process.env.CONTACT_ADMIN_OPENIDS);
-  const configuredAdmins = contactAdmins || trimText(process.env.ADMIN_OPENIDS);
+  const configuredAdmins = trimText(process.env.CONTACT_ADMIN_OPENIDS)
+    || trimText(process.env.ADMIN_OPENIDS);
   return configuredAdmins
     .split(",")
     .map((item) => item.trim())

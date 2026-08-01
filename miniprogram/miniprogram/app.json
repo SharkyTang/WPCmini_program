@@ -37,6 +37,11 @@
       "pages": ["index"]
     },
     {
+      "name": "account-privacy",
+      "root": "pages/privacy",
+      "pages": ["index"]
+    },
+    {
       "name": "admin-contact",
       "root": "pages/contact-admin",
       "pages": ["edit"]

@@ -36,13 +36,13 @@ function matchesCondition(record, condition = {}) {
   });
 }
 
-function createQuery(collectionName, records, calls, condition = {}) {
+function createQuery(collectionName, records, calls, condition = {}, options = {}) {
   const query = {
     limitValue: null,
     skipValue: 0,
     where(nextCondition) {
       calls.push({ collectionName, type: "where", condition: nextCondition });
-      return createQuery(collectionName, records, calls, nextCondition);
+      return createQuery(collectionName, records, calls, nextCondition, options);
     },
     field(fields) {
       calls.push({ collectionName, type: "field", fields });
@@ -63,6 +63,23 @@ function createQuery(collectionName, records, calls, condition = {}) {
       return this;
     },
     async get() {
+      calls.push({ collectionName, type: "get", condition });
+      const imageFields = [
+        "coverImage",
+        "coverThumbnail",
+        "galleryImages",
+        "sourceGalleryImages",
+        "galleryThumbnails",
+        "coverBanner",
+        "galleryBanners",
+      ];
+      if (
+        options.failReferenceReads
+        && collectionName === "wine_packaging"
+        && imageFields.some((field) => Object.prototype.hasOwnProperty.call(condition, field))
+      ) {
+        throw new Error("reference lookup failed");
+      }
       let data = records.filter((record) => matchesCondition(record, condition));
       data = data.slice(this.skipValue);
       if (this.limitValue !== null) data = data.slice(0, this.limitValue);
@@ -79,6 +96,11 @@ function loadCaseAdminFunction(options = {}) {
   const collections = {
     wine_packaging: clone(options.cases || []),
     home_banners: clone(options.banners || []),
+    catalog_meta: clone(
+      options.catalogMeta === undefined
+        ? [{ _id: "current", revision: 7 }]
+        : options.catalogMeta
+    ),
   };
 
   const mockCloud = {
@@ -90,6 +112,7 @@ function loadCaseAdminFunction(options = {}) {
       };
     },
     async deleteFile({ fileList }) {
+      calls.push({ collectionName: "cloud_storage", type: "deleteFile", fileList });
       deletedFiles.push(...fileList);
       return { fileList };
     },
@@ -103,13 +126,16 @@ function loadCaseAdminFunction(options = {}) {
       };
     },
     database() {
-      return {
+      const database = {
         command: {
           in(values) {
             return { __op: "in", values };
           },
           gte(value) {
             return { __op: "gte", value };
+          },
+          inc(value) {
+            return { __op: "inc", value };
           },
         },
         serverDate() {
@@ -118,7 +144,7 @@ function loadCaseAdminFunction(options = {}) {
         collection(collectionName) {
           const records = collections[collectionName] || [];
           return {
-            ...createQuery(collectionName, records, calls),
+            ...createQuery(collectionName, records, calls, {}, options),
             async add(payload) {
               const id = `created_${records.length + 1}`;
               records.push({ _id: id, ...clone(payload.data || {}) });
@@ -129,8 +155,20 @@ function loadCaseAdminFunction(options = {}) {
               return {
                 async get() {
                   const record = records.find((item) => item._id === id);
-                  if (!record) throw new Error("document not found");
+                  if (!record) {
+                    const error = new Error("document not found");
+                    error.code = "DATABASE_DOCUMENT_NOT_EXIST";
+                    throw error;
+                  }
                   return { data: clone(record) };
+                },
+                async set(payload) {
+                  const index = records.findIndex((item) => item._id === id);
+                  const next = { _id: id, ...clone(payload.data || {}) };
+                  if (index === -1) records.push(next);
+                  else records[index] = next;
+                  calls.push({ collectionName, type: "set", id, payload });
+                  return {};
                 },
                 async remove() {
                   const index = records.findIndex((item) => item._id === id);
@@ -140,6 +178,17 @@ function loadCaseAdminFunction(options = {}) {
                   return {};
                 },
                 async update(payload) {
+                  const record = records.find((item) => item._id === id);
+                  if (!record) {
+                    const error = new Error("document not found");
+                    error.code = "DATABASE_DOCUMENT_NOT_EXIST";
+                    throw error;
+                  }
+                  Object.entries(payload.data || {}).forEach(([key, value]) => {
+                    record[key] = value && value.__op === "inc"
+                      ? Number(record[key] || 0) + value.value
+                      : clone(value);
+                  });
                   calls.push({ collectionName, type: "update", id, payload });
                   return {};
                 },
@@ -148,6 +197,10 @@ function loadCaseAdminFunction(options = {}) {
           };
         },
       };
+      database.runTransaction = async (handler) => handler({
+        collection: database.collection,
+      });
+      return database;
     },
   };
 
@@ -157,7 +210,12 @@ function loadCaseAdminFunction(options = {}) {
     console,
     process: {
       env: {
-        ADMIN_OPENIDS: options.adminOpenids || "admin_openid",
+        ADMIN_OPENIDS: options.adminOpenids === undefined
+          ? "admin_openid"
+          : options.adminOpenids,
+        CASE_ADMIN_OPENIDS: options.caseAdminOpenids === undefined
+          ? ""
+          : options.caseAdminOpenids,
       },
     },
     require(moduleName) {
@@ -202,6 +260,37 @@ await test("deleteCase rejects non admins", async () => {
   assert.equal(result.code, "FORBIDDEN");
   assert.equal(collections.wine_packaging.length, 1);
   assert.deepEqual(deletedFiles, []);
+});
+
+await test("checkAccess prefers CASE_ADMIN_OPENIDS and falls back when blank", async () => {
+  const roleAdmin = loadCaseAdminFunction({
+    openid: "case_admin",
+    caseAdminOpenids: " case_admin ",
+    adminOpenids: "general_admin",
+  });
+  const excludedGeneralAdmin = loadCaseAdminFunction({
+    openid: "general_admin",
+    caseAdminOpenids: "case_admin",
+    adminOpenids: "general_admin",
+  });
+  const fallbackAdmin = loadCaseAdminFunction({
+    openid: "general_admin",
+    caseAdminOpenids: "   ",
+    adminOpenids: " general_admin ",
+  });
+
+  assert.deepEqual(clone(await roleAdmin.main({ action: "checkAccess" })), {
+    ok: true,
+    isAdmin: true,
+  });
+  assert.deepEqual(clone(await excludedGeneralAdmin.main({ action: "checkAccess" })), {
+    ok: true,
+    isAdmin: false,
+  });
+  assert.deepEqual(clone(await fallbackAdmin.main({ action: "checkAccess" })), {
+    ok: true,
+    isAdmin: true,
+  });
 });
 
 await test("public visible image URLs exclude original source files", async () => {
@@ -475,4 +564,76 @@ await test("recent case endpoint only returns visible cases created in the last 
   const customer = loadCaseAdminFunction({ openid: "customer_openid" });
   const forbidden = await customer.main({ action: "listRecentCases" });
   assert.equal(forbidden.code, "FORBIDDEN");
+});
+
+await test("catalog revision increments monotonically for consecutive mutations", async () => {
+  const { main, collections } = loadCaseAdminFunction();
+  const draft = {
+    title: "新案例",
+    galleryImages: ["cloud://env/display.jpg"],
+    packageTypes: ["礼盒"],
+    isVisible: false,
+  };
+  assert.equal((await main({ action: "createCase", case: draft })).ok, true);
+  assert.equal((await main({
+    action: "createCase",
+    case: { ...draft, title: "新案例二" },
+  })).ok, true);
+  assert.equal(collections.catalog_meta[0].revision, 9);
+});
+
+await test("a missing revision document is initialized without resetting to one", async () => {
+  const { main, collections } = loadCaseAdminFunction({ catalogMeta: [] });
+  const result = await main({
+    action: "createCase",
+    case: {
+      title: "初始化版本案例",
+      galleryImages: ["cloud://env/display.jpg"],
+      packageTypes: ["礼盒"],
+      isVisible: false,
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(collections.catalog_meta.length, 1);
+  assert.equal(collections.catalog_meta[0]._id, "current");
+  assert.equal(collections.catalog_meta[0].revision > 1, true);
+});
+
+await test("delete bumps revision before recoverable image cleanup", async () => {
+  const { main, calls, collections } = loadCaseAdminFunction({
+    cases: [{
+      _id: "case_doc_1",
+      sourceGalleryImages: ["cloud://env/source.jpg"],
+      galleryImages: ["cloud://env/display.jpg"],
+      galleryThumbnails: ["cloud://env/thumb.jpg"],
+      coverImage: "cloud://env/display.jpg",
+      coverThumbnail: "cloud://env/thumb.jpg",
+    }],
+  });
+  const result = await main({ action: "deleteCase", id: "case_doc_1" });
+  assert.equal(result.ok, true);
+  assert.equal(collections.catalog_meta[0].revision, 8);
+  const revisionIndex = calls.findIndex(
+    (call) => call.collectionName === "catalog_meta" && call.type === "update"
+  );
+  const fileDeleteIndex = calls.findIndex((call) => call.type === "deleteFile");
+  assert.equal(revisionIndex >= 0, true);
+  assert.equal(fileDeleteIndex > revisionIndex, true);
+});
+
+await test("cleanup read failure does not turn a committed deletion into failure", async () => {
+  const { main, collections, deletedFiles } = loadCaseAdminFunction({
+    failReferenceReads: true,
+    cases: [{
+      _id: "case_doc_1",
+      sourceGalleryImages: ["cloud://env/source.jpg"],
+      galleryImages: ["cloud://env/display.jpg"],
+      coverImage: "cloud://env/display.jpg",
+    }],
+  });
+  const result = await main({ action: "deleteCase", id: "case_doc_1" });
+  assert.equal(result.ok, true);
+  assert.equal(collections.wine_packaging.length, 0);
+  assert.equal(collections.catalog_meta[0].revision, 8);
+  assert.deepEqual(deletedFiles, []);
 });

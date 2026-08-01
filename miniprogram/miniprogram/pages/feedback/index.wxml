@@ -69,7 +69,9 @@
           bindinput="updateContact"
         />
       </view>
-      <view class="field-tip">方便我需要进一步确认问题时联系你。</view>
+      <view class="field-tip privacy-tip" bindtap="openPrivacyNotice">
+        仅用于就本次反馈联系你 · 查看隐私说明 ›
+      </view>
     </view>
   </view>
 

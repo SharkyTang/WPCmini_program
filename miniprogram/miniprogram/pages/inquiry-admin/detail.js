@@ -92,7 +92,7 @@ Page({
       data: contact,
       success: () => {
         wx.showToast({
-          title: "已复制联系方式",
+          title: `已${(this.data.item && this.data.item.contactCopyLabel) || "复制联系方式"}`,
           icon: "none",
         });
       },

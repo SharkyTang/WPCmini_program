@@ -3,7 +3,7 @@ const {
   MAX_FILES,
   buildVariantPaths,
   generateVariantBuffers,
-  isAdminOpenid,
+  isRoleAdminOpenid,
   normalizeSourceFiles,
   trimText,
 } = require("./imageProcessorLogic");
@@ -119,7 +119,11 @@ async function generateCaseVariants(event, imageFactory) {
 
 exports.main = async (event = {}) => {
   const { OPENID } = cloud.getWXContext();
-  if (!isAdminOpenid(OPENID, process.env.ADMIN_OPENIDS)) {
+  if (!isRoleAdminOpenid(
+    OPENID,
+    process.env.CASE_ADMIN_OPENIDS,
+    process.env.ADMIN_OPENIDS
+  )) {
     return fail("FORBIDDEN", "无权限处理案例图片");
   }
   try {

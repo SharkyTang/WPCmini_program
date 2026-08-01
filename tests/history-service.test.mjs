@@ -47,6 +47,19 @@ function loadHistoryService(recordsByCondition = {}, options = {}) {
             }),
         };
       }
+      if (path === "./userLibraryService") {
+        if (options.userLibraryService) return options.userLibraryService;
+        return {
+          async callUserLibrary() {
+            const error = new Error("function not found");
+            error.code = "FUNCTION_NOT_FOUND";
+            throw error;
+          },
+          isUserLibraryUnavailableError(error) {
+            return error && error.code === "FUNCTION_NOT_FOUND";
+          },
+        };
+      }
       if (path === "./userService") {
         return {
           getCachedOpenId: () => "openid_1",
@@ -238,4 +251,50 @@ await test("openid build flag supports history write, read, update, and delete w
   assert.deepEqual(plain(removedIds), ["history_1"]);
   assert.equal(access.profileChecks, 0);
   assert.equal(access.openidChecks > 0, true);
+});
+
+await test("history mutations prefer the atomic cloud service when available", async () => {
+  const calls = [];
+  const { service, whereCalls, updates } = loadHistoryService({}, {
+    userLibraryService: {
+      async callUserLibrary(action, payload = {}) {
+        calls.push({ action, payload });
+        if (action === "recordHistory") {
+          return {
+            history: {
+              _id: "his_atomic",
+              caseDocId: payload.history.caseDocId,
+              caseId: payload.history.caseId,
+              viewCount: 1,
+            },
+          };
+        }
+        return { removedCount: 1 };
+      },
+      isUserLibraryUnavailableError() {
+        return false;
+      },
+    },
+  });
+
+  const recorded = await service.recordCaseView({
+    id: "doc_atomic",
+    caseId: "case_atomic",
+  });
+  const removedCount = await service.removeHistoryRecords(["his_atomic"]);
+
+  assert.equal(recorded._id, "his_atomic");
+  assert.equal(removedCount, 1);
+  assert.deepEqual(plain(calls), [
+    {
+      action: "recordHistory",
+      payload: { history: { caseDocId: "doc_atomic", caseId: "case_atomic" } },
+    },
+    {
+      action: "removeHistory",
+      payload: { ids: ["his_atomic"] },
+    },
+  ]);
+  assert.equal(whereCalls.length, 0);
+  assert.equal(updates.length, 0);
 });

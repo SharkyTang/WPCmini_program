@@ -255,8 +255,17 @@ await test("submitInquiry stores server openid and sanitized fields", async () =
       packageTypes: ["礼盒"],
       content: "想做一套礼盒包装",
       contact: "wx-test",
+      contactType: "wechat",
       openid: "spoofed",
       adminNote: "bad",
+    },
+    systemInfo: {
+      brand: "Apple",
+      model: "iPhone",
+      platform: "ios",
+      system: "iOS 19",
+      version: "8.0.60",
+      SDKVersion: "3.10.0",
     },
   });
 
@@ -264,7 +273,50 @@ await test("submitInquiry stores server openid and sanitized fields", async () =
   assert.equal(added[0].collectionName, "inquiries");
   assert.equal(added[0].payload.data.openid, "server_openid");
   assert.equal(added[0].payload.data.status, "new");
+  assert.equal(added[0].payload.data.contactType, "wechat");
+  assert.deepEqual(JSON.parse(JSON.stringify(added[0].payload.data.systemInfo)), {
+    platform: "ios",
+    system: "iOS 19",
+    version: "8.0.60",
+    SDKVersion: "3.10.0",
+  });
   assert.equal(Object.prototype.hasOwnProperty.call(added[0].payload.data, "adminNote"), false);
+});
+
+await test("submitFeedback stores contact type and minimizes system information", async () => {
+  const { main, added } = loadUserDataFunction({
+    openid: "server_openid",
+  });
+
+  const result = await main({
+    action: "submitFeedback",
+    feedback: {
+      type: "suggestion",
+      content: "希望案例筛选更方便",
+      contact: "user@example.com",
+      contactType: "email",
+    },
+    systemInfo: {
+      brand: "Apple",
+      model: "iPhone",
+      platform: "ios",
+      system: "iOS 19",
+      version: "8.0.60",
+      SDKVersion: "3.10.0",
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(added[0].collectionName, "feedback");
+  assert.equal(added[0].payload.data.openid, "server_openid");
+  assert.equal(added[0].payload.data.contact, "user@example.com");
+  assert.equal(added[0].payload.data.contactType, "email");
+  assert.deepEqual(JSON.parse(JSON.stringify(added[0].payload.data.systemInfo)), {
+    platform: "ios",
+    system: "iOS 19",
+    version: "8.0.60",
+    SDKVersion: "3.10.0",
+  });
 });
 
 await test("getProfile only queries the server openid", async () => {
@@ -327,6 +379,24 @@ await test("session role configuration falls back to ADMIN_OPENIDS", async () =>
     openid: "legacy_admin",
     env: {
       ADMIN_OPENIDS: "legacy_admin",
+    },
+  });
+  const result = await main({ action: "getSessionSummary" });
+  assert.deepEqual(JSON.parse(JSON.stringify(result.roles)), {
+    inquiryAdmin: true,
+    caseAdmin: true,
+    notificationAdmin: true,
+  });
+});
+
+await test("blank role configuration also falls back to ADMIN_OPENIDS", async () => {
+  const { main } = loadUserDataFunction({
+    openid: "legacy_admin",
+    env: {
+      ADMIN_OPENIDS: " legacy_admin ",
+      INQUIRY_ADMIN_OPENIDS: "   ",
+      CASE_ADMIN_OPENIDS: "",
+      NOTIFICATION_ADMIN_OPENIDS: "   ",
     },
   });
   const result = await main({ action: "getSessionSummary" });

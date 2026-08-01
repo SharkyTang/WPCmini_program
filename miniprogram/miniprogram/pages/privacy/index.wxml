@@ -1,0 +1,68 @@
+<view class="page">
+  <view class="hero">
+    <view class="page-title">隐私与数据管理</view>
+    <view class="page-subtitle">你可以了解信息用途、管理自己的记录，或联系我们申请删除相关数据。</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">我们如何使用信息</view>
+    <view class="data-list">
+      <view class="data-row">
+        <view class="data-name">头像与昵称</view>
+        <view class="data-copy">仅在你主动选择并保存后，用于展示个人资料和同步收藏、浏览记录。</view>
+      </view>
+      <view class="data-row">
+        <view class="data-name">收藏与浏览记录</view>
+        <view class="data-copy">用于跨设备保存你主动收藏或最近查看的案例，可在对应页面删除或清空。</view>
+      </view>
+      <view class="data-row">
+        <view class="data-name">需求、反馈与联系方式</view>
+        <view class="data-copy">仅在你主动提交时保存，用于回复反馈、沟通包装需求和跟进服务。</view>
+      </view>
+      <view class="data-row">
+        <view class="data-name">必要的运行信息</view>
+        <view class="data-copy">仅保留平台、系统版本、微信版本、基础库版本和小程序版本，用于排查故障；不会用于广告画像。</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">管理你的数据</view>
+    <view class="action-list">
+      <view class="action-row" data-key="profile" bindtap="openDataAction">
+        <view>
+          <view class="action-title">修改个人资料</view>
+          <view class="action-copy">更新头像和昵称</view>
+        </view>
+        <view class="action-arrow">›</view>
+      </view>
+      <view class="action-row" data-key="favorites" bindtap="openDataAction">
+        <view>
+          <view class="action-title">管理我的收藏</view>
+          <view class="action-copy">删除单条收藏或清空全部收藏</view>
+        </view>
+        <view class="action-arrow">›</view>
+      </view>
+      <view class="action-row" data-key="history" bindtap="openDataAction">
+        <view>
+          <view class="action-title">管理浏览记录</view>
+          <view class="action-copy">删除单条记录或清空全部记录</view>
+        </view>
+        <view class="action-arrow">›</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section deletion-section">
+    <view class="section-title">申请删除其他数据</view>
+    <view class="deletion-copy">如需删除个人资料、定制需求、意见反馈或订阅记录，请通过官方客服提交申请。核验当前微信身份后，我们会处理并反馈结果。</view>
+    <button
+      class="contact-button"
+      open-type="contact"
+      session-from="source=privacy_data_request"
+      bindcontact="handleDeletionContact"
+    >联系官方客服</button>
+  </view>
+
+  <view class="footer-note">我们不会在统计事件中记录头像、昵称、联系方式、原始 OpenID、案例标题或搜索内容。</view>
+</view>

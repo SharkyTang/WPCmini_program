@@ -71,8 +71,16 @@ function getAdminOpenidsFromEnv(value) {
     .filter(Boolean);
 }
 
+function resolveAdminOpenidsEnv(roleValue, fallbackValue) {
+  return trimText(roleValue) || trimText(fallbackValue);
+}
+
 function isAdminOpenid(openid, envValue) {
   return Boolean(openid && getAdminOpenidsFromEnv(envValue).includes(openid));
+}
+
+function isRoleAdminOpenid(openid, roleValue, fallbackValue) {
+  return isAdminOpenid(openid, resolveAdminOpenidsEnv(roleValue, fallbackValue));
 }
 
 function normalizeValues(value) {
@@ -594,6 +602,7 @@ module.exports = {
   getAdminOpenidsFromEnv,
   getCaseIdNumber,
   isAdminOpenid,
+  isRoleAdminOpenid,
   isCloudFileId,
   normalizeCloudFileIds,
   normalizeGalleryImages,
@@ -603,6 +612,7 @@ module.exports = {
   normalizeVisibilityFilter,
   pickAllowedCaseFields,
   sanitizeCasePayload,
+  resolveAdminOpenidsEnv,
   trimText,
   validateHomepageDisplayCapacity,
 };

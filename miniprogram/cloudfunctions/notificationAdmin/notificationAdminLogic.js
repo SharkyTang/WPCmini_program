@@ -28,8 +28,16 @@ function getAdminOpenidsFromEnv(value) {
     .filter(Boolean);
 }
 
+function resolveAdminOpenidsEnv(roleValue, fallbackValue) {
+  return trimText(roleValue) || trimText(fallbackValue);
+}
+
 function isAdminOpenid(openid, envValue) {
   return Boolean(openid && getAdminOpenidsFromEnv(envValue).includes(openid));
+}
+
+function isRoleAdminOpenid(openid, roleValue, fallbackValue) {
+  return isAdminOpenid(openid, resolveAdminOpenidsEnv(roleValue, fallbackValue));
 }
 
 function normalizeAnnouncementType(value) {
@@ -144,6 +152,7 @@ module.exports = {
   VERSION_MAX_LENGTH,
   getAdminOpenidsFromEnv,
   isAdminOpenid,
+  isRoleAdminOpenid,
   normalizeAnnouncementType,
   normalizeCaseDocIds,
   normalizePage,
@@ -151,4 +160,5 @@ module.exports = {
   buildNotificationCasesPage,
   sameCaseDocIds,
   sanitizeAnnouncement,
+  resolveAdminOpenidsEnv,
 };

@@ -164,6 +164,31 @@ await test("known catalog revision returns notModified without reading cases", a
   );
 });
 
+await test("missing revision metadata never validates a known client revision", async () => {
+  const { main, calls } = loadCaseCatalog({
+    recordsByCollection: {
+      wine_packaging: [{
+        _id: "doc_1",
+        caseId: "case_1",
+        title: "案例 1",
+        isVisible: true,
+      }],
+    },
+  });
+  const result = await main({
+    action: "getCatalogSnapshot",
+    knownRevision: 1,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.notModified, false);
+  assert.equal(result.revision, 0);
+  assert.equal(result.items.length, 1);
+  assert.equal(
+    calls.some((call) => call.collection === "wine_packaging" && call.type === "get"),
+    true
+  );
+});
+
 await test("catalog snapshot keeps image metadata without signing every URL", async () => {
   const banner = "cloud://env/banner-1.jpg";
   const { main, tempFileRequests } = loadCaseCatalog({

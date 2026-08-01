@@ -51,8 +51,8 @@ function parseOpenidSet(value) {
 }
 
 function resolveAdminRole(openid, roleEnvKey) {
-  const roleValue = process.env[roleEnvKey];
-  const fallbackValue = process.env.ADMIN_OPENIDS;
+  const roleValue = trimText(process.env[roleEnvKey]);
+  const fallbackValue = trimText(process.env.ADMIN_OPENIDS);
   return parseOpenidSet(roleValue || fallbackValue).has(openid);
 }
 

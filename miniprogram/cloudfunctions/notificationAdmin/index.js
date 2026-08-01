@@ -1,7 +1,7 @@
 const cloud = require("wx-server-sdk");
 const {
   buildNotificationCasesPage,
-  isAdminOpenid,
+  isRoleAdminOpenid,
   normalizeCaseDocIds,
   normalizePage,
   normalizePageSize,
@@ -341,7 +341,11 @@ async function getPublishedLinkedCases(event) {
 exports.main = async (event = {}) => {
   const { OPENID } = cloud.getWXContext();
   const action = trimText(event.action);
-  const admin = isAdminOpenid(OPENID, process.env.ADMIN_OPENIDS);
+  const admin = isRoleAdminOpenid(
+    OPENID,
+    process.env.NOTIFICATION_ADMIN_OPENIDS,
+    process.env.ADMIN_OPENIDS
+  );
 
   if (action === "checkAccess") {
     return ok({ isAdmin: admin });

@@ -108,6 +108,23 @@ await test("profile shares the public homepage without exposing personal data", 
   });
 });
 
+await test("profile exposes the privacy and data management center", () => {
+  let navigatedUrl = "";
+  const page = loadProfilePage({
+    navigateTo(options) {
+      navigatedUrl = options.url;
+    },
+  });
+
+  page.openPrivacyCenter();
+
+  assert.equal(navigatedUrl, "/pages/privacy/index");
+  assert.equal(
+    readFileSync(wxmlPath, "utf8").includes("隐私与数据管理"),
+    true
+  );
+});
+
 await test("unconfigured profile card opens the setup page", async () => {
   let navigatedUrl = "";
   const page = loadProfilePage({ navigateTo(options) { navigatedUrl = options.url; } });

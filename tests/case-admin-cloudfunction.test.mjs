@@ -23,6 +23,7 @@ const {
   getAdminOpenidsFromEnv,
   getCaseIdNumber,
   isAdminOpenid,
+  isRoleAdminOpenid,
   normalizeCloudFileIds,
   pickAllowedCaseFields,
   sanitizeCasePayload,
@@ -47,6 +48,12 @@ test("checks admin openid from comma separated env value", () => {
   assert.deepEqual(plain(getAdminOpenidsFromEnv(" a, b ,, c ")), ["a", "b", "c"]);
   assert.equal(isAdminOpenid("b", "a,b,c"), true);
   assert.equal(isAdminOpenid("x", "a,b,c"), false);
+});
+
+test("case-specific admins override a whitespace-safe general fallback", () => {
+  assert.equal(isRoleAdminOpenid("case_admin", " case_admin ", "general_admin"), true);
+  assert.equal(isRoleAdminOpenid("general_admin", "case_admin", "general_admin"), false);
+  assert.equal(isRoleAdminOpenid("general_admin", "   ", " general_admin "), true);
 });
 
 test("declares supported case admin actions", () => {

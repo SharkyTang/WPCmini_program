@@ -38,11 +38,11 @@
       </view>
 
       <view class="contact-card">
-        <view class="contact-label">客户联系方式</view>
+        <view class="contact-label">客户联系方式 · {{item.contactTypeLabel}}</view>
         <view class="contact-value">{{item.contact || '未填写'}}</view>
         <view class="contact-meta">来源：{{item.sourceLabel}}</view>
       </view>
-      <view class="copy-button" bindtap="copyContact">复制联系方式</view>
+      <view class="copy-button" bindtap="copyContact">{{item.contactCopyLabel}}</view>
     </view>
 
     <view class="section">

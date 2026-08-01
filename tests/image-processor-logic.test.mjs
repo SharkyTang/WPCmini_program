@@ -18,6 +18,7 @@ const {
   buildVariantPaths,
   generateVariantBuffers,
   isAdminOpenid,
+  isRoleAdminOpenid,
   normalizeSourceFiles,
 } = require(resolve(
   __dirname,
@@ -108,6 +109,12 @@ function createFakeJimp() {
 await test("image processor accepts only configured admins", () => {
   assert.equal(isAdminOpenid("admin_2", "admin_1, admin_2"), true);
   assert.equal(isAdminOpenid("spoofed", "admin_1, admin_2"), false);
+});
+
+await test("image processor shares the case-admin role with a general fallback", () => {
+  assert.equal(isRoleAdminOpenid("case_admin", " case_admin ", "general_admin"), true);
+  assert.equal(isRoleAdminOpenid("general_admin", "case_admin", "general_admin"), false);
+  assert.equal(isRoleAdminOpenid("general_admin", "", " general_admin "), true);
 });
 
 await test("source file normalization deduplicates and enforces the nine image limit", () => {

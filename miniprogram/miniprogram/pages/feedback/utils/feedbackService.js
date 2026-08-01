@@ -12,18 +12,27 @@ function safeCall(fn, fallback) {
   }
 }
 
+function normalizeSystemInfo(info = {}) {
+  const source = info && typeof info === "object" ? info : {};
+  const text = (value) => (typeof value === "string" ? value : "");
+  return {
+    platform: text(source.platform),
+    system: text(source.system),
+    version: text(source.version),
+    SDKVersion: text(source.SDKVersion),
+  };
+}
+
 function getSystemInfo() {
   const deviceInfo = safeCall(wx.getDeviceInfo, {});
   const appBaseInfo = safeCall(wx.getAppBaseInfo, {});
 
-  return {
-    brand: deviceInfo.brand || "",
-    model: deviceInfo.model || "",
+  return normalizeSystemInfo({
     platform: deviceInfo.platform || "",
     system: deviceInfo.system || "",
     version: appBaseInfo.version || "",
     SDKVersion: appBaseInfo.SDKVersion || "",
-  };
+  });
 }
 
 function getCurrentRoute() {
@@ -42,7 +51,7 @@ async function submitFeedback(draft = {}, context = {}) {
     sourcePage: context.sourcePage || "",
     route: context.route || getCurrentRoute(),
     appVersion: context.appVersion || "v2.6",
-    systemInfo: context.systemInfo || getSystemInfo(),
+    systemInfo: normalizeSystemInfo(context.systemInfo || getSystemInfo()),
   });
 
   const response = await callUserData("submitFeedback", {
@@ -62,5 +71,6 @@ async function submitFeedback(draft = {}, context = {}) {
 module.exports = {
   FEEDBACK_COLLECTION,
   getSystemInfo,
+  normalizeSystemInfo,
   submitFeedback,
 };

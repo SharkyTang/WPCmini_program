@@ -225,6 +225,13 @@ page {
   text-align: right;
 }
 
+.field-privacy {
+  margin-top: 10rpx;
+  color: #8c6a3f;
+  font-size: 21rpx;
+  line-height: 1.4;
+}
+
 .submit-button {
   margin-top: 34rpx;
   height: 82rpx;

@@ -18,6 +18,18 @@ const appConfig = JSON.parse(
 const projectConfig = JSON.parse(
   readFileSync(resolve(projectRoot, "project.config.json"), "utf8")
 );
+const privateConfigPath = resolve(projectRoot, "project.private.config.json");
+const privateProjectConfig = existsSync(privateConfigPath)
+  ? JSON.parse(readFileSync(privateConfigPath, "utf8"))
+  : {};
+const effectiveProjectSettings = {
+  ...(projectConfig.setting || {}),
+  ...(privateProjectConfig.setting || {}),
+};
+const cloudDeployScript = readFileSync(
+  resolve(projectRoot, "uploadCloudFunction.sh"),
+  "utf8"
+);
 const BUNDLED_MEDIA_EXTENSIONS = new Set([
   ".jpg",
   ".jpeg",
@@ -100,9 +112,11 @@ test("all subpackage routes resolve and admin packages are not preloaded", () =>
   assert.equal(preloaded.includes("admin-contact"), false);
 });
 
-test("project keeps lazy loading, audits and system-file exclusion enabled", () => {
+test("project keeps lazy loading, effective audits and URL checks enabled", () => {
   assert.equal(appConfig.lazyCodeLoading, "requiredComponents");
   assert.equal(projectConfig.setting.autoAudits, true);
+  assert.equal(effectiveProjectSettings.autoAudits, true);
+  assert.equal(effectiveProjectSettings.urlCheck, true);
   assert.equal(projectConfig.setting.minified, true);
   assert.equal(
     projectConfig.packOptions.ignore.some(
@@ -122,6 +136,26 @@ test("project keeps lazy loading, audits and system-file exclusion enabled", () 
     );
   });
   assert.notEqual(projectConfig.libVersion, "2.21.2");
+});
+
+test("cloud deployment includes every required function in dependency order", () => {
+  const deployedFunctions = Array.from(
+    cloudDeployScript.matchAll(/--n\s+([A-Za-z0-9_-]+)/g),
+    (match) => match[1]
+  );
+  assert.deepEqual(deployedFunctions, [
+    "quickstartFunctions",
+    "userData",
+    "userLibrary",
+    "caseAdmin",
+    "caseCatalog",
+    "imageProcessor",
+    "inquiryAdmin",
+    "contactAdmin",
+    "notificationAdmin",
+    "notificationDispatcher",
+  ]);
+  assert.equal(new Set(deployedFunctions).size, deployedFunctions.length);
 });
 
 test("bundled image and audio resources stay under the 200 KiB audit limit", () => {

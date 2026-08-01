@@ -20,16 +20,20 @@ function getCurrentRoute() {
   return currentPage && currentPage.route ? currentPage.route : "";
 }
 
+function normalizeSystemInfo(info = {}) {
+  const source = info && typeof info === "object" ? info : {};
+  const text = (value) => (typeof value === "string" ? value : "");
+  return {
+    platform: text(source.platform),
+    system: text(source.system),
+    version: text(source.version),
+    SDKVersion: text(source.SDKVersion),
+  };
+}
+
 function getSystemInfo() {
   const info = safeCall(wx.getSystemInfoSync, {});
-  return {
-    brand: info.brand || "",
-    model: info.model || "",
-    platform: info.platform || "",
-    system: info.system || "",
-    version: info.version || "",
-    SDKVersion: info.SDKVersion || "",
-  };
+  return normalizeSystemInfo(info);
 }
 
 async function submitInquiry(draft, context = {}) {
@@ -45,7 +49,7 @@ async function submitInquiry(draft, context = {}) {
     sourcePage: context.sourcePage,
     route: context.route || getCurrentRoute(),
     appVersion: context.appVersion || "v2.8",
-    systemInfo: context.systemInfo || getSystemInfo(),
+    systemInfo: normalizeSystemInfo(context.systemInfo || getSystemInfo()),
   });
 
   const response = await callUserData("submitInquiry", {
@@ -66,5 +70,6 @@ async function submitInquiry(draft, context = {}) {
 module.exports = {
   INQUIRY_COLLECTION,
   getSystemInfo,
+  normalizeSystemInfo,
   submitInquiry,
 };

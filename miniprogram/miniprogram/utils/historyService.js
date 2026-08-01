@@ -8,6 +8,10 @@ const {
 const { checkLibraryAccess } = require("./libraryAccessService");
 const { getCachedOpenId } = require("./userService");
 const { fetchUserLibrary } = require("./caseCatalogService");
+const {
+  callUserLibrary,
+  isUserLibraryUnavailableError,
+} = require("./userLibraryService");
 
 const HISTORY_COLLECTION = "browse_history";
 const HISTORY_LIMIT = 50;
@@ -54,11 +58,9 @@ async function ensureIdentityForHistory() {
   }
 }
 
-async function removeHistoryRecords(historyIds) {
+async function removeHistoryRecordsLegacy(historyIds, openid) {
   const ids = normalizeSelectedIds(historyIds);
   if (!ids.length) return 0;
-
-  const openid = await ensureIdentityForHistory();
   if (!openid) return 0;
 
   const results = await Promise.all(ids.map(async (id) => {
@@ -72,6 +74,22 @@ async function removeHistoryRecords(historyIds) {
     return true;
   }));
   return results.filter(Boolean).length;
+}
+
+async function removeHistoryRecords(historyIds) {
+  const ids = normalizeSelectedIds(historyIds);
+  if (!ids.length) return 0;
+  const openid = await ensureIdentityForHistory();
+  if (!openid) return 0;
+
+  try {
+    const result = await callUserLibrary("removeHistory", { ids });
+    return Number(result.removedCount) || 0;
+  } catch (error) {
+    if (!isUserLibraryUnavailableError(error)) throw error;
+    console.warn("用户历史云函数尚未部署，使用兼容删除");
+    return removeHistoryRecordsLegacy(ids, openid);
+  }
 }
 
 async function trimHistoryLimit(limit = HISTORY_LIMIT, openid = getCachedOpenId()) {
@@ -89,7 +107,7 @@ async function trimHistoryLimit(limit = HISTORY_LIMIT, openid = getCachedOpenId(
     const overflowIds = getOverflowHistoryIds(response.data || [], 0);
     if (!overflowIds.length) break;
 
-    removedCount += await removeHistoryRecords(overflowIds);
+    removedCount += await removeHistoryRecordsLegacy(overflowIds, openid);
     if (overflowIds.length < 100) break;
   }
 
@@ -102,18 +120,7 @@ function trimHistoryInBackground(openid) {
   });
 }
 
-async function recordCaseView(caseItem) {
-  if (!caseItem) return null;
-
-  let openid = "";
-  try {
-    openid = await ensureIdentityForHistory();
-  } catch (error) {
-    console.warn("静默记录浏览失败：未获取微信身份", error);
-    return null;
-  }
-  if (!openid) return null;
-
+async function recordCaseViewLegacy(caseItem, openid) {
   const db = getDb();
   const _ = db.command;
   const record = buildHistoryRecord(caseItem);
@@ -162,8 +169,31 @@ async function recordCaseView(caseItem) {
   };
 }
 
-async function clearHistory() {
-  const openid = await ensureIdentityForHistory();
+async function recordCaseView(caseItem) {
+  if (!caseItem) return null;
+
+  let openid = "";
+  try {
+    openid = await ensureIdentityForHistory();
+  } catch (error) {
+    console.warn("静默记录浏览失败：未获取微信身份", error);
+    return null;
+  }
+  if (!openid) return null;
+
+  try {
+    const result = await callUserLibrary("recordHistory", {
+      history: buildHistoryRecord(caseItem),
+    });
+    return result.history || null;
+  } catch (error) {
+    if (!isUserLibraryUnavailableError(error)) throw error;
+    console.warn("用户历史云函数尚未部署，使用兼容写入");
+    return recordCaseViewLegacy(caseItem, openid);
+  }
+}
+
+async function clearHistoryLegacy(openid) {
   if (!openid) return 0;
 
   let removedCount = 0;
@@ -176,11 +206,25 @@ async function clearHistory() {
     const ids = normalizeSelectedIds((response.data || []).map((record) => record._id || record.id));
     if (!ids.length) break;
 
-    removedCount += await removeHistoryRecords(ids);
+    removedCount += await removeHistoryRecordsLegacy(ids, openid);
     if (ids.length < 100) break;
   }
 
   return removedCount;
+}
+
+async function clearHistory() {
+  const openid = await ensureIdentityForHistory();
+  if (!openid) return 0;
+
+  try {
+    const result = await callUserLibrary("clearHistory");
+    return Number(result.removedCount) || 0;
+  } catch (error) {
+    if (!isUserLibraryUnavailableError(error)) throw error;
+    console.warn("用户历史云函数尚未部署，使用兼容清空");
+    return clearHistoryLegacy(openid);
+  }
 }
 
 async function fetchHistoryCasesLegacy() {
@@ -248,8 +292,11 @@ module.exports = {
   HISTORY_COLLECTION,
   HISTORY_LIMIT,
   clearHistory,
+  clearHistoryLegacy,
   removeHistoryRecords,
+  removeHistoryRecordsLegacy,
   recordCaseView,
+  recordCaseViewLegacy,
   fetchHistoryCases,
   fetchHistoryCasesLegacy,
   trimHistoryLimit,

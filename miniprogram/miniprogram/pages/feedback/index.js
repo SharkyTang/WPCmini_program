@@ -10,9 +10,9 @@ const SOURCE_PAGE_MAP = {
 };
 
 const CONTACT_TYPE_OPTIONS = [
-  { label: "微信号", placeholder: "请输入微信号" },
-  { label: "手机号", placeholder: "请输入手机号" },
-  { label: "邮箱", placeholder: "请输入邮箱" },
+  { value: "wechat", label: "微信号", placeholder: "请输入微信号" },
+  { value: "phone", label: "手机号", placeholder: "请输入手机号" },
+  { value: "email", label: "邮箱", placeholder: "请输入邮箱" },
 ];
 
 Page({
@@ -21,6 +21,7 @@ Page({
     selectedType: "",
     content: "",
     contact: "",
+    contactType: CONTACT_TYPE_OPTIONS[0].value,
     contactTypes: CONTACT_TYPE_OPTIONS.map((item) => item.label),
     selectedContactTypeIndex: 0,
     selectedContactType: CONTACT_TYPE_OPTIONS[0].label,
@@ -71,6 +72,7 @@ Page({
       selectedContactTypeIndex: index,
       selectedContactType: selectedOption.label,
       contactPlaceholder: selectedOption.placeholder,
+      contactType: selectedOption.value,
     });
   },
 
@@ -90,6 +92,12 @@ Page({
     });
   },
 
+  openPrivacyNotice() {
+    wx.navigateTo({
+      url: "/pages/privacy/index",
+    });
+  },
+
   async submitForm() {
     if (this.data.submitting) return;
 
@@ -97,14 +105,11 @@ Page({
       type: this.data.selectedType,
       content: this.data.content,
       contact: this.data.contact,
+      contactType: this.data.contactType,
     };
     const validation = validateFeedbackDraft(draft);
     if (!validation.valid) {
       this.showTopTips(validation.message);
-      wx.showToast({
-        title: validation.message,
-        icon: "none",
-      });
       return;
     }
 
@@ -134,10 +139,6 @@ Page({
     } catch (error) {
       console.error("意见反馈提交失败", error);
       this.showTopTips("提交失败，请稍后重试");
-      wx.showToast({
-        title: "提交失败，请稍后重试",
-        icon: "none",
-      });
     } finally {
       this.setData({
         submitting: false,

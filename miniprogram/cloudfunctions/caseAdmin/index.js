@@ -11,7 +11,7 @@ const {
   generateSequentialCaseId,
   getActivatedHomepageSlots,
   getCaseIdNumber,
-  isAdminOpenid,
+  isRoleAdminOpenid,
   normalizeCloudFileIds,
   normalizeHomepageDisplaySlot,
   normalizePage,
@@ -47,26 +47,95 @@ function fail(code, message) {
   };
 }
 
-async function bumpCatalogRevision() {
-  try {
-    const revision = _ && typeof _.inc === "function" ? _.inc(1) : 2;
-    await db.collection(CATALOG_META_COLLECTION).doc(CATALOG_META_DOCUMENT_ID).update({
+function isDocumentNotFound(error) {
+  const code = error && (error.errCode || error.code);
+  const message = error && (error.errMsg || error.message);
+  return (
+    code === -502005
+    || code === "DATABASE_DOCUMENT_NOT_EXIST"
+    || /document.*not found|does not exist/i.test(message || "")
+  );
+}
+
+function getRevisionIncrement() {
+  return _ && typeof _.inc === "function" ? _.inc(1) : 1;
+}
+
+async function initializeCatalogRevision() {
+  const initialRevision = Date.now();
+  if (typeof db.runTransaction !== "function") {
+    await db.collection(CATALOG_META_COLLECTION).doc(CATALOG_META_DOCUMENT_ID).set({
       data: {
-        revision,
+        revision: initialRevision,
         updatedAt: db.serverDate(),
       },
     });
-  } catch (error) {
+    return;
+  }
+  await db.runTransaction(async (transaction) => {
+    const document = transaction
+      .collection(CATALOG_META_COLLECTION)
+      .doc(CATALOG_META_DOCUMENT_ID);
+    let exists = false;
     try {
-      await db.collection(CATALOG_META_COLLECTION).doc(CATALOG_META_DOCUMENT_ID).set({
+      const response = await document.get();
+      exists = Boolean(response && response.data);
+    } catch (error) {
+      if (!isDocumentNotFound(error)) throw error;
+    }
+    if (exists) {
+      await document.update({
         data: {
-          revision: 1,
+          revision: getRevisionIncrement(),
           updatedAt: db.serverDate(),
         },
       });
-    } catch (createError) {
-      console.warn("catalog revision update failed", createError);
+      return;
     }
+    await document.set({
+      data: {
+        revision: initialRevision,
+        updatedAt: db.serverDate(),
+      },
+    });
+  });
+}
+
+async function bumpCatalogRevision() {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await db.collection(CATALOG_META_COLLECTION).doc(CATALOG_META_DOCUMENT_ID).update({
+        data: {
+          revision: getRevisionIncrement(),
+          updatedAt: db.serverDate(),
+        },
+      });
+      return true;
+    } catch (error) {
+      lastError = error;
+      if (isDocumentNotFound(error)) {
+        try {
+          await initializeCatalogRevision();
+          return true;
+        } catch (initializeError) {
+          lastError = initializeError;
+        }
+      }
+    }
+  }
+  console.error("catalog revision update failed", lastError);
+  throw lastError || new Error("案例目录版本更新失败");
+}
+
+async function cleanupCaseFilesAfterMutation(fileIDs) {
+  try {
+    return await deleteUnreferencedCaseFiles(fileIDs);
+  } catch (error) {
+    // File cleanup is recoverable and must not turn a committed database
+    // mutation into a client-visible failure or delay cache invalidation.
+    console.warn("case image cleanup deferred", error);
+    return [];
   }
 }
 
@@ -393,8 +462,8 @@ async function updateCase(event, openid) {
   const removedFileIds = getCaseImageFileIds(existing).filter(
     (fileID) => !nextFileIds.has(fileID) && !sourceFileIds.has(fileID)
   );
-  await deleteUnreferencedCaseFiles(removedFileIds);
   await bumpCatalogRevision();
+  await cleanupCaseFilesAfterMutation(removedFileIds);
 
   return ok({ id });
 }
@@ -584,8 +653,8 @@ async function deleteCase(event) {
     (fileID) => !sourceFileIds.has(fileID)
   );
   await db.collection(CASE_COLLECTION).doc(id).remove();
-  const deletedFileIds = await deleteUnreferencedCaseFiles(imageFileIds);
   await bumpCatalogRevision();
+  const deletedFileIds = await cleanupCaseFilesAfterMutation(imageFileIds);
 
   return ok({
     id,
@@ -597,7 +666,11 @@ async function deleteCase(event) {
 exports.main = async (event = {}) => {
   const { OPENID } = cloud.getWXContext();
   const action = trimText(event.action);
-  const admin = isAdminOpenid(OPENID, process.env.ADMIN_OPENIDS);
+  const admin = isRoleAdminOpenid(
+    OPENID,
+    process.env.CASE_ADMIN_OPENIDS,
+    process.env.ADMIN_OPENIDS
+  );
 
   if (action === "checkAccess") {
     return ok({ isAdmin: admin });
@@ -628,3 +701,5 @@ exports.main = async (event = {}) => {
     return fail("SERVER_ERROR", error.message || "案例管理服务异常");
   }
 };
+
+module.exports.bumpCatalogRevision = bumpCatalogRevision;

@@ -64,7 +64,7 @@
           <view class="status-badge status-{{item.status}}">{{item.statusLabel}}</view>
           <view class="created-time">{{item.createdAtText}}</view>
         </view>
-        <view class="contact-label">客户联系方式</view>
+        <view class="contact-label">客户联系方式 · {{item.contactTypeLabel}}</view>
         <view class="contact-line">{{item.contact || '未填写'}}</view>
         <view class="meta-grid">
           <view class="meta-item">包装 · {{item.packageSummary || '未选择'}}</view>

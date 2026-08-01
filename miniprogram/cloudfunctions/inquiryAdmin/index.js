@@ -32,7 +32,9 @@ function trimText(value) {
 }
 
 function getAdminOpenids() {
-  return trimText(process.env.ADMIN_OPENIDS)
+  const configuredAdmins = trimText(process.env.INQUIRY_ADMIN_OPENIDS)
+    || trimText(process.env.ADMIN_OPENIDS);
+  return configuredAdmins
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);

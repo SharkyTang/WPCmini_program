@@ -220,6 +220,35 @@ page {
   gap: 16rpx;
 }
 
+.privacy-entry {
+  min-height: 96rpx;
+  margin-top: 18rpx;
+  padding: 18rpx 20rpx;
+  border-top: 2rpx solid rgba(223, 207, 183, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+
+.privacy-entry:active {
+  opacity: 0.76;
+}
+
+.privacy-entry-title {
+  color: #241d16;
+  font-size: 25rpx;
+  line-height: 1.4;
+  font-weight: 700;
+}
+
+.privacy-entry-subtitle {
+  margin-top: 4rpx;
+  color: #766b60;
+  font-size: 21rpx;
+  line-height: 1.45;
+}
+
 .flow-row {
   min-height: 88rpx;
   padding: 16rpx 20rpx;

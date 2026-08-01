@@ -1,4 +1,12 @@
 const cloud = require("wx-server-sdk");
+const {
+  buildDeliveryId,
+  createLeaseOwner,
+  getCompletedJobStatus,
+  isJobClaimable,
+  mergeJobCounts,
+  toTimestamp,
+} = require("./notificationDispatcherLogic");
 
 cloud.init({
   env: cloud.DYNAMIC_CURRENT_ENV,
@@ -11,6 +19,8 @@ const SUBSCRIPTION_COLLECTION = "notification_subscriptions";
 const PUSH_JOB_COLLECTION = "notification_push_jobs";
 const DELIVERY_LOG_COLLECTION = "notification_delivery_logs";
 const BATCH_SIZE = 20;
+const JOB_SCAN_LIMIT = 20;
+const JOB_LEASE_MS = 4 * 60 * 1000;
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -22,6 +32,16 @@ function ok(data = {}) {
 
 function fail(code, message) {
   return { ok: false, code, message };
+}
+
+function isDocumentNotFound(error) {
+  const code = error && (error.errCode || error.code);
+  const message = error && (error.errMsg || error.message);
+  return (
+    code === -502005
+    || code === "DATABASE_DOCUMENT_NOT_EXIST"
+    || /document.*not found|does not exist/i.test(message || "")
+  );
 }
 
 function isAdmin(openid) {
@@ -119,12 +139,15 @@ async function findJob(jobId) {
     .collection(PUSH_JOB_COLLECTION)
     .where({ status: _.in(["pending", "processing"]) })
     .orderBy("createdAt", "asc")
-    .limit(1)
+    .limit(JOB_SCAN_LIMIT)
     .get();
-  return (response.data || [])[0] || null;
+  return (response.data || []).find((job) => isJobClaimable(job)) || null;
 }
 
 async function findDelivery(announcementId, openid) {
+  const deliveryId = buildDeliveryId(announcementId, openid);
+  const current = await getDocument(DELIVERY_LOG_COLLECTION, deliveryId);
+  if (current) return current;
   const response = await db
     .collection(DELIVERY_LOG_COLLECTION)
     .where({ announcementId, openid })
@@ -133,130 +156,255 @@ async function findDelivery(announcementId, openid) {
   return (response.data || [])[0] || null;
 }
 
-async function addDeliveryLog(data) {
-  await db.collection(DELIVERY_LOG_COLLECTION).add({
+async function claimJob(jobId, leaseOwner) {
+  const now = Date.now();
+  return db.runTransaction(async (transaction) => {
+    const document = transaction.collection(PUSH_JOB_COLLECTION).doc(jobId);
+    const response = await document.get();
+    const current = response.data || null;
+    if (!isJobClaimable(current, now)) return null;
+    const leaseUntil = new Date(now + JOB_LEASE_MS);
+    await document.update({
+      data: {
+        status: "processing",
+        leaseOwner,
+        leaseUntil,
+        updatedAt: db.serverDate(),
+      },
+    });
+    return {
+      ...current,
+      status: "processing",
+      leaseOwner,
+      leaseUntil,
+    };
+  });
+}
+
+async function claimDelivery(announcement, subscription, job, leaseOwner) {
+  const deliveryId = buildDeliveryId(announcement._id, subscription.openid);
+  return db.runTransaction(async (transaction) => {
+    const document = transaction.collection(DELIVERY_LOG_COLLECTION).doc(deliveryId);
+    let existing = null;
+    try {
+      const response = await document.get();
+      existing = response.data || null;
+    } catch (error) {
+      if (!isDocumentNotFound(error)) throw error;
+      existing = null;
+    }
+    if (existing) {
+      return { claimed: false, deliveryId, record: existing };
+    }
+    const record = {
+      announcementId: announcement._id,
+      jobId: job._id,
+      openid: subscription.openid,
+      type: announcement.type,
+      status: "processing",
+      leaseOwner,
+      createdAt: db.serverDate(),
+      updatedAt: db.serverDate(),
+    };
+    await document.set({ data: record });
+    return { claimed: true, deliveryId, record };
+  });
+}
+
+async function completeDelivery(deliveryId, data) {
+  await db.collection(DELIVERY_LOG_COLLECTION).doc(deliveryId).update({
     data: {
       ...data,
-      createdAt: db.serverDate(),
+      updatedAt: db.serverDate(),
     },
   });
 }
 
 async function consumeSubscription(subscription, deliveryStatus) {
-  await db.collection(SUBSCRIPTION_COLLECTION).doc(subscription._id).update({
-    data: {
-      status: "consumed",
-      consumedAt: db.serverDate(),
-      lastDeliveryStatus: deliveryStatus,
-      updatedAt: db.serverDate(),
-    },
+  return db.runTransaction(async (transaction) => {
+    const document = transaction.collection(SUBSCRIPTION_COLLECTION).doc(subscription._id);
+    const response = await document.get();
+    const current = response.data || null;
+    if (!current || current.status !== "granted") return false;
+    const expectedVersion = toTimestamp(subscription.updatedAt || subscription.grantedAt);
+    const currentVersion = toTimestamp(current.updatedAt || current.grantedAt);
+    if (expectedVersion && currentVersion && expectedVersion !== currentVersion) {
+      // The user granted a new one-time subscription while this batch was sending.
+      return false;
+    }
+    await document.update({
+      data: {
+        status: "consumed",
+        consumedAt: db.serverDate(),
+        lastDeliveryStatus: deliveryStatus,
+        updatedAt: db.serverDate(),
+      },
+    });
+    return true;
   });
 }
 
-async function updateJob(job, counts, status = "processing") {
-  await db.collection(PUSH_JOB_COLLECTION).doc(job._id).update({
-    data: {
-      status,
-      successCount: Number(job.successCount || 0) + counts.success,
-      failedCount: Number(job.failedCount || 0) + counts.failed,
-      skippedCount: Number(job.skippedCount || 0) + counts.skipped,
-      updatedAt: db.serverDate(),
-      ...(status === "completed" || status === "partial_failed"
-        ? { completedAt: db.serverDate() }
-        : {}),
-    },
+async function completeJobBatch(jobId, leaseOwner, counts, options = {}) {
+  return db.runTransaction(async (transaction) => {
+    const document = transaction.collection(PUSH_JOB_COLLECTION).doc(jobId);
+    const response = await document.get();
+    const current = response.data || null;
+    if (!current || current.leaseOwner !== leaseOwner) {
+      return null;
+    }
+    const totals = mergeJobCounts(current, counts);
+    const status = options.forcedStatus
+      || (options.hasMore ? "pending" : getCompletedJobStatus(totals));
+    await document.update({
+      data: {
+        status,
+        ...totals,
+        leaseOwner: "",
+        leaseUntil: null,
+        updatedAt: db.serverDate(),
+        ...(status === "completed" || status === "partial_failed"
+          ? { completedAt: db.serverDate() }
+          : {}),
+      },
+    });
+    return { status, ...totals };
   });
+}
+
+async function releaseJob(jobId, leaseOwner, error) {
+  try {
+    await db.runTransaction(async (transaction) => {
+      const document = transaction.collection(PUSH_JOB_COLLECTION).doc(jobId);
+      const response = await document.get();
+      const current = response.data || null;
+      if (!current || current.leaseOwner !== leaseOwner) return;
+      await document.update({
+        data: {
+          status: "pending",
+          leaseOwner: "",
+          leaseUntil: null,
+          lastError: truncate(error && error.message ? error.message : "推送任务异常", 200),
+          updatedAt: db.serverDate(),
+        },
+      });
+    });
+  } catch (releaseError) {
+    console.error("notification job lease release failed", releaseError);
+  }
+}
+
+async function processSubscription(announcement, subscription, job, leaseOwner, templateId) {
+  const previous = await findDelivery(announcement._id, subscription.openid);
+  if (previous) {
+    const previousStatus = ["success", "failed"].includes(previous.status)
+      ? previous.status
+      : "skipped";
+    await consumeSubscription(subscription, previousStatus);
+    return previousStatus;
+  }
+
+  const delivery = await claimDelivery(announcement, subscription, job, leaseOwner);
+  if (!delivery.claimed) {
+    const previousStatus = ["success", "failed"].includes(
+      delivery.record && delivery.record.status
+    )
+      ? delivery.record.status
+      : "skipped";
+    await consumeSubscription(subscription, previousStatus);
+    return previousStatus;
+  }
+
+  let status = "success";
+  let deliveryError = null;
+  try {
+    await cloud.openapi.subscribeMessage.send({
+      touser: subscription.openid,
+      templateId,
+      page: (announcement.targetPage || "/pages/notifications/index").replace(/^\//, ""),
+      miniprogramState: getMiniProgramState(),
+      lang: "zh_CN",
+      data: buildMessageData(announcement),
+    });
+  } catch (error) {
+    status = "failed";
+    deliveryError = error;
+  }
+
+  await completeDelivery(delivery.deliveryId, {
+    status,
+    ...(deliveryError
+      ? {
+        errorCode: deliveryError.errCode || deliveryError.code || "",
+        errorMessage: truncate(deliveryError.errMsg || deliveryError.message || "发送失败", 200),
+      }
+      : {}),
+  });
+  await consumeSubscription(subscription, status);
+  return status;
 }
 
 async function processJob(jobId = "") {
-  const job = await findJob(jobId);
-  if (!job) return ok({ processed: 0, status: "idle" });
+  const candidate = await findJob(jobId);
+  if (!candidate) return ok({ processed: 0, status: "idle" });
+  const leaseOwner = createLeaseOwner();
+  const job = await claimJob(candidate._id, leaseOwner);
+  if (!job) return ok({ processed: 0, status: "busy" });
 
-  const announcement = await getDocument(ANNOUNCEMENT_COLLECTION, job.announcementId);
-  if (!announcement || announcement.publishStatus !== "published" || announcement.isVisible !== true) {
-    await updateJob(job, { success: 0, failed: 0, skipped: 0 }, "partial_failed");
-    return fail("ANNOUNCEMENT_UNAVAILABLE", "通知不存在或已隐藏");
-  }
-
-  const templateId = getTemplateId(announcement.type);
-  if (!isValidSubscriptionTemplateId(templateId)) {
-    await updateJob(job, { success: 0, failed: 0, skipped: 0 }, "partial_failed");
-    return fail(
-      "INVALID_TEMPLATE_CONFIG",
-      "订阅模板配置错误，请填写当前 AppID“我的模板”中的长模板 ID，不能填写模板编号"
-    );
-  }
-
-  await db.collection(PUSH_JOB_COLLECTION).doc(job._id).update({
-    data: {
-      status: "processing",
-      updatedAt: db.serverDate(),
-    },
-  });
-
-  const subscriptionResponse = await db
-    .collection(SUBSCRIPTION_COLLECTION)
-    .where({
-      type: announcement.type,
-      templateId,
-      status: "granted",
-      grantedAt: _.lte(announcement.publishedAt),
-    })
-    .limit(BATCH_SIZE)
-    .get();
-  const subscriptions = subscriptionResponse.data || [];
-  const counts = { success: 0, failed: 0, skipped: 0 };
-
-  for (const subscription of subscriptions) {
-    const previous = await findDelivery(announcement._id, subscription.openid);
-    if (previous) {
-      counts.skipped += 1;
-      await consumeSubscription(subscription, "skipped");
-      continue;
+  try {
+    const announcement = await getDocument(ANNOUNCEMENT_COLLECTION, job.announcementId);
+    if (!announcement || announcement.publishStatus !== "published" || announcement.isVisible !== true) {
+      await completeJobBatch(job._id, leaseOwner, { success: 0, failed: 0, skipped: 0 }, {
+        forcedStatus: "partial_failed",
+      });
+      return fail("ANNOUNCEMENT_UNAVAILABLE", "通知不存在或已隐藏");
     }
 
-    try {
-      await cloud.openapi.subscribeMessage.send({
-        touser: subscription.openid,
+    const templateId = getTemplateId(announcement.type);
+    if (!isValidSubscriptionTemplateId(templateId)) {
+      await completeJobBatch(job._id, leaseOwner, { success: 0, failed: 0, skipped: 0 }, {
+        forcedStatus: "partial_failed",
+      });
+      return fail(
+        "INVALID_TEMPLATE_CONFIG",
+        "订阅模板配置错误，请填写当前 AppID“我的模板”中的长模板 ID，不能填写模板编号"
+      );
+    }
+
+    const subscriptionResponse = await db
+      .collection(SUBSCRIPTION_COLLECTION)
+      .where({
+        type: announcement.type,
         templateId,
-        page: (announcement.targetPage || "/pages/notifications/index").replace(/^\//, ""),
-        miniprogramState: getMiniProgramState(),
-        lang: "zh_CN",
-        data: buildMessageData(announcement),
-      });
-      counts.success += 1;
-      await addDeliveryLog({
-        announcementId: announcement._id,
-        jobId: job._id,
-        openid: subscription.openid,
-        type: announcement.type,
-        status: "success",
-      });
-      await consumeSubscription(subscription, "success");
-    } catch (error) {
-      counts.failed += 1;
-      await addDeliveryLog({
-        announcementId: announcement._id,
-        jobId: job._id,
-        openid: subscription.openid,
-        type: announcement.type,
-        status: "failed",
-        errorCode: error.errCode || error.code || "",
-        errorMessage: truncate(error.errMsg || error.message || "发送失败", 200),
-      });
-      await consumeSubscription(subscription, "failed");
+        status: "granted",
+        grantedAt: _.lte(announcement.publishedAt),
+      })
+      .limit(BATCH_SIZE)
+      .get();
+    const subscriptions = subscriptionResponse.data || [];
+    const counts = { success: 0, failed: 0, skipped: 0 };
+
+    for (const subscription of subscriptions) {
+      const status = await processSubscription(
+        announcement,
+        subscription,
+        job,
+        leaseOwner,
+        templateId
+      );
+      if (status === "success") counts.success += 1;
+      else if (status === "failed") counts.failed += 1;
+      else counts.skipped += 1;
     }
-  }
 
-  if (subscriptions.length === BATCH_SIZE) {
-    await updateJob(job, counts, "pending");
-    return ok({ processed: subscriptions.length, status: "pending", counts });
+    const completion = await completeJobBatch(job._id, leaseOwner, counts, {
+      hasMore: subscriptions.length === BATCH_SIZE,
+    });
+    const status = completion ? completion.status : "busy";
+    return ok({ processed: subscriptions.length, status, counts });
+  } catch (error) {
+    await releaseJob(job._id, leaseOwner, error);
+    throw error;
   }
-
-  const finalFailed = Number(job.failedCount || 0) + counts.failed;
-  const finalStatus = finalFailed > 0 ? "partial_failed" : "completed";
-  await updateJob(job, counts, finalStatus);
-  return ok({ processed: subscriptions.length, status: finalStatus, counts });
 }
 
 exports.main = async (event = {}) => {
@@ -266,7 +414,7 @@ exports.main = async (event = {}) => {
     return fail("FORBIDDEN", "无权限执行通知推送");
   }
   try {
-    return processJob(trimText(event.jobId));
+    return await processJob(trimText(event.jobId));
   } catch (error) {
     console.error("notificationDispatcher error", error);
     return fail("SERVER_ERROR", error.message || "通知推送服务异常");
@@ -275,3 +423,4 @@ exports.main = async (event = {}) => {
 
 module.exports.buildMessageData = buildMessageData;
 module.exports.processJob = processJob;
+module.exports.buildDeliveryId = buildDeliveryId;

@@ -281,6 +281,10 @@ Page({
     wx.navigateTo({ url: "/pages/inquiry/index?source=profile" });
   },
 
+  openPrivacyCenter() {
+    wx.navigateTo({ url: "/pages/privacy/index" });
+  },
+
   openInquiryAdmin() {
     wx.navigateTo({ url: "/pages/inquiry-admin/index" });
   },

@@ -38,6 +38,7 @@ test("builds inquiry records from whitelisted fields and server openid", () => {
     packageTypes: ["礼盒"],
     content: "想做一套礼盒包装",
     contact: "wx-test",
+    contactType: "wechat",
     openid: "spoofed",
     status: "done",
     adminNote: "bad",
@@ -50,6 +51,7 @@ test("builds inquiry records from whitelisted fields and server openid", () => {
   assert.equal(validation.valid, true);
   assert.equal(record.openid, "server_openid");
   assert.equal(record.status, "new");
+  assert.equal(record.contactType, "wechat");
   assert.equal(Object.prototype.hasOwnProperty.call(record, "adminNote"), false);
 });
 
@@ -66,6 +68,31 @@ test("validates feedback type, content, and contact length", () => {
   );
 });
 
+test("validates contact types while accepting legacy clients", () => {
+  const inquiry = {
+    packageTypes: ["礼盒"],
+    content: "想做一套礼盒包装",
+  };
+  assert.equal(validateInquiryDraft({ ...inquiry, contact: "legacy-contact" }).valid, true);
+  assert.equal(
+    validateInquiryDraft({ ...inquiry, contact: "12345", contactType: "phone" }).message,
+    "请输入正确的手机号"
+  );
+  assert.equal(
+    validateInquiryDraft({ ...inquiry, contact: "user@example.com", contactType: "email" }).valid,
+    true
+  );
+  assert.equal(
+    validateFeedbackDraft({
+      type: "bug",
+      content: "页面加载异常",
+      contact: "user@invalid",
+      contactType: "email",
+    }).message,
+    "请输入正确的邮箱"
+  );
+});
+
 test("builds feedback records without trusting client identity fields", () => {
   const validation = validateFeedbackDraft({
     type: "bug",
@@ -76,12 +103,25 @@ test("builds feedback records without trusting client identity fields", () => {
   const record = buildFeedbackRecord(validation.data, {
     openid: "server_openid",
     route: "pages/feedback/index",
+    systemInfo: {
+      brand: "Apple",
+      model: "iPhone",
+      platform: "ios",
+      system: "iOS 19",
+      version: "8.0.60",
+      SDKVersion: "3.10.0",
+    },
   });
 
   assert.equal(validation.valid, true);
   assert.equal(record.openid, "server_openid");
   assert.equal(record.status, "new");
-  assert.deepEqual(plain(record.systemInfo), {});
+  assert.deepEqual(plain(record.systemInfo), {
+    platform: "ios",
+    system: "iOS 19",
+    version: "8.0.60",
+    SDKVersion: "3.10.0",
+  });
 });
 
 test("validates subscription grants against the configured template", () => {
