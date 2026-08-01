@@ -28,6 +28,8 @@ const SERVER_PAGE_SIZE = 100;
 const LOOKUP_CHUNK_SIZE = 10;
 const URL_BATCH_SIZE = 50;
 const LOOKUP_CONCURRENCY = 4;
+const CATALOG_IMAGE_ID_LIMIT = 24;
+const CATALOG_IMAGE_ID_MAX_LENGTH = 128;
 
 function ok(data = {}) {
   return { ok: true, ...data };
@@ -162,16 +164,61 @@ async function getCatalogSnapshot(event) {
     field: CARD_FIELDS,
     orderField: "sortOrder",
   });
-  const urlMap = await getTempUrlMap(
-    records.map((record) =>
-      getCardImageFileId(normalizeCaseRecord(record), { preferBanner: true })
-    )
-  );
   return ok({
     revision,
     notModified: false,
-    items: buildCatalogSnapshot(records, urlMap),
+    // Keep the snapshot small and cacheable. Image URLs are hydrated only for
+    // the cards currently visible in the category page.
+    items: buildCatalogSnapshot(records),
   });
+}
+
+function normalizeCatalogImageIds(value) {
+  if (!Array.isArray(value) || value.length > CATALOG_IMAGE_ID_LIMIT) return null;
+  const ids = value.map(trimText);
+  if (ids.some((id) => !id || id.length > CATALOG_IMAGE_ID_MAX_LENGTH)) {
+    return null;
+  }
+  return Array.from(new Set(ids));
+}
+
+function resolveKnownImageUrl(fileID, urlMap = {}) {
+  if (!fileID) return "";
+  if (urlMap[fileID]) return urlMap[fileID];
+  return fileID.indexOf("cloud://") === 0 ? "" : fileID;
+}
+
+async function getCatalogImageUrls(event) {
+  const ids = normalizeCatalogImageIds(event.ids);
+  if (!ids) {
+    return fail(
+      "INVALID_CATALOG_IMAGE_IDS",
+      `案例图片 ID 必须是不超过 ${CATALOG_IMAGE_ID_LIMIT} 项的数组`
+    );
+  }
+  if (!ids.length) return ok({ images: {} });
+
+  // Resolve document ids against visible records before signing any file URL.
+  // Client-provided file ids are never accepted by this endpoint.
+  const records = await fetchCasesByField("_id", ids);
+  const imageRecords = records.map((record) => {
+    const item = normalizeCaseRecord(record);
+    return {
+      id: item.id,
+      imageFileId: getCardImageFileId(item, { preferBanner: true }),
+    };
+  });
+  const urlMap = await getTempUrlMap(
+    imageRecords.map((item) => item.imageFileId)
+  );
+  const images = imageRecords.reduce((map, item) => {
+    map[item.id] = {
+      imageFileId: item.imageFileId,
+      thumbnailUrl: resolveKnownImageUrl(item.imageFileId, urlMap),
+    };
+    return map;
+  }, {});
+  return ok({ images });
 }
 
 async function findCaseById(id) {
@@ -303,6 +350,7 @@ exports.main = async (event = {}) => {
   try {
     if (action === "getHomeFeed") return getHomeFeed(event);
     if (action === "getCatalogSnapshot") return getCatalogSnapshot(event);
+    if (action === "getCatalogImageUrls") return getCatalogImageUrls(event);
     if (action === "getCaseDetail") return getCaseDetail(event);
     if (action === "listUserLibrary") return listUserLibrary(event, OPENID);
     return fail("UNKNOWN_ACTION", "未知案例目录操作");

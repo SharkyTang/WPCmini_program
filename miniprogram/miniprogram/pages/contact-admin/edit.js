@@ -12,6 +12,7 @@ const {
   checkContactAdminAccess,
   cleanupContactFiles,
   fetchContactAdminDraft,
+  prepareContactImageForUpload = async ({ filePath }) => filePath,
   saveContactAdmin,
   uploadContactImage,
 } = require("./utils/contactAdminService");
@@ -19,13 +20,14 @@ const {
 const UPLOAD_CONCURRENCY = 2;
 let pendingImageSequence = 0;
 
-function createPendingImage(filePath, kind) {
+function createPendingImage(filePath, kind, byteSize = 0) {
   pendingImageSequence += 1;
   return {
     key: `${kind}-pending-${Date.now()}-${pendingImageSequence}`,
     fileID: "",
     url: filePath,
     localPath: filePath,
+    byteSize: Number(byteSize) || 0,
     isPending: true,
   };
 }
@@ -181,7 +183,7 @@ Page({
         this.setData({
           storeImages: this.data.storeImages.concat(
             accepted.map((file) =>
-              createPendingImage(file.filePath, "store")
+              createPendingImage(file.filePath, "store", file.size)
             )
           ),
           inlineMessage: "",
@@ -222,7 +224,7 @@ Page({
         this.setData({
           wechatQrs: this.data.wechatQrs.concat(
             accepted.map((file) =>
-              createPendingImage(file.filePath, "wechat")
+              createPendingImage(file.filePath, "wechat", file.size)
             )
           ),
           inlineMessage: "",
@@ -353,6 +355,7 @@ Page({
             key: image.key,
             kind: "store",
             filePath: image.localPath,
+            byteSize: image.byteSize,
           });
         }
       });
@@ -362,6 +365,7 @@ Page({
             key: image.key,
             kind: "wechat",
             filePath: image.localPath,
+            byteSize: image.byteSize,
           });
         }
       });
@@ -370,11 +374,16 @@ Page({
         uploadTasks,
         UPLOAD_CONCURRENCY,
         async (task, index) => {
-          const fileID = await uploadContactImage({
+          const uploadFilePath = await prepareContactImageForUpload({
             filePath: task.filePath,
+            kind: task.kind,
+            byteSize: task.byteSize,
+          });
+          const fileID = await uploadContactImage({
+            filePath: uploadFilePath,
             cloudPath: buildContactAssetCloudPath(
               task.kind,
-              task.filePath,
+              uploadFilePath,
               `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`
             ),
           });

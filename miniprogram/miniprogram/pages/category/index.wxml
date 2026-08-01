@@ -106,6 +106,7 @@
               mode="aspectFill"
               src="{{item.coverImageUrl}}"
               lazy-load
+              fade-in="{{true}}"
               binderror="retryCardImage"
               data-id="{{item.id}}"
             ></image>

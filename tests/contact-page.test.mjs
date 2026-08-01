@@ -498,6 +498,7 @@ await test("contact page enables gallery and long-press QR behavior", () => {
   assert.equal(wxml.includes("门店图片暂时无法加载，请稍后重试"), true);
   assert.equal(wxml.includes("门店图片暂未配置"), true);
   assert.equal(wxml.includes('bindtap="previewStoreImage"'), true);
+  assert.equal(wxml.includes('lazy-load="{{index > 0}}"'), true);
   assert.equal(wxml.includes('bindtap="openStoreLocation"'), true);
   assert.equal(wxml.includes("map-button-icon"), false);
   assert.equal(
@@ -510,6 +511,7 @@ await test("contact page enables gallery and long-press QR behavior", () => {
   assert.equal(wxml.includes('bindtap="callPhone"'), true);
   assert.equal(wxml.includes("<button"), true);
   assert.equal(wxml.includes('show-menu-by-longpress="{{true}}"'), true);
+  assert.equal(wxml.includes('lazy-load="{{true}}"'), true);
   assert.equal(wxml.includes('wx:for="{{wechatQrImages}}"'), true);
   assert.equal(wxml.includes('bindtap="previewWechatQr"'), true);
 });

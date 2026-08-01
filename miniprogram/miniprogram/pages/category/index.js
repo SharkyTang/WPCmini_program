@@ -4,7 +4,10 @@ const {
   selectedFilterCount,
 } = require("../../utils/caseData");
 const { attachCaseImageUrls, fetchVisibleCases, refreshImageUrl } = require("../../utils/cloudData");
-const { fetchCatalogSnapshot } = require("../../utils/caseCatalogService");
+const {
+  fetchCatalogImageUrls,
+  fetchCatalogSnapshot,
+} = require("../../utils/caseCatalogService");
 const {
   CATALOG_CACHE_KEY,
   readCache,
@@ -113,6 +116,44 @@ function buildCaseCards(cases) {
     ...caseItem,
     tagSummary: summarizeTags(caseItem),
   }));
+}
+
+function getCardImageFileId(caseItem = {}) {
+  return (
+    caseItem.imageFileId ||
+    caseItem.coverBanner ||
+    caseItem.coverThumbnail ||
+    caseItem.coverImage ||
+    ""
+  );
+}
+
+function needsImageUrl(caseItem = {}) {
+  return !caseItem.coverImageUrl && Boolean(getCardImageFileId(caseItem));
+}
+
+function applyCatalogImageMap(cases = [], images = {}) {
+  return cases.map((caseItem) => {
+    const image = caseItem.id && images[caseItem.id];
+    if (!image) return caseItem;
+    const currentImageFileId = getCardImageFileId(caseItem);
+    if (
+      image.imageFileId &&
+      currentImageFileId &&
+      image.imageFileId !== currentImageFileId
+    ) {
+      return caseItem;
+    }
+    const imageFileId = image.imageFileId || currentImageFileId;
+    const coverImageUrl = image.thumbnailUrl || "";
+    return {
+      ...caseItem,
+      imageFileId,
+      coverImageUrl,
+      imageLoadState: coverImageUrl ? "ready" : "failed",
+      imageRetryCount: 0,
+    };
+  });
 }
 
 function isValidSortKey(sortKey) {
@@ -245,6 +286,8 @@ Page({
     this._filteredCases = [];
     this._displayLimit = CARD_PAGE_SIZE;
     this._imageRequestVersion = 0;
+    this._catalogImageCache = {};
+    this._catalogImageEndpointAvailable = true;
     this._searchTimer = null;
     this._catalogCache = readCache(CATALOG_CACHE_KEY);
     const initialSort = normalizeInitialSort(options.sort || takePendingCategorySort());
@@ -424,14 +467,7 @@ Page({
     const sourceCards = this._filteredCases.slice(start, this._displayLimit);
     this.setData({ isLoadingMore: true });
     try {
-      const alreadyHydrated = sourceCards.every(
-        (item) =>
-          item.coverImageUrl ||
-          !(item.imageFileId || item.coverThumbnail || item.coverImage)
-      );
-      const visibleCards = alreadyHydrated
-        ? sourceCards
-        : await attachCaseImageUrls(sourceCards, { preferBanner: true });
+      const visibleCards = await this.hydrateVisibleCardImages(sourceCards);
       if (this._imageRequestVersion !== requestVersion) return;
       if (!options.append) {
         this.setData({ visibleCards, isLoadingMore: false });
@@ -461,6 +497,62 @@ Page({
         this.setData(patch);
       }
     }
+  },
+
+  rememberCatalogImages(cards = []) {
+    cards.forEach((item) => {
+      const imageFileId = getCardImageFileId(item);
+      if (!item.id || !imageFileId || !item.coverImageUrl) return;
+      this._catalogImageCache[item.id] = {
+        imageFileId,
+        thumbnailUrl: item.coverImageUrl,
+      };
+    });
+  },
+
+  async hydrateVisibleCardImages(sourceCards = []) {
+    let cards = applyCatalogImageMap(sourceCards, this._catalogImageCache);
+    let missingCards = cards.filter(needsImageUrl);
+    if (!missingCards.length) return cards;
+
+    if (this._catalogImageEndpointAvailable) {
+      try {
+        const images = await fetchCatalogImageUrls(
+          missingCards.map((item) => item.id).filter(Boolean)
+        );
+        this._catalogImageCache = {
+          ...this._catalogImageCache,
+          ...images,
+        };
+        cards = applyCatalogImageMap(cards, images);
+      } catch (error) {
+        if (error && error.code === "UNKNOWN_ACTION") {
+          this._catalogImageEndpointAvailable = false;
+        }
+        console.warn("分类图片批量接口不可用，使用兼容读取", error);
+      }
+    }
+
+    const missingIndexes = [];
+    missingCards = [];
+    cards.forEach((item, index) => {
+      if (!needsImageUrl(item)) return;
+      missingIndexes.push(index);
+      missingCards.push(item);
+    });
+    if (!missingCards.length) {
+      this.rememberCatalogImages(cards);
+      return cards;
+    }
+
+    const fallbackCards = await attachCaseImageUrls(missingCards, {
+      preferBanner: true,
+    });
+    missingIndexes.forEach((cardIndex, index) => {
+      cards[cardIndex] = fallbackCards[index];
+    });
+    this.rememberCatalogImages(cards);
+    return cards;
   },
 
   loadMore() {

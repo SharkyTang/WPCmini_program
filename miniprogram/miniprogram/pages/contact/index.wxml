@@ -39,6 +39,8 @@
           class="store-image"
           src="{{item}}"
           mode="aspectFill"
+          lazy-load="{{index > 0}}"
+          fade-in="{{true}}"
           data-index="{{index}}"
           bindtap="previewStoreImage"
         />
@@ -108,6 +110,8 @@
           class="qr-image"
           src="{{item}}"
           mode="widthFix"
+          lazy-load="{{true}}"
+          fade-in="{{true}}"
           show-menu-by-longpress="{{true}}"
           data-index="{{index}}"
           bindtap="previewWechatQr"

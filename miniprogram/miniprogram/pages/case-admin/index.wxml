@@ -60,7 +60,7 @@
 
     <view wx:else class="case-list">
       <view wx:for="{{cases}}" wx:key="displayKey" class="case-card">
-        <image wx:if="{{item.coverImageUrl}}" class="case-cover" src="{{item.coverImageUrl}}" mode="aspectFill" />
+        <image wx:if="{{item.coverImageUrl}}" class="case-cover" src="{{item.coverImageUrl}}" mode="aspectFill" lazy-load="{{true}}" fade-in="{{true}}" />
         <view wx:else class="case-cover case-cover-placeholder">暂无图片</view>
         <view class="case-copy">
           <view class="case-head">

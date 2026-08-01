@@ -125,6 +125,7 @@ await test("case admin list shows delete after visibility action", () => {
   assert.equal(wxml.includes("首页轮播"), false);
   assert.equal(wxml.includes("<mp-dialog"), true);
   assert.equal(wxml.includes('bindbuttontap="handleConfirmDialogTap"'), true);
+  assert.equal(wxml.includes('lazy-load="{{true}}"'), true);
 });
 
 await test("homepage view replaces visibility filtering and does not paginate", async () => {

@@ -3,6 +3,7 @@ const crypto = require("node:crypto");
 const MAX_FILES = 9;
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 const DISPLAY_LONG_EDGE = 1600;
+const DISPLAY_TARGET_BYTES = 300 * 1024;
 const THUMBNAIL_SIZE = 640;
 const THUMBNAIL_TARGET_BYTES = 100 * 1024;
 const BANNER_LONG_EDGE = 1080;
@@ -52,6 +53,30 @@ function buildVariantPaths(fileID) {
     thumbnailPath: `wine-packaging/variants/v2/${digest}/thumbnail.jpg`,
     bannerPath: `wine-packaging/variants/v2/${digest}/banner.jpg`,
   };
+}
+
+async function buildDisplayBuffer(sharpFactory, sourceBuffer) {
+  let quality = 80;
+  let buffer = null;
+  while (true) {
+    buffer = await sharpFactory(sourceBuffer, { failOn: "none" })
+      .rotate()
+      .toColorspace("srgb")
+      .resize({
+        width: DISPLAY_LONG_EDGE,
+        height: DISPLAY_LONG_EDGE,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .jpeg({
+        quality,
+        mozjpeg: true,
+      })
+      .toBuffer();
+    if (buffer.length <= DISPLAY_TARGET_BYTES || quality <= 20) break;
+    quality = Math.max(20, quality - 8);
+  }
+  return { buffer, quality };
 }
 
 async function buildThumbnailBuffer(sharpFactory, sourceBuffer) {
@@ -111,20 +136,7 @@ async function generateVariantBuffers(sharpFactory, sourceBuffer) {
 
   const source = sharpFactory(sourceBuffer, { failOn: "none" }).rotate();
   const metadata = await source.metadata();
-  const displayBuffer = await sharpFactory(sourceBuffer, { failOn: "none" })
-    .rotate()
-    .toColorspace("srgb")
-    .resize({
-      width: DISPLAY_LONG_EDGE,
-      height: DISPLAY_LONG_EDGE,
-      fit: "inside",
-      withoutEnlargement: true,
-    })
-    .jpeg({
-      quality: 80,
-      mozjpeg: true,
-    })
-    .toBuffer();
+  const display = await buildDisplayBuffer(sharpFactory, sourceBuffer);
   const thumbnail = await buildThumbnailBuffer(sharpFactory, sourceBuffer);
   const banner = await buildBannerBuffer(sharpFactory, sourceBuffer);
 
@@ -133,14 +145,15 @@ async function generateVariantBuffers(sharpFactory, sourceBuffer) {
       width: metadata.width || 0,
       height: metadata.height || 0,
       sourceBytes: sourceBuffer.length,
-      displayBytes: displayBuffer.length,
+      displayBytes: display.buffer.length,
+      displayQuality: display.quality,
       thumbnailBytes: thumbnail.buffer.length,
       thumbnailQuality: thumbnail.quality,
       bannerBytes: banner.buffer.length,
       bannerQuality: banner.quality,
       variantVersion: IMAGE_VARIANT_VERSION,
     },
-    displayBuffer,
+    displayBuffer: display.buffer,
     thumbnailBuffer: thumbnail.buffer,
     bannerBuffer: banner.buffer,
   };
@@ -150,6 +163,7 @@ module.exports = {
   BANNER_LONG_EDGE,
   BANNER_TARGET_BYTES,
   DISPLAY_LONG_EDGE,
+  DISPLAY_TARGET_BYTES,
   IMAGE_VARIANT_VERSION,
   MAX_FILES,
   MAX_SOURCE_BYTES,

@@ -57,7 +57,7 @@
       <scroll-view wx:if="{{selectedCases.length}}" class="case-preview-scroll" scroll-x enhanced>
         <view class="case-preview-row">
           <view wx:for="{{selectedCases}}" wx:key="id" class="case-preview">
-            <image wx:if="{{item.coverImageUrl}}" class="case-preview-image" src="{{item.coverImageUrl}}" mode="aspectFill" />
+            <image wx:if="{{item.coverImageUrl}}" class="case-preview-image" src="{{item.coverImageUrl}}" mode="aspectFill" lazy-load="{{true}}" fade-in="{{true}}" />
             <view wx:else class="case-preview-placeholder">暂无图片</view>
             <view class="case-preview-title">{{item.title}}</view>
           </view>

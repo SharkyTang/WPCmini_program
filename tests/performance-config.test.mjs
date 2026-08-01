@@ -110,6 +110,17 @@ test("project keeps lazy loading, audits and system-file exclusion enabled", () 
     ),
     true
   );
+  ["store-1.jpg", "store-2.jpg", "store-3.jpg"].forEach((fileName) => {
+    assert.equal(
+      projectConfig.packOptions.ignore.some(
+        (item) =>
+          item.type === "glob" &&
+          item.value === `**/pages/contact/assets/${fileName}`
+      ),
+      true,
+      `${fileName} should not enter the production package`
+    );
+  });
   assert.notEqual(projectConfig.libVersion, "2.21.2");
 });
 

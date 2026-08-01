@@ -1,4 +1,6 @@
 const CONTACT_ADMIN_FUNCTION = "contactAdmin";
+const STORE_IMAGE_COMPRESSION_THRESHOLD_BYTES = 768 * 1024;
+const STORE_IMAGE_COMPRESSION_QUALITY = 80;
 
 function normalizeFunctionResult(response) {
   const result = (response && response.result) || {};
@@ -80,12 +82,55 @@ async function uploadContactImage({ filePath, cloudPath }) {
   return response.fileID;
 }
 
+function prepareContactImageForUpload({
+  filePath,
+  kind,
+  byteSize = 0,
+}) {
+  const shouldCompress =
+    kind === "store" &&
+    Number(byteSize) > STORE_IMAGE_COMPRESSION_THRESHOLD_BYTES &&
+    typeof wx.compressImage === "function";
+
+  if (!shouldCompress) {
+    return Promise.resolve(filePath);
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (nextPath) => {
+      if (settled) return;
+      settled = true;
+      resolve(nextPath || filePath);
+    };
+
+    try {
+      wx.compressImage({
+        src: filePath,
+        quality: STORE_IMAGE_COMPRESSION_QUALITY,
+        success(result) {
+          finish(result && result.tempFilePath);
+        },
+        // 压缩只是优化步骤，失败时继续上传原图，不阻断保存。
+        fail() {
+          finish(filePath);
+        },
+      });
+    } catch (error) {
+      finish(filePath);
+    }
+  });
+}
+
 module.exports = {
   CONTACT_ADMIN_FUNCTION,
+  STORE_IMAGE_COMPRESSION_QUALITY,
+  STORE_IMAGE_COMPRESSION_THRESHOLD_BYTES,
   callContactAdmin,
   checkContactAdminAccess,
   cleanupContactFiles,
   fetchContactAdminDraft,
+  prepareContactImageForUpload,
   saveContactAdmin,
   uploadContactImage,
 };

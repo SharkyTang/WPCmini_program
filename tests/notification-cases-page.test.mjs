@@ -89,6 +89,7 @@ await test("notification case selector replaces manual document id input", () =>
   const pageWxml = readFileSync(wxmlPath, "utf8");
   assert.equal(editWxml.includes("关联案例文档 ID"), false);
   assert.equal(editWxml.includes("选择近24小时新增案例"), true);
+  assert.equal(editWxml.includes('lazy-load="{{true}}"'), true);
   assert.equal(pageWxml.includes("完成选择"), true);
   assert.equal(pageWxml.includes("全选已加载"), true);
 });

@@ -164,6 +164,124 @@ await test("known catalog revision returns notModified without reading cases", a
   );
 });
 
+await test("catalog snapshot keeps image metadata without signing every URL", async () => {
+  const banner = "cloud://env/banner-1.jpg";
+  const { main, tempFileRequests } = loadCaseCatalog({
+    recordsByCollection: {
+      catalog_meta: [{ _id: "current", revision: 8 }],
+      wine_packaging: [{
+        _id: "doc_1",
+        caseId: "case_1",
+        title: "案例 1",
+        isVisible: true,
+        coverImage: "cloud://env/display-1.jpg",
+        coverThumbnail: "cloud://env/thumb-1.jpg",
+        coverBanner: banner,
+      }],
+    },
+  });
+
+  const result = await main({ action: "getCatalogSnapshot" });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].id, "doc_1");
+  assert.equal(result.items[0].imageFileId, banner);
+  assert.equal(result.items[0].thumbnailUrl, "");
+  assert.deepEqual(tempFileRequests, []);
+});
+
+await test("catalog image URLs are signed only for requested visible document ids", async () => {
+  const visibleBanner = "cloud://env/visible-banner.jpg";
+  const hiddenBanner = "cloud://env/hidden-banner.jpg";
+  const unrequestedBanner = "cloud://env/unrequested-banner.jpg";
+  const { main, tempFileRequests } = loadCaseCatalog({
+    recordsByCollection: {
+      wine_packaging: [
+        {
+          _id: "doc_visible",
+          caseId: "case_visible",
+          isVisible: true,
+          coverImage: "cloud://env/visible-display.jpg",
+          coverThumbnail: "cloud://env/visible-thumb.jpg",
+          coverBanner: visibleBanner,
+        },
+        {
+          _id: "doc_hidden",
+          caseId: "case_hidden",
+          isVisible: false,
+          coverBanner: hiddenBanner,
+        },
+        {
+          _id: "doc_unrequested",
+          caseId: "case_unrequested",
+          isVisible: true,
+          coverBanner: unrequestedBanner,
+        },
+      ],
+    },
+  });
+
+  const result = await main({
+    action: "getCatalogImageUrls",
+    ids: ["doc_visible", "doc_hidden", "cloud://env/arbitrary-private.jpg"],
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.images)), {
+    doc_visible: {
+      imageFileId: visibleBanner,
+      thumbnailUrl: `https://temp/${encodeURIComponent(visibleBanner)}`,
+    },
+  });
+  assert.deepEqual(tempFileRequests, [visibleBanner]);
+  assert.equal(tempFileRequests.includes(hiddenBanner), false);
+  assert.equal(tempFileRequests.includes(unrequestedBanner), false);
+  assert.equal(tempFileRequests.includes("cloud://env/arbitrary-private.jpg"), false);
+});
+
+await test("catalog image URL endpoint rejects batches over 24 ids", async () => {
+  const { main, calls, tempFileRequests } = loadCaseCatalog({
+    recordsByCollection: {
+      wine_packaging: [],
+    },
+  });
+  const result = await main({
+    action: "getCatalogImageUrls",
+    ids: Array.from({ length: 25 }, (_, index) => `doc_${index}`),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "INVALID_CATALOG_IMAGE_IDS");
+  assert.equal(
+    calls.some((call) => call.collection === "wine_packaging"),
+    false
+  );
+  assert.deepEqual(tempFileRequests, []);
+});
+
+await test("catalog image URL endpoint rejects empty or oversized document ids", async () => {
+  for (const invalidId of ["   ", "x".repeat(129), 123]) {
+    const { main, calls, tempFileRequests } = loadCaseCatalog({
+      recordsByCollection: {
+        wine_packaging: [],
+      },
+    });
+    const result = await main({
+      action: "getCatalogImageUrls",
+      ids: [invalidId],
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "INVALID_CATALOG_IMAGE_IDS");
+    assert.equal(
+      calls.some((call) => call.collection === "wine_packaging"),
+      false
+    );
+    assert.deepEqual(tempFileRequests, []);
+  }
+});
+
 await test("public case detail never signs source originals", async () => {
   const source = "cloud://env/source.jpg";
   const display = "cloud://env/display.jpg";

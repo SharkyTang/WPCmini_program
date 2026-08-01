@@ -1,6 +1,7 @@
 const { normalizeCaseRecord } = require("./caseData");
 
 const CASE_CATALOG_FUNCTION = "caseCatalog";
+const CATALOG_IMAGE_ID_LIMIT = 24;
 
 function normalizeFunctionResult(response) {
   const result = (response && response.result) || {};
@@ -71,6 +72,39 @@ async function fetchCatalogSnapshot(options = {}) {
   };
 }
 
+function normalizeCatalogImageIds(ids = []) {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(
+    new Set(
+      ids
+        .map((id) => (typeof id === "string" ? id.trim() : ""))
+        .filter(Boolean)
+    )
+  ).slice(0, CATALOG_IMAGE_ID_LIMIT);
+}
+
+async function fetchCatalogImageUrls(ids = []) {
+  const requestedIds = normalizeCatalogImageIds(ids);
+  if (!requestedIds.length) return {};
+  const result = await callCaseCatalog("getCatalogImageUrls", {
+    ids: requestedIds,
+  });
+  const images = result.images && typeof result.images === "object"
+    ? result.images
+    : {};
+  return requestedIds.reduce((map, id) => {
+    const image = images[id];
+    if (!image || typeof image !== "object") return map;
+    map[id] = {
+      imageFileId:
+        typeof image.imageFileId === "string" ? image.imageFileId : "",
+      thumbnailUrl:
+        typeof image.thumbnailUrl === "string" ? image.thumbnailUrl : "",
+    };
+    return map;
+  }, {});
+}
+
 function normalizeDetailItem(record = {}) {
   const item = normalizeCaseRecord({
     ...record,
@@ -110,10 +144,12 @@ module.exports = {
   CASE_CATALOG_FUNCTION,
   callCaseCatalog,
   fetchCaseDetail,
+  fetchCatalogImageUrls,
   fetchCatalogSnapshot,
   fetchHomeFeed,
   fetchUserLibrary,
   normalizeCatalogCard,
+  normalizeCatalogImageIds,
   normalizeDetailItem,
   normalizeHomeFeed,
 };

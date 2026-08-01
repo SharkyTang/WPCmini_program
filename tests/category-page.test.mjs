@@ -8,7 +8,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const pagePath = resolve(__dirname, "../miniprogram/miniprogram/pages/category/index.js");
 const wxmlPath = resolve(__dirname, "../miniprogram/miniprogram/pages/category/index.wxml");
 
-function loadCategoryPage(cases = [], appGlobalData = {}, wxMock = {}) {
+function loadCategoryPage(
+  cases = [],
+  appGlobalData = {},
+  wxMock = {},
+  dependencyOverrides = {}
+) {
   let pageConfig;
   const app = {
     globalData: appGlobalData,
@@ -40,22 +45,41 @@ function loadCategoryPage(cases = [], appGlobalData = {}, wxMock = {}) {
       }
       if (moduleName === "../../utils/cloudData") {
         return {
-          attachCaseImageUrls: async (items) => items.map((item) => ({
-            ...item,
-            imageFileId: item.coverThumbnail || item.coverImage || "",
-            coverImageUrl: item.coverThumbnail || item.coverImage || "",
-            imageRetryCount: 0,
-            imageLoadState: "ready",
-          })),
+          attachCaseImageUrls:
+            dependencyOverrides.attachCaseImageUrls ||
+            (async (items) => items.map((item) => {
+              const imageFileId =
+                item.imageFileId ||
+                item.coverBanner ||
+                item.coverThumbnail ||
+                item.coverImage ||
+                "";
+              return {
+                ...item,
+                imageFileId,
+                coverImageUrl: imageFileId,
+                imageRetryCount: 0,
+                imageLoadState: "ready",
+              };
+            })),
           fetchVisibleCases: async () => cases,
           refreshImageUrl: async (fileID) => fileID,
         };
       }
       if (moduleName === "../../utils/caseCatalogService") {
         return {
-          fetchCatalogSnapshot: async () => {
-            throw new Error("catalog unavailable");
-          },
+          fetchCatalogImageUrls:
+            dependencyOverrides.fetchCatalogImageUrls ||
+            (async () => {
+              const error = new Error("unknown action");
+              error.code = "UNKNOWN_ACTION";
+              throw error;
+            }),
+          fetchCatalogSnapshot:
+            dependencyOverrides.fetchCatalogSnapshot ||
+            (async () => {
+              throw new Error("catalog unavailable");
+            }),
         };
       }
       if (moduleName === "../../utils/catalogCache") {
@@ -116,7 +140,10 @@ async function test(name, fn) {
 
 await test("category cards fill their frame with the aspect-preserving cover", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
-  assert.match(wxml, /class="case-image"\s+mode="aspectFill"/);
+  const caseImage = wxml.match(/<image\b[^>]*class="case-image"[^>]*>/)?.[0] || "";
+  assert.match(caseImage, /mode="aspectFill"/);
+  assert.match(caseImage, /\slazy-load(?:\s|>)/);
+  assert.match(caseImage, /fade-in="{{true}}"/);
 });
 
 function plain(value) {
@@ -280,6 +307,82 @@ await test("category keeps the full snapshot off data and renders at most 12 car
   assert.equal(page.data.visibleCards.length, 12);
   assert.equal(Object.prototype.hasOwnProperty.call(page.data, "allCases"), false);
   assert.equal(page.data.filteredCount, 50);
+});
+
+await test("category requests image URLs only for each visible batch of 12", async () => {
+  const cases = Array.from({ length: 30 }, (_, index) =>
+    buildCase(`doc_${index + 1}`, {
+      imageFileId: `cloud://env/banner-${index + 1}.jpg`,
+    })
+  );
+  const imageBatches = [];
+  const { page } = loadCategoryPage(cases, {}, {}, {
+    fetchCatalogImageUrls: async (ids) => {
+      imageBatches.push(ids.slice());
+      return ids.reduce((images, id) => {
+        const item = cases.find((caseItem) => caseItem.id === id);
+        images[id] = {
+          imageFileId: item.imageFileId,
+          thumbnailUrl: `https://temp/${id}.jpg`,
+        };
+        return images;
+      }, {});
+    },
+  });
+
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  assert.deepEqual(plain(imageBatches.map((ids) => ids.length)), [12]);
+  assert.deepEqual(plain(imageBatches[0]), cases.slice(0, 12).map((item) => item.id));
+  assert.equal(page.data.visibleCards[0].coverImageUrl, "https://temp/doc_1.jpg");
+
+  page.loadMore();
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  assert.deepEqual(plain(imageBatches.map((ids) => ids.length)), [12, 12]);
+  assert.deepEqual(plain(imageBatches[1]), cases.slice(12, 24).map((item) => item.id));
+});
+
+await test("category falls back to existing image hydration against an old cloud function", async () => {
+  const imageFileId = "cloud://env/legacy-banner.jpg";
+  let endpointCalls = 0;
+  let fallbackCalls = 0;
+  const { page } = loadCategoryPage([
+    buildCase("doc_legacy", { imageFileId }),
+  ], {}, {}, {
+    fetchCatalogImageUrls: async () => {
+      endpointCalls += 1;
+      const error = new Error("unknown action");
+      error.code = "UNKNOWN_ACTION";
+      throw error;
+    },
+    attachCaseImageUrls: async (items) => {
+      fallbackCalls += 1;
+      return items.map((item) => ({
+        ...item,
+        imageFileId,
+        coverImageUrl: "https://temp/legacy-banner.jpg",
+        imageRetryCount: 0,
+        imageLoadState: "ready",
+      }));
+    },
+  });
+
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  assert.equal(endpointCalls, 1);
+  assert.equal(fallbackCalls, 1);
+  assert.equal(
+    page.data.visibleCards[0].coverImageUrl,
+    "https://temp/legacy-banner.jpg"
+  );
+
+  page.applyFilters();
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  assert.equal(endpointCalls, 1);
+  assert.equal(fallbackCalls, 1);
 });
 
 await test("category search applies only once after the 250ms debounce window", async () => {

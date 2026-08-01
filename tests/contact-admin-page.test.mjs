@@ -60,6 +60,7 @@ function loadContactAdminPage(options = {}) {
     mediaOptions: [],
     previews: [],
     toasts: [],
+    preparations: [],
     uploads: [],
     activeUploads: 0,
     maxConcurrentUploads: 0,
@@ -108,6 +109,16 @@ function loadContactAdminPage(options = {}) {
       } finally {
         calls.activeUploads -= 1;
       }
+    },
+    async prepareContactImageForUpload({ filePath, kind, byteSize }) {
+      calls.preparations.push({ filePath, kind, byteSize });
+      if (
+        options.preparedFilePaths &&
+        options.preparedFilePaths[filePath]
+      ) {
+        return options.preparedFilePaths[filePath];
+      }
+      return filePath;
     },
     async cleanupContactFiles(fileIDs) {
       calls.cleanups.push([...fileIDs]);
@@ -308,11 +319,16 @@ await test("cloud paths are limited to the contact asset directories", () => {
 
 await test("service uses contactAdmin actions and native cloud upload", async () => {
   const calls = {
+    compressions: [],
     functions: [],
     uploads: [],
   };
   const service = loadCommonJsModule(servicePath, {
     wx: {
+      compressImage(request) {
+        calls.compressions.push(request);
+        request.success({ tempFilePath: "/tmp/a-compressed.jpg" });
+      },
       cloud: {
         async callFunction(request) {
           calls.functions.push(request);
@@ -353,6 +369,30 @@ await test("service uses contactAdmin actions and native cloud upload", async ()
     }),
     "cloud://env/new.jpg"
   );
+  assert.equal(
+    await service.prepareContactImageForUpload({
+      filePath: "/tmp/a.jpg",
+      kind: "store",
+      byteSize: service.STORE_IMAGE_COMPRESSION_THRESHOLD_BYTES + 1,
+    }),
+    "/tmp/a-compressed.jpg"
+  );
+  assert.equal(
+    await service.prepareContactImageForUpload({
+      filePath: "/tmp/small.jpg",
+      kind: "store",
+      byteSize: service.STORE_IMAGE_COMPRESSION_THRESHOLD_BYTES,
+    }),
+    "/tmp/small.jpg"
+  );
+  assert.equal(
+    await service.prepareContactImageForUpload({
+      filePath: "/tmp/qr.png",
+      kind: "wechat",
+      byteSize: 5 * 1024 * 1024,
+    }),
+    "/tmp/qr.png"
+  );
 
   assert.deepEqual(
     calls.functions.map((request) => request.data.action),
@@ -381,6 +421,31 @@ await test("service uses contactAdmin actions and native cloud upload", async ()
     filePath: "/tmp/a.jpg",
     cloudPath: "contact-assets/store/a.jpg",
   });
+  assert.equal(calls.compressions.length, 1);
+  assert.equal(calls.compressions[0].src, "/tmp/a.jpg");
+  assert.equal(
+    calls.compressions[0].quality,
+    service.STORE_IMAGE_COMPRESSION_QUALITY
+  );
+});
+
+await test("store compression falls back to the original path when native compression fails", async () => {
+  const service = loadCommonJsModule(servicePath, {
+    wx: {
+      compressImage(request) {
+        request.fail(new Error("compress failed"));
+      },
+    },
+  });
+
+  assert.equal(
+    await service.prepareContactImageForUpload({
+      filePath: "/tmp/original.jpg",
+      kind: "store",
+      byteSize: service.STORE_IMAGE_COMPRESSION_THRESHOLD_BYTES + 1,
+    }),
+    "/tmp/original.jpg"
+  );
 });
 
 await test("deep links are gated before draft loading, selection and saving", async () => {
@@ -436,6 +501,7 @@ await test("store picker uses native compressed image selection and honors nine-
   });
   assert.equal(page.data.storeImages.length, 9);
   assert.equal(page.data.storeImages.every((image) => image.isPending), true);
+  assert.equal(page.data.storeImages[0].byteSize, 1000);
 
   page.chooseStoreImages();
   assert.equal(calls.mediaOptions.length, 1);
@@ -525,6 +591,9 @@ await test("store images support preview, reordering and deletion", async () => 
 
 await test("save uploads pending assets with concurrency two and sends ordered config", async () => {
   const { page, calls } = loadContactAdminPage({
+    preparedFilePaths: {
+      "/tmp/store-a.jpg": "/tmp/store-a-compressed.jpg",
+    },
     draft: {
       item: {
         storeImageFileIds: ["cloud://env/existing.jpg"],
@@ -541,6 +610,7 @@ await test("save uploads pending assets with concurrency two and sends ordered c
       fileID: "",
       url: "/tmp/store-a.jpg",
       localPath: "/tmp/store-a.jpg",
+      byteSize: 1024 * 1024,
       isPending: true,
     },
     {
@@ -573,6 +643,12 @@ await test("save uploads pending assets with concurrency two and sends ordered c
 
   assert.equal(calls.uploads.length, 4);
   assert.equal(calls.maxConcurrentUploads, 2);
+  assert.equal(calls.uploads[0].filePath, "/tmp/store-a-compressed.jpg");
+  assert.deepEqual(plain(calls.preparations[0]), {
+    filePath: "/tmp/store-a.jpg",
+    kind: "store",
+    byteSize: 1024 * 1024,
+  });
   assert.match(calls.uploads[0].cloudPath, /^contact-assets\/store\//);
   assert.match(calls.uploads[1].cloudPath, /^contact-assets\/store\//);
   assert.match(calls.uploads[2].cloudPath, /^contact-assets\/wechat\//);
@@ -693,4 +769,6 @@ await test("editor markup uses native button, input and image components", () =>
   assert.match(wxml, /bindtap="saveContact"/);
   assert.match(wxml, /bindinput="onPhoneInput"/);
   assert.match(wxml, /show-menu-by-longpress="\{\{true\}\}"/);
+  assert.match(wxml, /lazy-load="\{\{index > 0\}\}"/);
+  assert.match(wxml, /lazy-load="\{\{true\}\}"/);
 });

@@ -78,6 +78,18 @@
       {
         "type": "glob",
         "value": "**/.DS_Store"
+      },
+      {
+        "type": "glob",
+        "value": "**/pages/contact/assets/store-1.jpg"
+      },
+      {
+        "type": "glob",
+        "value": "**/pages/contact/assets/store-2.jpg"
+      },
+      {
+        "type": "glob",
+        "value": "**/pages/contact/assets/store-3.jpg"
       }
     ],
     "include": []
