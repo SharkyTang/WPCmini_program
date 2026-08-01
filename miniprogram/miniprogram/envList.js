@@ -1,7 +1,7 @@
 const PRODUCTION_ENV_ID = "cloud1-d3gznsms746425a42";
 const STAGING_ENV_ID = "wine-admin-staging-d5c4cf20f02c5";
 const CLOUD_ENVIRONMENT_IDS = Object.freeze({
-  develop: STAGING_ENV_ID,
+  develop: PRODUCTION_ENV_ID,
   trial: STAGING_ENV_ID,
   release: PRODUCTION_ENV_ID,
 });
