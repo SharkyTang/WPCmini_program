@@ -66,6 +66,46 @@ function comparableDraft(draft = {}) {
   });
 }
 
+function showProfileLoading(page) {
+  if (!page._activeProfileLoadRequestId || page._profileLoadingVisible) return;
+  page._profileLoadingVisible = true;
+  wx.showLoading({
+    title: "读取资料",
+    mask: true,
+  });
+}
+
+function beginProfileLoading(page) {
+  const requestId = (page._profileLoadSequence || 0) + 1;
+  page._profileLoadSequence = requestId;
+  page._activeProfileLoadRequestId = requestId;
+  showProfileLoading(page);
+  return requestId;
+}
+
+function isCurrentProfileLoad(page, requestId) {
+  return page._activeProfileLoadRequestId === requestId;
+}
+
+function hideProfileLoading(page) {
+  if (!page._profileLoadingVisible) return;
+  page._profileLoadingVisible = false;
+  wx.hideLoading();
+}
+
+function finishProfileLoading(page, requestId) {
+  if (!isCurrentProfileLoad(page, requestId)) return;
+  page._activeProfileLoadRequestId = 0;
+  page.setData({ isLoading: false });
+  hideProfileLoading(page);
+}
+
+function cancelProfileLoading(page) {
+  page._profileLoadSequence = (page._profileLoadSequence || 0) + 1;
+  page._activeProfileLoadRequestId = 0;
+  hideProfileLoading(page);
+}
+
 Page({
   data: {
     mode: "edit",
@@ -89,6 +129,9 @@ Page({
   },
 
   onLoad(options = {}) {
+    this._profileLoadSequence = 0;
+    this._activeProfileLoadRequestId = 0;
+    this._profileLoadingVisible = false;
     this.profileSetupStartedAt = Date.now();
     const mode = options.mode === "setup" ? "setup" : "edit";
     const pageTitle = mode === "setup" ? "完善资料" : "个人资料";
@@ -108,7 +151,16 @@ Page({
     this.loadProfile();
   },
 
+  onShow() {
+    showProfileLoading(this);
+  },
+
+  onHide() {
+    hideProfileLoading(this);
+  },
+
   onUnload() {
+    cancelProfileLoading(this);
     if (wx.disableAlertBeforeUnload) wx.disableAlertBeforeUnload();
     if (this.data.identityGate && !this.data.profileSaved && this.data.source) {
       clearPendingLibraryAction(this.data.source);
@@ -118,22 +170,27 @@ Page({
   },
 
   async loadProfile() {
-    const legacyProfile = getLegacyProfile();
-    const legacyDraft = createDraft({
-      nickname: legacyProfile.nickname,
-      avatarUrl: legacyProfile.avatarUrl,
-      avatarFileId: legacyProfile.avatarFileId,
-    });
+    const requestId = beginProfileLoading(this);
     this.setData({
-      profileDraft: legacyDraft,
-      initialDraft: createDraft(legacyDraft),
       isLoading: true,
       loadError: false,
       hasUnsavedChanges: false,
     });
 
     try {
+      const legacyProfile = getLegacyProfile();
+      const legacyDraft = createDraft({
+        nickname: legacyProfile.nickname,
+        avatarUrl: legacyProfile.avatarUrl,
+        avatarFileId: legacyProfile.avatarFileId,
+      });
+      if (!isCurrentProfileLoad(this, requestId)) return;
+      this.setData({
+        profileDraft: legacyDraft,
+        initialDraft: createDraft(legacyDraft),
+      });
       const profile = await fetchProfile();
+      if (!isCurrentProfileLoad(this, requestId)) return;
       if (profile && hasCompletedProfile(profile)) {
         const profileDraft = createDraft(profile);
         const keepGatePresentation = this.data.identityGate && Boolean(this.data.source);
@@ -154,10 +211,11 @@ Page({
         if (wx.setNavigationBarTitle) wx.setNavigationBarTitle({ title: pageTitle });
       }
     } catch (error) {
+      if (!isCurrentProfileLoad(this, requestId)) return;
       console.error("读取个人资料失败", error);
       this.setData({ loadError: true });
     } finally {
-      this.setData({ isLoading: false });
+      finishProfileLoading(this, requestId);
     }
   },
 

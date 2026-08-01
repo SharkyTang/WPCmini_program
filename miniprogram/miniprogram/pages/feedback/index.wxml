@@ -14,7 +14,6 @@
   <view class="form-card">
     <view class="form-section-title">反馈分类</view>
     <view class="field">
-      <view class="field-label">反馈类型</view>
       <view class="type-grid">
         <view
           wx:for="{{feedbackTypes}}"
@@ -28,12 +27,11 @@
       </view>
     </view>
 
-    <view class="form-section-title">反馈内容</view>
+    <view class="form-section-title form-section-title-row">
+      <text>反馈内容</text>
+      <text class="field-count">{{content.length}} / {{contentMaxLength}}</text>
+    </view>
     <view class="field">
-      <view class="field-heading">
-        <view class="field-label">反馈内容</view>
-        <view class="field-count">{{content.length}} / {{contentMaxLength}}</view>
-      </view>
       <textarea
         class="content-input"
         value="{{content}}"
@@ -44,9 +42,11 @@
       />
     </view>
 
-    <view class="form-section-title">联系信息</view>
+    <view class="form-section-title">
+      <text>联系信息</text>
+      <text class="form-section-optional">（选填）</text>
+    </view>
     <view class="field">
-      <view class="field-label">联系方式（选填）</view>
       <view class="contact-control">
         <picker
           class="contact-type-picker"

@@ -12,15 +12,13 @@
     <view class="header-subtitle">{{pageSubtitle}}</view>
   </view>
 
-  <view wx:if="{{isLoading}}" class="state-card">正在读取资料…</view>
-
-  <view wx:elif="{{loadError}}" class="state-card state-card-error">
+  <view wx:if="{{!isLoading && loadError}}" class="state-card state-card-error">
     <view class="state-title">读取失败</view>
     <view class="state-copy">请检查网络后重试</view>
     <view class="retry-button" bindtap="loadProfile">重新读取</view>
   </view>
 
-  <view wx:else class="profile-card-shell">
+  <view wx:if="{{!isLoading && !loadError}}" class="profile-card-shell">
     <view class="avatar-floating">
       <button
         class="avatar-button"

@@ -180,6 +180,18 @@ test("feedback page uses WeUI top tips and sectioned form layout", () => {
   assert.equal(wxml.includes("反馈分类"), true);
   assert.equal(wxml.includes("反馈内容"), true);
   assert.equal(wxml.includes("联系信息"), true);
+  assert.equal((wxml.match(/反馈内容/g) || []).length, 1);
+  assert.equal((wxml.match(/联系信息/g) || []).length, 1);
+  assert.equal(wxml.includes('<view class="field-label">反馈类型</view>'), false);
+  assert.equal(wxml.includes('<view class="field-label">反馈内容</view>'), false);
+  assert.equal(
+    wxml.includes('<view class="field-label">联系方式（选填）</view>'),
+    false
+  );
+  assert.match(
+    wxml,
+    /form-section-title form-section-title-row[\s\S]*?field-count/
+  );
 });
 
 test("feedback contact field uses a native selector with a dynamic input", () => {

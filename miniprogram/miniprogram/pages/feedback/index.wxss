@@ -59,18 +59,17 @@ page {
   margin-top: 34rpx;
 }
 
-.field-heading {
+.form-section-title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 20rpx;
 }
 
-.field-label {
-  color: #241d16;
-  font-size: 27rpx;
-  line-height: 1.35;
-  font-weight: 800;
+.form-section-optional {
+  color: #766b60;
+  font-size: 22rpx;
+  font-weight: 600;
 }
 
 .field-count,
@@ -78,6 +77,10 @@ page {
   color: #9d8d78;
   font-size: 22rpx;
   line-height: 1.4;
+}
+
+.field-count {
+  font-weight: 500;
 }
 
 .field-tip {

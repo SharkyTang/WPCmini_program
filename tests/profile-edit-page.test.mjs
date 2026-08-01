@@ -64,7 +64,13 @@ function loadEditPage(wxMock = {}, service = {}) {
     },
     console,
     setTimeout(callback) { callback(); },
-    wx: { showToast() {}, navigateBack() {}, ...wxMock },
+    wx: {
+      showLoading() {},
+      hideLoading() {},
+      showToast() {},
+      navigateBack() {},
+      ...wxMock,
+    },
   };
   vm.runInNewContext(readFileSync(modulePath, "utf8"), sandbox, { filename: modulePath });
   pageConfig.setData = function setData(nextData) { this.data = { ...this.data, ...nextData }; };
@@ -100,6 +106,7 @@ await test("setup page exposes the native avatar chooser and nickname input", ()
   assert.equal(pageJson.usingComponents["mp-toptips"], "weui-miniprogram/toptips/toptips");
   assert.equal(wxml.includes("<mp-toptips"), true);
   assert.equal(wxml.includes("nickname-count"), true);
+  assert.equal(wxml.includes("正在读取资料"), false);
   assert.match(
     wxss,
     /\.profile-row-nickname\s*\{[\s\S]*?grid-template-columns:\s*100rpx minmax\(0,\s*1fr\);[\s\S]*?align-items:\s*start;/
@@ -108,6 +115,178 @@ await test("setup page exposes the native avatar chooser and nickname input", ()
     wxss,
     /\.profile-row-nickname \.profile-label\s*\{[\s\S]*?height:\s*80rpx;[\s\S]*?line-height:\s*80rpx;/
   );
+});
+
+await test("profile reads use the native WeChat loading overlay", async () => {
+  let resolveProfile;
+  const loadingEvents = [];
+  const page = loadEditPage(
+    {
+      showLoading(options) {
+        loadingEvents.push(["show", options]);
+      },
+      hideLoading() {
+        loadingEvents.push(["hide"]);
+      },
+    },
+    {
+      fetchProfile: () =>
+        new Promise((resolvePromise) => {
+          resolveProfile = resolvePromise;
+        }),
+    }
+  );
+
+  const loadPromise = page.loadProfile();
+  assert.deepEqual(plain(loadingEvents), [
+    ["show", { title: "读取资料", mask: true }],
+  ]);
+  resolveProfile(null);
+  await loadPromise;
+
+  assert.deepEqual(plain(loadingEvents), [
+    ["show", { title: "读取资料", mask: true }],
+    ["hide"],
+  ]);
+  assert.equal(page.data.isLoading, false);
+  assert.equal(page.data.loadError, false);
+});
+
+await test("profile native loading pauses while hidden and resumes if still reading", async () => {
+  let resolveProfile;
+  const loadingEvents = [];
+  const page = loadEditPage(
+    {
+      showLoading() {
+        loadingEvents.push("show");
+      },
+      hideLoading() {
+        loadingEvents.push("hide");
+      },
+    },
+    {
+      fetchProfile: () =>
+        new Promise((resolvePromise) => {
+          resolveProfile = resolvePromise;
+        }),
+    }
+  );
+
+  const loadPromise = page.loadProfile();
+  page.onHide();
+  page.onShow();
+  assert.deepEqual(loadingEvents, ["show", "hide", "show"]);
+
+  resolveProfile(null);
+  await loadPromise;
+  assert.deepEqual(loadingEvents, ["show", "hide", "show", "hide"]);
+});
+
+await test("only the latest overlapping profile read can update and close loading", async () => {
+  const pendingReads = [];
+  const loadingEvents = [];
+  const page = loadEditPage(
+    {
+      showLoading() {
+        loadingEvents.push("show");
+      },
+      hideLoading() {
+        loadingEvents.push("hide");
+      },
+    },
+    {
+      fetchProfile: () =>
+        new Promise((resolvePromise) => {
+          pendingReads.push(resolvePromise);
+        }),
+    }
+  );
+
+  const olderRead = page.loadProfile();
+  const latestRead = page.loadProfile();
+  assert.deepEqual(loadingEvents, ["show"]);
+
+  pendingReads[1]({
+    nickname: "新资料",
+    avatarFileId: "cloud://new-avatar",
+    avatarUrl: "https://new-avatar",
+  });
+  await latestRead;
+  assert.equal(page.data.profileDraft.nickname, "新资料");
+  assert.deepEqual(loadingEvents, ["show", "hide"]);
+
+  pendingReads[0]({
+    nickname: "旧资料",
+    avatarFileId: "cloud://old-avatar",
+    avatarUrl: "https://old-avatar",
+  });
+  await olderRead;
+  assert.equal(page.data.profileDraft.nickname, "新资料");
+  assert.deepEqual(loadingEvents, ["show", "hide"]);
+});
+
+await test("profile retry and unload both close native loading safely", async () => {
+  let failureAttempts = 0;
+  const failureEvents = [];
+  const failedPage = loadEditPage(
+    {
+      showLoading() {
+        failureEvents.push("show");
+      },
+      hideLoading() {
+        failureEvents.push("hide");
+      },
+    },
+    {
+      fetchProfile: async () => {
+        failureAttempts += 1;
+        if (failureAttempts === 1) throw new Error("offline");
+        return {
+          nickname: "恢复资料",
+          avatarFileId: "cloud://recovered-avatar",
+          avatarUrl: "https://recovered-avatar",
+        };
+      },
+    }
+  );
+  await failedPage.loadProfile();
+  assert.equal(failedPage.data.loadError, true);
+  assert.deepEqual(failureEvents, ["show", "hide"]);
+  await failedPage.loadProfile();
+  assert.equal(failedPage.data.loadError, false);
+  assert.equal(failedPage.data.profileDraft.nickname, "恢复资料");
+  assert.deepEqual(failureEvents, ["show", "hide", "show", "hide"]);
+
+  let resolveLateProfile;
+  const unloadEvents = [];
+  const unloadedPage = loadEditPage(
+    {
+      showLoading() {
+        unloadEvents.push("show");
+      },
+      hideLoading() {
+        unloadEvents.push("hide");
+      },
+    },
+    {
+      getLegacyProfile: () => ({ nickname: "本地资料" }),
+      fetchProfile: () =>
+        new Promise((resolvePromise) => {
+          resolveLateProfile = resolvePromise;
+        }),
+    }
+  );
+  const lateRead = unloadedPage.loadProfile();
+  unloadedPage.onUnload();
+  assert.deepEqual(unloadEvents, ["show", "hide"]);
+  resolveLateProfile({
+    nickname: "迟到资料",
+    avatarFileId: "cloud://late-avatar",
+    avatarUrl: "https://late-avatar",
+  });
+  await lateRead;
+  assert.equal(unloadedPage.data.profileDraft.nickname, "本地资料");
+  assert.deepEqual(unloadEvents, ["show", "hide"]);
 });
 
 await test("setup mode uses a legacy nickname as a draft without treating it as completed", async () => {
