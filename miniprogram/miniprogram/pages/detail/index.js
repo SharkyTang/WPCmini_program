@@ -145,11 +145,9 @@ Page({
     favorite: null,
     isFavorited: false,
     favoriteLoading: false,
-    imagePreviewVisible: false,
     galleryItems: [],
     currentImageIndex: 0,
     currentImageUrl: "",
-    currentDownloadUrl: "",
     customerServiceMessageCardEnabled: false,
     customerServiceMessageTitle: "",
     customerServiceMessagePath: "",
@@ -236,7 +234,6 @@ Page({
         galleryItems,
         currentImageIndex: 0,
         currentImageUrl: galleryItems[0] ? galleryItems[0].displayUrl : "",
-        currentDownloadUrl: galleryItems[0] ? galleryItems[0].displayUrl : "",
         customerServiceMessageCardEnabled: customerServiceMessageCard.enabled,
         customerServiceMessageTitle: customerServiceMessageCard.title,
         customerServiceMessagePath: customerServiceMessageCard.path,
@@ -409,8 +406,11 @@ Page({
   },
 
   previewImage() {
-    const imageUrl = this.data.currentImageUrl;
-    if (!imageUrl) {
+    const urls = (this.data.galleryItems || [])
+      .map((item) => item && item.displayUrl)
+      .filter(Boolean);
+    const current = this.data.currentImageUrl;
+    if (!current || !urls.length) {
       wx.showToast({
         title: "暂无图片",
         icon: "none",
@@ -418,14 +418,17 @@ Page({
       return;
     }
 
-    this.setData({
-      imagePreviewVisible: true,
-    });
-  },
-
-  closeImagePreview() {
-    this.setData({
-      imagePreviewVisible: false,
+    wx.previewImage({
+      current: urls.includes(current) ? current : urls[0],
+      urls,
+      showmenu: true,
+      fail(error) {
+        console.warn("案例图片预览失败", error);
+        wx.showToast({
+          title: "图片预览失败",
+          icon: "none",
+        });
+      },
     });
   },
 
@@ -453,63 +456,6 @@ Page({
       galleryItems,
       currentImageIndex,
       currentImageUrl: current.displayUrl,
-      currentDownloadUrl: current.displayUrl,
-    });
-  },
-
-  noop() {},
-
-  downloadImage() {
-    const imageUrl = this.data.currentDownloadUrl || this.data.currentImageUrl;
-    if (!imageUrl) {
-      wx.showToast({
-        title: "暂无图片可下载",
-        icon: "none",
-      });
-      return;
-    }
-
-    wx.showLoading({
-      title: "正在保存",
-    });
-
-    wx.downloadFile({
-      url: imageUrl,
-      success: (downloadResponse) => {
-        if (downloadResponse.statusCode !== 200) {
-          wx.hideLoading();
-          wx.showToast({
-            title: "图片下载失败",
-            icon: "none",
-          });
-          return;
-        }
-
-        wx.saveImageToPhotosAlbum({
-          filePath: downloadResponse.tempFilePath,
-          success() {
-            wx.hideLoading();
-            wx.showToast({
-              title: "已保存到相册",
-              icon: "success",
-            });
-          },
-          fail() {
-            wx.hideLoading();
-            wx.showToast({
-              title: "保存失败，请检查相册权限",
-              icon: "none",
-            });
-          },
-        });
-      },
-      fail() {
-        wx.hideLoading();
-        wx.showToast({
-          title: "图片下载失败",
-          icon: "none",
-        });
-      },
     });
   },
 

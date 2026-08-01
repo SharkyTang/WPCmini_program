@@ -116,31 +116,4 @@
     </view>
   </view>
 
-  <view wx:if="{{imagePreviewVisible}}" class="image-preview-layer" bindtap="closeImagePreview">
-    <view class="image-preview-close" catchtap="closeImagePreview">×</view>
-    <movable-area class="image-preview-area" catchtap="noop">
-      <movable-view
-        class="image-preview-movable"
-        direction="all"
-        scale="{{true}}"
-        scale-min="1"
-        scale-max="4"
-        scale-area="{{true}}"
-      >
-        <image
-          class="image-preview-image"
-          mode="aspectFit"
-          src="{{currentImageUrl}}"
-        ></image>
-      </movable-view>
-    </movable-area>
-    <view class="image-preview-download" catchtap="downloadImage">
-      <image
-        class="image-preview-download-icon"
-        src="/assets/detail/icon-download.png"
-        mode="aspectFit"
-      ></image>
-      <view>下载图片</view>
-    </view>
-  </view>
 </view>

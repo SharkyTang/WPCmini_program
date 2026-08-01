@@ -79,7 +79,7 @@ test("detail page keeps customer service and adds inquiry action", () => {
   assert.equal(wxml.includes('bindtap="openInquiryForm"'), true);
 });
 
-test("detail page supports a gallery and downloads the selected image", () => {
+test("detail page supports a gallery and native image preview", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
   const wxss = readFileSync(wxssPath, "utf8");
   const source = readFileSync(resolve(__dirname, "../miniprogram/miniprogram/pages/detail/index.js"), "utf8");
@@ -95,8 +95,20 @@ test("detail page supports a gallery and downloads the selected image", () => {
   assert.match(wxss, /\.gallery-thumbnail\s*\{[\s\S]*?flex:\s*0 0 104rpx;/);
   assert.equal(source.includes("currentImageUrl"), true);
   assert.equal(wxml.includes('src="{{item.renderUrl}}"'), true);
+  assert.equal(wxml.includes('bindtap="previewImage"'), true);
   assert.equal(source.includes("loaded: index === 0"), true);
   assert.equal(source.includes("renderUrl: item.displayUrl"), true);
+  assert.equal(source.includes("wx.previewImage"), true);
+  assert.equal(source.includes("showmenu: true"), true);
+  assert.equal(wxml.includes("image-preview-close"), false);
+  assert.equal(wxml.includes("image-preview-download"), false);
+  assert.equal(wxml.includes("icon-download.png"), false);
+  assert.equal(wxml.includes("<movable-area"), false);
+  assert.equal(source.includes("imagePreviewVisible"), false);
+  assert.equal(source.includes("currentDownloadUrl"), false);
+  assert.equal(source.includes("downloadImage()"), false);
+  assert.equal(source.includes("wx.downloadFile"), false);
+  assert.equal(source.includes("wx.saveImageToPhotosAlbum"), false);
 });
 
 async function asyncTest(name, fn) {
@@ -115,6 +127,7 @@ function loadDetailInteractionPage(options = {}) {
   const resumeSources = [];
   const toasts = [];
   const nativeLoadingEvents = [];
+  const previewCalls = [];
   const caseItem = options.caseItem || {
     id: "case_1",
     title: "鎏金礼盒",
@@ -212,6 +225,9 @@ function loadDetailInteractionPage(options = {}) {
       showToast(payload) {
         toasts.push(payload);
       },
+      previewImage(payload) {
+        previewCalls.push(payload);
+      },
     },
   };
 
@@ -233,8 +249,54 @@ function loadDetailInteractionPage(options = {}) {
     resumeSources,
     toasts,
     nativeLoadingEvents,
+    previewCalls,
   };
 }
+
+test("detail image tap opens the selected image in the native gallery", () => {
+  const { page, previewCalls, toasts } = loadDetailInteractionPage();
+  page.setData({
+    galleryItems: [
+      { displayUrl: "https://temp/display-1" },
+      { displayUrl: "https://temp/display-2" },
+    ],
+    currentImageUrl: "https://temp/display-2",
+  });
+
+  page.previewImage();
+
+  assert.equal(previewCalls.length, 1);
+  assert.equal(previewCalls[0].current, "https://temp/display-2");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(previewCalls[0].urls)),
+    ["https://temp/display-1", "https://temp/display-2"]
+  );
+  assert.equal(previewCalls[0].showmenu, true);
+  assert.equal(typeof previewCalls[0].fail, "function");
+
+  previewCalls[0].fail(new Error("preview failed"));
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(toasts.at(-1))),
+    {
+      title: "图片预览失败",
+      icon: "none",
+    }
+  );
+
+  page.setData({
+    galleryItems: [],
+    currentImageUrl: "",
+  });
+  page.previewImage();
+  assert.equal(previewCalls.length, 1);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(toasts.at(-1))),
+    {
+      title: "暂无图片",
+      icon: "none",
+    }
+  );
+});
 
 await asyncTest("detail case reads use the native loading overlay on success and failure", async () => {
   const success = loadDetailInteractionPage();
@@ -603,12 +665,12 @@ await asyncTest("detail loads one display image and upgrades only the selected t
   assert.equal(page.data.galleryItems[7].renderUrl, "https://temp/display-7");
   assert.equal(page.data.galleryItems[8].renderUrl, "https://temp/thumb-8");
   assert.equal(page.data.currentImageIndex, 7);
-  assert.equal(page.data.currentDownloadUrl, "https://temp/display-7");
+  assert.equal(page.data.currentImageUrl, "https://temp/display-7");
   assert.equal(page.data.customerServiceMessageImage, "https://temp/display-0");
   page.onGalleryChange({ detail: { current: 8 } });
   assert.equal(page.data.galleryItems[8].renderUrl, "https://temp/display-8");
   assert.equal(page.data.currentImageIndex, 8);
-  assert.equal(page.data.currentDownloadUrl, "https://temp/display-8");
+  assert.equal(page.data.currentImageUrl, "https://temp/display-8");
   assert.equal(page.data.customerServiceMessageImage, "https://temp/display-0");
 
   detailCase = {
