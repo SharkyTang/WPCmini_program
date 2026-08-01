@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "dependencies": {
-    "@cloudbase/node-sdk": "^3.18.1",
+    "@cloudbase/node-sdk": "2.9.1",
     "jimp": "0.22.12",
     "wx-server-sdk": "~2.6.3"
   }
