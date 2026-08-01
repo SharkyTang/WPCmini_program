@@ -305,6 +305,25 @@ page {
   gap: 20rpx;
 }
 
+.qr-image-state {
+  min-height: 180rpx;
+  padding: 32rpx;
+  border-radius: 8rpx;
+  background: #f3e6d4;
+  color: #8f7a62;
+  font-size: 24rpx;
+  line-height: 1.6;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.qr-image-state-error {
+  background: #f8f2e9;
+}
+
 .qr-image-shell {
   padding: 18rpx;
   border: 2rpx solid #eadcca;

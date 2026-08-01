@@ -113,8 +113,7 @@ page {
   color: #fffdf9;
 }
 
-.content-input,
-.contact-input {
+.content-input {
   width: 100%;
   margin-top: 18rpx;
   border: 2rpx solid #e0cfb8;
@@ -131,9 +130,53 @@ page {
   padding: 22rpx 24rpx;
 }
 
+.contact-control {
+  width: 100%;
+  margin-top: 18rpx;
+  display: flex;
+  align-items: stretch;
+}
+
+.contact-type-picker {
+  flex: 0 0 176rpx;
+}
+
+.contact-type-trigger {
+  height: 82rpx;
+  padding: 0 20rpx;
+  border: 2rpx solid #e0cfb8;
+  border-right: none;
+  border-radius: 8rpx 0 0 8rpx;
+  background: #fff8ef;
+  color: #241d16;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12rpx;
+  font-size: 25rpx;
+  font-weight: 700;
+  box-sizing: border-box;
+}
+
+.contact-type-action {
+  color: #8c8176;
+  font-size: 19rpx;
+  font-weight: 500;
+}
+
 .contact-input {
-  height: 76rpx;
-  padding: 0 24rpx;
+  width: auto;
+  min-width: 0;
+  height: 82rpx;
+  flex: 1;
+  padding: 0 20rpx;
+  border: 2rpx solid #e0cfb8;
+  border-radius: 0 8rpx 8rpx 0;
+  background: #fff;
+  color: #241d16;
+  font-size: 25rpx;
+  line-height: 1.45;
+  box-sizing: border-box;
 }
 
 .input-placeholder {

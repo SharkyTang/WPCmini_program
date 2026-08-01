@@ -45,9 +45,7 @@
     <view class="settings-footnote">即使未订阅微信提醒，所有公开通知仍会保留在本页面中。</view>
   </view>
 
-  <view wx:elif="{{loading}}" class="state-shell">
-    <mp-msg type="waiting" title="正在读取消息通知" desc="正在同步最新内容" />
-  </view>
+  <block wx:elif="{{loading}}"></block>
 
   <view wx:elif="{{errorMessage}}" class="state-shell state-error">
     <mp-msg type="warn" title="消息读取失败" desc="{{errorMessage}}" />

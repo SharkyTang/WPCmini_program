@@ -47,14 +47,28 @@
     <view class="form-section-title">联系信息</view>
     <view class="field">
       <view class="field-label">联系方式（选填）</view>
-      <input
-        class="contact-input"
-        value="{{contact}}"
-        maxlength="120"
-        placeholder="微信号 / 手机号 / 邮箱"
-        placeholder-class="input-placeholder"
-        bindinput="updateContact"
-      />
+      <view class="contact-control">
+        <picker
+          class="contact-type-picker"
+          mode="selector"
+          range="{{contactTypes}}"
+          value="{{selectedContactTypeIndex}}"
+          bindchange="changeContactType"
+        >
+          <view class="contact-type-trigger">
+            <text>{{selectedContactType}}</text>
+            <text class="contact-type-action">切换</text>
+          </view>
+        </picker>
+        <input
+          class="contact-input"
+          value="{{contact}}"
+          maxlength="120"
+          placeholder="{{contactPlaceholder}}"
+          placeholder-class="input-placeholder"
+          bindinput="updateContact"
+        />
+      </view>
       <view class="field-tip">方便我需要进一步确认问题时联系你。</view>
     </view>
   </view>

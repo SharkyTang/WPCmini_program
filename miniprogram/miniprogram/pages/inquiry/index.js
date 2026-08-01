@@ -14,6 +14,21 @@ const SOURCE_PAGE_MAP = {
   detail: "pages/detail/index",
 };
 
+const CONTACT_TYPE_OPTIONS = [
+  {
+    label: "微信号",
+    placeholder: "请输入微信号",
+  },
+  {
+    label: "手机号",
+    placeholder: "请输入手机号",
+  },
+  {
+    label: "邮箱",
+    placeholder: "请输入邮箱",
+  },
+];
+
 function getSource(value) {
   return value === "detail" ? "detail" : "profile";
 }
@@ -56,6 +71,10 @@ Page({
     }),
     contentMaxLength: CONTENT_MAX_LENGTH,
     contactMaxLength: CONTACT_MAX_LENGTH,
+    contactTypes: CONTACT_TYPE_OPTIONS.map((option) => option.label),
+    contactTypeIndex: 0,
+    selectedContactType: CONTACT_TYPE_OPTIONS[0].label,
+    contactPlaceholder: CONTACT_TYPE_OPTIONS[0].placeholder,
     submitting: false,
     topTips: {
       show: false,
@@ -149,6 +168,21 @@ Page({
     this.updateDraft({
       ...this.data.draft,
       contact: event.detail.value,
+    });
+  },
+
+  changeContactType(event) {
+    const nextIndex = Number(event.detail.value);
+    const validIndex = Number.isInteger(nextIndex)
+      && nextIndex >= 0
+      && nextIndex < CONTACT_TYPE_OPTIONS.length
+      ? nextIndex
+      : 0;
+
+    this.setData({
+      contactTypeIndex: validIndex,
+      selectedContactType: CONTACT_TYPE_OPTIONS[validIndex].label,
+      contactPlaceholder: CONTACT_TYPE_OPTIONS[validIndex].placeholder,
     });
   },
 

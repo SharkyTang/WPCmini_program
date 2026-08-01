@@ -31,6 +31,7 @@ function loadNotificationPage(options = {}) {
     settingChecks: 0,
     toasts: [],
     modals: [],
+    nativeLoadingEvents: [],
     templateVerifications: 0,
   };
   const notificationData = loadNotificationData();
@@ -61,8 +62,11 @@ function loadNotificationPage(options = {}) {
       if (moduleName === "./utils/notificationData") return notificationData;
       if (moduleName === "./utils/notificationService") {
         return {
-          fetchPublicNotifications: async () => options.notifications || [],
-          fetchSubscriptionStatus: async () => subscriptionResult,
+          fetchPublicNotifications: options.fetchPublicNotifications || (async () => {
+            if (options.loadError) throw options.loadError;
+            return options.notifications || [];
+          }),
+          fetchSubscriptionStatus: options.fetchSubscriptionStatus || (async () => subscriptionResult),
           verifySubscriptionTemplates: async () => {
             calls.templateVerifications += 1;
             if (options.templateVerificationError) {
@@ -105,6 +109,9 @@ function loadNotificationPage(options = {}) {
     },
     console,
     wx: {
+      hideLoading() {
+        calls.nativeLoadingEvents.push({ type: "hide" });
+      },
       getSetting(request) {
         calls.settingChecks += 1;
         request.success(options.settingsResponse || {
@@ -136,6 +143,9 @@ function loadNotificationPage(options = {}) {
       showModal(request) {
         calls.modals.push(request);
         if (request.complete) request.complete({ confirm: true });
+      },
+      showLoading(request) {
+        calls.nativeLoadingEvents.push({ type: "show", request });
       },
     },
   };
@@ -252,6 +262,99 @@ await test("notification page removes custom customer replies and exposes one-ti
   assert.equal(pageSource.includes("订阅下一次"), true);
   assert.equal(wxml.includes('bindtap="subscribeNext"'), true);
   assert.equal(wxml.includes("item.hasCaseLink"), true);
+});
+
+await test("notification loading uses the native WeChat loading overlay without a page card", async () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+  const { page, calls } = loadNotificationPage();
+
+  assert.equal(wxml.includes("正在读取消息通知"), false);
+  assert.equal(wxml.includes("正在同步最新内容"), false);
+  assert.equal(page.data.loading, true);
+
+  await page.loadNotifications();
+
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.nativeLoadingEvents)), [
+    { type: "show", request: { title: "加载中", mask: true } },
+    { type: "hide" },
+  ]);
+  assert.equal(page.data.loading, false);
+  assert.equal(page.data.errorMessage, "");
+});
+
+await test("notification failure and retry each show and hide one native overlay", async () => {
+  let attempts = 0;
+  const { page, calls } = loadNotificationPage({
+    fetchPublicNotifications: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("network unavailable");
+      return [{ id: "latest_notification", type: "version_update" }];
+    },
+  });
+
+  await page.loadNotifications();
+  assert.deepEqual(calls.nativeLoadingEvents.map((event) => event.type), ["show", "hide"]);
+  assert.equal(page.data.loading, false);
+  assert.equal(page.data.errorMessage, "暂时读取不到消息通知，请稍后重试。");
+
+  await page.loadNotifications();
+  assert.deepEqual(
+    calls.nativeLoadingEvents.map((event) => event.type),
+    ["show", "hide", "show", "hide"]
+  );
+  assert.equal(page.data.loading, false);
+  assert.equal(page.data.errorMessage, "");
+  assert.equal(page.data.publicNotifications[0].id, "latest_notification");
+});
+
+await test("the latest notification read hides immediately and stale reads cannot overwrite it", async () => {
+  const deferredLoads = [];
+  const fetchPublicNotifications = () => new Promise((resolve) => {
+    deferredLoads.push(resolve);
+  });
+  const { page, calls } = loadNotificationPage({ fetchPublicNotifications });
+
+  const firstLoad = page.loadNotifications();
+  const secondLoad = page.loadNotifications();
+  assert.deepEqual(calls.nativeLoadingEvents.map((event) => event.type), ["show"]);
+
+  deferredLoads[1]([{ id: "latest_notification", type: "product_new" }]);
+  await secondLoad;
+  assert.deepEqual(
+    calls.nativeLoadingEvents.map((event) => event.type),
+    ["show", "hide"]
+  );
+  assert.equal(page.data.loading, false);
+  assert.equal(page.data.publicNotifications[0].id, "latest_notification");
+
+  deferredLoads[0]([{ id: "stale_notification", type: "version_update" }]);
+  await firstLoad;
+  assert.deepEqual(
+    calls.nativeLoadingEvents.map((event) => event.type),
+    ["show", "hide"]
+  );
+  assert.equal(page.data.publicNotifications[0].id, "latest_notification");
+});
+
+await test("leaving during a notification read hides once and ignores the late result", async () => {
+  let resolveRead;
+  const { page, calls } = loadNotificationPage({
+    fetchPublicNotifications: () => new Promise((resolve) => {
+      resolveRead = resolve;
+    }),
+  });
+
+  const pendingLoad = page.loadNotifications();
+  assert.deepEqual(calls.nativeLoadingEvents.map((event) => event.type), ["show"]);
+
+  page.onHide();
+  assert.deepEqual(calls.nativeLoadingEvents.map((event) => event.type), ["show", "hide"]);
+
+  resolveRead([{ id: "late_notification", type: "version_update" }]);
+  await pendingLoad;
+  assert.deepEqual(calls.nativeLoadingEvents.map((event) => event.type), ["show", "hide"]);
+  assert.equal(page.data.publicNotifications.length, 0);
+  assert.equal(page.data.errorMessage, "");
 });
 
 await test("subscription authorization is triggered by a tap and stored server-side", async () => {

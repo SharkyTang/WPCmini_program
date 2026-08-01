@@ -34,6 +34,10 @@ const inquiryWxmlPath = resolve(
   __dirname,
   "../miniprogram/miniprogram/pages/inquiry/index.wxml"
 );
+const inquiryPagePath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/inquiry/index.js"
+);
 const inquiryJsonPath = resolve(
   __dirname,
   "../miniprogram/miniprogram/pages/inquiry/index.json"
@@ -48,6 +52,37 @@ const {
   normalizeInquiryDraft,
   validateInquiryDraft,
 } = inquiryData;
+
+function loadInquiryPageConfig() {
+  let pageConfig;
+  const source = readFileSync(inquiryPagePath, "utf8");
+  const sandbox = {
+    Page(config) {
+      pageConfig = config;
+    },
+    require(moduleName) {
+      if (moduleName === "../../utils/cloudData") {
+        return {
+          fetchCaseById() {
+            throw new Error("fetchCaseById should not run while loading the page");
+          },
+        };
+      }
+      if (moduleName === "./utils/inquiryData") return inquiryData;
+      if (moduleName === "./utils/inquiryService") {
+        return {
+          submitInquiry() {
+            throw new Error("submitInquiry should not run while loading the page");
+          },
+        };
+      }
+      throw new Error(`Unexpected require: ${moduleName}`);
+    },
+  };
+
+  vm.runInNewContext(source, sandbox, { filename: inquiryPagePath });
+  return pageConfig;
+}
 
 function test(name, fn) {
   try {
@@ -122,6 +157,49 @@ test("inquiry page uses WeUI top tips and sectioned form layout", () => {
   assert.equal(wxml.includes("包装方向"), true);
   assert.equal(wxml.includes("需求说明"), true);
   assert.equal(wxml.includes("联系信息"), true);
+});
+
+test("inquiry contact picker keeps the required order and defaults to WeChat", () => {
+  const pageConfig = loadInquiryPageConfig();
+  const wxml = readFileSync(inquiryWxmlPath, "utf8");
+
+  assert.deepEqual(plain(pageConfig.data.contactTypes), ["微信号", "手机号", "邮箱"]);
+  assert.equal(pageConfig.data.contactTypeIndex, 0);
+  assert.equal(pageConfig.data.selectedContactType, "微信号");
+  assert.equal(pageConfig.data.contactPlaceholder, "请输入微信号");
+  assert.equal(wxml.includes('mode="selector"'), true);
+  assert.equal(wxml.includes('range="{{contactTypes}}"'), true);
+  assert.equal(wxml.includes('bindchange="changeContactType"'), true);
+  assert.equal(wxml.includes("{{selectedContactType}}"), true);
+  assert.equal(wxml.includes('placeholder="{{contactPlaceholder}}"'), true);
+});
+
+test("changing inquiry contact type updates its UI without clearing the value", () => {
+  const pageConfig = loadInquiryPageConfig();
+  const page = {
+    data: {
+      ...plain(pageConfig.data),
+      draft: {
+        ...plain(pageConfig.data.draft),
+        contact: "existing-contact",
+      },
+    },
+    setData(nextData) {
+      Object.assign(this.data, nextData);
+    },
+  };
+
+  pageConfig.changeContactType.call(page, { detail: { value: "1" } });
+  assert.equal(page.data.contactTypeIndex, 1);
+  assert.equal(page.data.selectedContactType, "手机号");
+  assert.equal(page.data.contactPlaceholder, "请输入手机号");
+  assert.equal(page.data.draft.contact, "existing-contact");
+
+  pageConfig.changeContactType.call(page, { detail: { value: "2" } });
+  assert.equal(page.data.contactTypeIndex, 2);
+  assert.equal(page.data.selectedContactType, "邮箱");
+  assert.equal(page.data.contactPlaceholder, "请输入邮箱");
+  assert.equal(page.data.draft.contact, "existing-contact");
 });
 
 test("validates maximum inquiry content and contact length", () => {

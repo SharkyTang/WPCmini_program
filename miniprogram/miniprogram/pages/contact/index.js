@@ -3,12 +3,27 @@ const { fetchPublicContact } = require("./contactService");
 
 const CONTACT_SHARE_TITLE = "联系我们｜金亿诚包装科技";
 
+function normalizeWechatQrImages(images, legacyImage) {
+  const normalizedImages = Array.isArray(images)
+    ? images
+        .filter((image) => typeof image === "string" && image.trim())
+        .map((image) => image.trim())
+        .slice(0, 2)
+    : [];
+  if (normalizedImages.length) return normalizedImages;
+  return typeof legacyImage === "string" && legacyImage.trim()
+    ? [legacyImage.trim()]
+    : [];
+}
+
 Page({
   data: {
     ...CONTACT_DATA,
     activeStoreImageIndex: 0,
     storeImagesLoading: true,
     storeImagesError: false,
+    wechatQrLoading: true,
+    wechatQrError: false,
     isAdmin: false,
   },
 
@@ -17,46 +32,56 @@ Page({
   },
 
   async loadPublicContact() {
-    // 每次读取前先清空已渲染的门店图，避免管理员更新后短暂显示旧云端图片。
+    const requestId = (this._publicContactRequestId || 0) + 1;
+    this._publicContactRequestId = requestId;
+    // 每次读取前先清空已渲染的图片，避免管理员更新后短暂显示旧内容。
     this.setData({
       storeImages: [],
+      wechatQrImages: [],
+      wechatQrImage: "",
       activeStoreImageIndex: 0,
       storeImagesLoading: true,
       storeImagesError: false,
+      wechatQrLoading: true,
+      wechatQrError: false,
     });
 
     try {
       const contact = await fetchPublicContact();
+      if (requestId !== this._publicContactRequestId) return;
       const storeImages = Array.isArray(contact.storeImages)
         ? contact.storeImages
         : [];
+      const wechatQrImages = normalizeWechatQrImages(
+        contact.wechatQrImages,
+        contact.wechatQrImage
+      );
       const patch = {
         isAdmin: contact.isAdmin,
         storeImages,
+        wechatQrImages,
+        wechatQrImage: wechatQrImages[0] || "",
         activeStoreImageIndex: 0,
         storeImagesLoading: false,
         storeImagesError: false,
+        wechatQrLoading: false,
+        wechatQrError: false,
       };
-      if (
-        Array.isArray(contact.wechatQrImages) &&
-        contact.wechatQrImages.length
-      ) {
-        patch.wechatQrImages = contact.wechatQrImages;
-        patch.wechatQrImage = contact.wechatQrImages[0];
-      } else if (contact.wechatQrImage) {
-        patch.wechatQrImages = [contact.wechatQrImage];
-        patch.wechatQrImage = contact.wechatQrImage;
-      }
       if (Array.isArray(contact.phoneNumbers)) {
         patch.phoneNumbers = contact.phoneNumbers;
       }
       this.setData(patch);
     } catch (error) {
+      if (requestId !== this._publicContactRequestId) return;
       this.setData({
         storeImages: [],
+        wechatQrImages: [],
+        wechatQrImage: "",
         activeStoreImageIndex: 0,
         storeImagesLoading: false,
         storeImagesError: true,
+        wechatQrLoading: false,
+        wechatQrError: true,
         isAdmin: false,
       });
     }
