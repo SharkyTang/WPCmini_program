@@ -180,6 +180,24 @@ function normalizeInitialSort(sortKey) {
   return isValidSortKey(sortKey) ? sortKey : "default";
 }
 
+function showLoadMoreIndicator(page) {
+  const token = Number(page._loadMoreIndicatorVersion || 0) + 1;
+  page._loadMoreIndicatorVersion = token;
+  page._loadMoreIndicatorToken = token;
+  wx.showLoading({
+    title: "加载更多",
+    mask: false,
+  });
+  return token;
+}
+
+function hideLoadMoreIndicator(page, token) {
+  if (!page._loadMoreIndicatorToken) return;
+  if (token && page._loadMoreIndicatorToken !== token) return;
+  page._loadMoreIndicatorToken = null;
+  wx.hideLoading();
+}
+
 function takePendingCategorySort() {
   let sortKey = "";
   if (typeof getApp === "function") {
@@ -302,6 +320,8 @@ Page({
     this._filteredCases = [];
     this._displayLimit = CARD_PAGE_SIZE;
     this._imageRequestVersion = 0;
+    this._loadMoreIndicatorVersion = 0;
+    this._loadMoreIndicatorToken = null;
     this._catalogImageCache = {};
     this._catalogImageEndpointAvailable = true;
     this._searchTimer = null;
@@ -332,6 +352,10 @@ Page({
     }
   },
 
+  onHide() {
+    hideLoadMoreIndicator(this);
+  },
+
   onPullDownRefresh() {
     this.loadData({ forceRefresh: true }).finally(() => wx.stopPullDownRefresh());
   },
@@ -351,6 +375,8 @@ Page({
 
   onUnload() {
     if (this._searchTimer) clearTimeout(this._searchTimer);
+    this._imageRequestVersion += 1;
+    hideLoadMoreIndicator(this);
   },
 
   applyCatalogItems(items, options = {}) {
@@ -456,6 +482,7 @@ Page({
   },
 
   applyFilters() {
+    hideLoadMoreIndicator(this);
     const selectedFilters = buildSelectedFilters(this.data.filters);
     const filteredCases = filterCases(this._allCases || [], {
       query: this.data.query,
@@ -574,13 +601,19 @@ Page({
     return cards;
   },
 
-  loadMore() {
+  async loadMore() {
     if (
       this.data.isLoadingMore ||
       this.data.visibleCards.length >= this._filteredCases.length
-    ) return;
+    ) return false;
+    const indicatorToken = showLoadMoreIndicator(this);
     this._displayLimit += CARD_PAGE_SIZE;
-    this.refreshVisibleCards({ append: true });
+    try {
+      await this.refreshVisibleCards({ append: true });
+      return true;
+    } finally {
+      hideLoadMoreIndicator(this, indicatorToken);
+    }
   },
 
   async retryCardImage(event) {

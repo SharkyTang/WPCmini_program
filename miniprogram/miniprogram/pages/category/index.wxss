@@ -333,6 +333,14 @@ page {
   text-overflow: ellipsis;
 }
 
+.load-more-status {
+  padding: 34rpx 0 8rpx;
+  color: #766b60;
+  font-size: 24rpx;
+  line-height: 1.5;
+  text-align: center;
+}
+
 .state-box {
   margin-top: 24rpx;
   padding: 44rpx 22rpx;

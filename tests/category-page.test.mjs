@@ -119,6 +119,8 @@ function loadCategoryPage(
       },
       navigateTo() {},
       removeStorageSync() {},
+      showLoading() {},
+      hideLoading() {},
       stopPullDownRefresh() {},
       ...wxMock,
     },
@@ -158,6 +160,15 @@ await test("category cards fill their frame with the aspect-preserving cover", (
   assert.match(caseImage, /mode="aspectFill"/);
   assert.match(caseImage, /\slazy-load(?:\s|>)/);
   assert.match(caseImage, /fade-in="{{true}}"/);
+});
+
+await test("category explains that scrolling loads more cases and marks the end", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+  assert.match(wxml, /bindscrolltolower="loadMore"/);
+  assert.match(wxml, /class="load-more-status"/);
+  assert.match(wxml, /visibleCards\.length < filteredCount/);
+  assert.match(wxml, /继续上滑，加载更多案例/);
+  assert.match(wxml, /已展示全部案例/);
 });
 
 function plain(value) {
@@ -533,4 +544,186 @@ await test("category load-more sends only appended card paths", async () => {
     Object.keys(appendPatch).filter((key) => key.startsWith("visibleCards[")).length,
     12
   );
+});
+
+await test("category uses the native loading indicator only when another batch exists", async () => {
+  const cases = Array.from({ length: 13 }, (_, index) =>
+    buildCase(`case_${index + 1}`)
+  );
+  const nativeLoadingEvents = [];
+  const { page, setDataCalls } = loadCategoryPage(cases, {}, {
+    showLoading(options) {
+      nativeLoadingEvents.push(["show", options]);
+    },
+    hideLoading() {
+      nativeLoadingEvents.push(["hide"]);
+    },
+  });
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  const loadPromise = page.loadMore();
+  assert.deepEqual(plain(nativeLoadingEvents), [
+    ["show", { title: "加载更多", mask: false }],
+  ]);
+  assert.equal(await loadPromise, true);
+  assert.ok(
+    setDataCalls.some((patch) =>
+      Object.prototype.hasOwnProperty.call(patch, "visibleCards[12]")
+    )
+  );
+  assert.deepEqual(plain(nativeLoadingEvents), [
+    ["show", { title: "加载更多", mask: false }],
+    ["hide"],
+  ]);
+
+  page.data.visibleCards = cases;
+  assert.equal(await page.loadMore(), false);
+  assert.equal(nativeLoadingEvents.length, 2);
+});
+
+await test("category clears a native load-more indicator when leaving the page", async () => {
+  const cases = Array.from({ length: 13 }, (_, index) =>
+    buildCase(`case_${index + 1}`, {
+      imageFileId: `cloud://env/banner-${index + 1}.jpg`,
+    })
+  );
+  let resolveNextBatch;
+  let requestCount = 0;
+  const nativeLoadingEvents = [];
+  const { page } = loadCategoryPage(cases, {}, {
+    showLoading() {
+      nativeLoadingEvents.push("show");
+    },
+    hideLoading() {
+      nativeLoadingEvents.push("hide");
+    },
+  }, {
+    fetchCatalogImageUrls: async (ids) => {
+      requestCount += 1;
+      if (requestCount === 2) {
+        await new Promise((resolvePromise) => {
+          resolveNextBatch = resolvePromise;
+        });
+      }
+      return ids.reduce((images, id) => {
+        images[id] = {
+          imageFileId: cases.find((item) => item.id === id).imageFileId,
+          thumbnailUrl: `https://temp/${id}.jpg`,
+        };
+        return images;
+      }, {});
+    },
+  });
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  const loadPromise = page.loadMore();
+  assert.deepEqual(nativeLoadingEvents, ["show"]);
+  page.onHide();
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+  resolveNextBatch();
+  await loadPromise;
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+});
+
+await test("an older append request cannot close the current native indicator", async () => {
+  const cases = Array.from({ length: 25 }, (_, index) =>
+    buildCase(`case_${index + 1}`, {
+      imageFileId: `cloud://env/banner-${index + 1}.jpg`,
+    })
+  );
+  const nativeLoadingEvents = [];
+  const pendingRequests = [];
+  let requestCount = 0;
+  const imageMapFor = (ids) =>
+    ids.reduce((images, id) => {
+      images[id] = {
+        imageFileId: cases.find((item) => item.id === id).imageFileId,
+        thumbnailUrl: `https://temp/${id}.jpg`,
+      };
+      return images;
+    }, {});
+  const { page } = loadCategoryPage(cases, {}, {
+    showLoading() {
+      nativeLoadingEvents.push("show");
+    },
+    hideLoading() {
+      nativeLoadingEvents.push("hide");
+    },
+  }, {
+    fetchCatalogImageUrls: async (ids) => {
+      requestCount += 1;
+      if (requestCount === 1) return imageMapFor(ids);
+      return new Promise((resolvePromise) => {
+        pendingRequests.push(() => resolvePromise(imageMapFor(ids)));
+      });
+    },
+  });
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  const oldLoadPromise = page.loadMore();
+  assert.equal(await page.loadMore(), false);
+  assert.deepEqual(nativeLoadingEvents, ["show"]);
+
+  page.applyFilters();
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+
+  const currentLoadPromise = page.loadMore();
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide", "show"]);
+  pendingRequests[0]();
+  await oldLoadPromise;
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide", "show"]);
+
+  pendingRequests[1]();
+  await currentLoadPromise;
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide", "show", "hide"]);
+});
+
+await test("category ignores a pending appended image result after unload", async () => {
+  const cases = Array.from({ length: 13 }, (_, index) =>
+    buildCase(`case_${index + 1}`, {
+      imageFileId: `cloud://env/banner-${index + 1}.jpg`,
+    })
+  );
+  let resolveNextBatch;
+  let requestCount = 0;
+  const nativeLoadingEvents = [];
+  const { page, setDataCalls } = loadCategoryPage(cases, {}, {
+    showLoading() {
+      nativeLoadingEvents.push("show");
+    },
+    hideLoading() {
+      nativeLoadingEvents.push("hide");
+    },
+  }, {
+    fetchCatalogImageUrls: async (ids) => {
+      requestCount += 1;
+      if (requestCount === 2) {
+        await new Promise((resolvePromise) => {
+          resolveNextBatch = resolvePromise;
+        });
+      }
+      return ids.reduce((images, id) => {
+        images[id] = {
+          imageFileId: cases.find((item) => item.id === id).imageFileId,
+          thumbnailUrl: `https://temp/${id}.jpg`,
+        };
+        return images;
+      }, {});
+    },
+  });
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  const loadPromise = page.loadMore();
+  page.onUnload();
+  const callsAfterUnload = setDataCalls.length;
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+  resolveNextBatch();
+  await loadPromise;
+  assert.equal(setDataCalls.length, callsAfterUnload);
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
 });
