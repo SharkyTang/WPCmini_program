@@ -2,6 +2,7 @@ const { CONTACT_DATA } = require("./contactData");
 const { fetchPublicContact } = require("./contactService");
 
 const CONTACT_SHARE_TITLE = "联系我们｜金亿诚包装科技";
+const WECHAT_QR_LOAD_TIMEOUT_MS = 15000;
 
 function normalizeWechatQrImages(images, legacyImage) {
   const normalizedImages = Array.isArray(images)
@@ -16,11 +17,114 @@ function normalizeWechatQrImages(images, legacyImage) {
     : [];
 }
 
-function getDefaultWechatQrImages() {
-  return normalizeWechatQrImages(
-    CONTACT_DATA.wechatQrImages,
-    CONTACT_DATA.wechatQrImage
+function clearWechatQrImageLoadTimer(page) {
+  const state = page._wechatQrImageLoadState;
+  if (!state || state.timeoutId === null) return;
+  clearTimeout(state.timeoutId);
+  state.timeoutId = null;
+}
+
+function beginContactLoading(page) {
+  clearWechatQrImageLoadTimer(page);
+  page._wechatQrImageLoadState = null;
+  const requestId = (page._contactLoadSequence || 0) + 1;
+  page._contactLoadSequence = requestId;
+  page._activeContactLoadRequestId = requestId;
+  if (page._contactLoadingVisible) return requestId;
+  page._contactLoadingVisible = true;
+  wx.showLoading({
+    title: "加载中",
+    mask: true,
+  });
+  return requestId;
+}
+
+function isCurrentContactLoad(page, requestId) {
+  return page._activeContactLoadRequestId === requestId;
+}
+
+function finishContactLoading(page, requestId) {
+  if (!isCurrentContactLoad(page, requestId)) return;
+  clearWechatQrImageLoadTimer(page);
+  page._activeContactLoadRequestId = 0;
+  if (!page._contactLoadingVisible) return;
+  page._contactLoadingVisible = false;
+  wx.hideLoading();
+}
+
+function cancelContactLoading(page) {
+  page._contactLoadSequence = (page._contactLoadSequence || 0) + 1;
+  page._activeContactLoadRequestId = 0;
+  clearWechatQrImageLoadTimer(page);
+  page._wechatQrImageLoadState = null;
+  if (!page._contactLoadingVisible) return;
+  page._contactLoadingVisible = false;
+  wx.hideLoading();
+}
+
+function beginWechatQrImageLoading(page, requestId, images) {
+  const state = {
+    requestId,
+    total: images.length,
+    settledIndexes: new Set(),
+    failedIndexes: new Set(),
+    timeoutId: null,
+  };
+  page._wechatQrImageLoadState = state;
+  state.timeoutId = setTimeout(() => {
+    completeWechatQrImageLoading(page, state);
+  }, WECHAT_QR_LOAD_TIMEOUT_MS);
+}
+
+function completeWechatQrImageLoading(page, state) {
+  if (
+    page._wechatQrImageLoadState !== state ||
+    !isCurrentContactLoad(page, state.requestId)
+  ) {
+    return;
+  }
+
+  clearWechatQrImageLoadTimer(page);
+  const loadedImages = (page.data.wechatQrImages || []).filter(
+    (_, imageIndex) =>
+      state.settledIndexes.has(imageIndex) &&
+      !state.failedIndexes.has(imageIndex)
   );
+  page._wechatQrImageLoadState = null;
+  page.setData(
+    {
+      wechatQrImages: loadedImages,
+      wechatQrImage: loadedImages[0] || "",
+      wechatQrLoading: false,
+      wechatQrError: !loadedImages.length,
+    },
+    () => {
+      finishContactLoading(page, state.requestId);
+    }
+  );
+}
+
+function settleWechatQrImageLoading(page, event, failed) {
+  const state = page._wechatQrImageLoadState;
+  const dataset = (event && event.currentTarget && event.currentTarget.dataset) || {};
+  const requestId = Number(dataset.requestId);
+  const index = Number(dataset.index);
+  if (
+    !state ||
+    state.requestId !== requestId ||
+    !isCurrentContactLoad(page, requestId) ||
+    !Number.isInteger(index) ||
+    index < 0 ||
+    index >= state.total ||
+    state.settledIndexes.has(index)
+  ) {
+    return;
+  }
+
+  state.settledIndexes.add(index);
+  if (failed) state.failedIndexes.add(index);
+  if (state.settledIndexes.size < state.total) return;
+  completeWechatQrImageLoading(page, state);
 }
 
 Page({
@@ -31,6 +135,7 @@ Page({
     storeImagesError: false,
     wechatQrLoading: true,
     wechatQrError: false,
+    wechatQrRequestId: 0,
     isAdmin: false,
   },
 
@@ -38,15 +143,22 @@ Page({
     this.loadPublicContact();
   },
 
+  onHide() {
+    cancelContactLoading(this);
+  },
+
+  onUnload() {
+    cancelContactLoading(this);
+  },
+
   async loadPublicContact() {
-    const requestId = (this._publicContactRequestId || 0) + 1;
-    this._publicContactRequestId = requestId;
-    const fallbackWechatQrImages = getDefaultWechatQrImages();
-    // 门店图每次重新读取；二维码在云端结果返回前保留本地兜底，避免弱网时联系入口失效。
+    const requestId = beginContactLoading(this);
+    // 每次读取前清空已渲染图片，等云端新图真正加载完成后再关闭原生 loading。
     this.setData({
       storeImages: [],
-      wechatQrImages: fallbackWechatQrImages,
-      wechatQrImage: fallbackWechatQrImages[0] || "",
+      wechatQrImages: [],
+      wechatQrImage: "",
+      wechatQrRequestId: requestId,
       activeStoreImageIndex: 0,
       storeImagesLoading: true,
       storeImagesError: false,
@@ -56,17 +168,17 @@ Page({
 
     try {
       const contact = await fetchPublicContact();
-      if (requestId !== this._publicContactRequestId) return;
+      if (!isCurrentContactLoad(this, requestId)) return;
       const storeImages = Array.isArray(contact.storeImages)
         ? contact.storeImages
         : [];
-      const cloudWechatQrImages = normalizeWechatQrImages(
+      const wechatQrImages = normalizeWechatQrImages(
         contact.wechatQrImages,
         contact.wechatQrImage
       );
-      const wechatQrImages = cloudWechatQrImages.length
-        ? cloudWechatQrImages
-        : fallbackWechatQrImages;
+      if (wechatQrImages.length) {
+        beginWechatQrImageLoading(this, requestId, wechatQrImages);
+      }
       const patch = {
         isAdmin: contact.isAdmin,
         storeImages,
@@ -75,27 +187,46 @@ Page({
         activeStoreImageIndex: 0,
         storeImagesLoading: false,
         storeImagesError: false,
-        wechatQrLoading: false,
+        wechatQrLoading: Boolean(wechatQrImages.length),
         wechatQrError: false,
       };
       if (Array.isArray(contact.phoneNumbers)) {
         patch.phoneNumbers = contact.phoneNumbers;
       }
-      this.setData(patch);
-    } catch (error) {
-      if (requestId !== this._publicContactRequestId) return;
-      this.setData({
-        storeImages: [],
-        wechatQrImages: fallbackWechatQrImages,
-        wechatQrImage: fallbackWechatQrImages[0] || "",
-        activeStoreImageIndex: 0,
-        storeImagesLoading: false,
-        storeImagesError: true,
-        wechatQrLoading: false,
-        wechatQrError: true,
-        isAdmin: false,
+      this.setData(patch, () => {
+        if (!wechatQrImages.length) {
+          finishContactLoading(this, requestId);
+        }
       });
+    } catch (error) {
+      if (!isCurrentContactLoad(this, requestId)) return;
+      clearWechatQrImageLoadTimer(this);
+      this._wechatQrImageLoadState = null;
+      this.setData(
+        {
+          storeImages: [],
+          wechatQrImages: [],
+          wechatQrImage: "",
+          activeStoreImageIndex: 0,
+          storeImagesLoading: false,
+          storeImagesError: true,
+          wechatQrLoading: false,
+          wechatQrError: true,
+          isAdmin: false,
+        },
+        () => {
+          finishContactLoading(this, requestId);
+        }
+      );
     }
+  },
+
+  onWechatQrImageLoad(event) {
+    settleWechatQrImageLoading(this, event, false);
+  },
+
+  onWechatQrImageError(event) {
+    settleWechatQrImageLoading(this, event, true);
   },
 
   openContactAdmin() {

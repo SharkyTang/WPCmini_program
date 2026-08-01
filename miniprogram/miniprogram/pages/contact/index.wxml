@@ -106,22 +106,24 @@
         wx:key="*this"
         class="qr-image-shell"
       >
+        <!-- 原生 loading 需等待图片事件；此处不能开启懒加载，避免首屏外二维码无法完成。 -->
         <image
-          class="qr-image"
+          class="qr-image {{wechatQrLoading ? 'qr-image-loading' : ''}}"
           src="{{item}}"
           mode="widthFix"
-          lazy-load="{{true}}"
           fade-in="{{true}}"
           show-menu-by-longpress="{{true}}"
           data-index="{{index}}"
+          data-request-id="{{wechatQrRequestId}}"
+          bindload="onWechatQrImageLoad"
+          binderror="onWechatQrImageError"
           bindtap="previewWechatQr"
         />
       </view>
     </view>
-    <view wx:elif="{{wechatQrLoading}}" class="qr-image-state">微信二维码加载中…</view>
     <view wx:elif="{{wechatQrError}}" class="qr-image-state qr-image-state-error">
       微信二维码暂时无法加载，请稍后重试
     </view>
-    <view wx:else class="qr-image-state">微信二维码暂未配置</view>
+    <view wx:elif="{{!wechatQrLoading}}" class="qr-image-state">微信二维码暂未配置</view>
   </view>
 </view>

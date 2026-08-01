@@ -335,4 +335,9 @@ page {
 .qr-image {
   display: block;
   width: 100%;
+  transition: opacity 160ms ease;
+}
+
+.qr-image-loading {
+  opacity: 0;
 }

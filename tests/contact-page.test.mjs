@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
@@ -18,7 +18,10 @@ const wxmlPath = resolve(
   __dirname,
   "../miniprogram/miniprogram/pages/contact/index.wxml"
 );
-const miniRoot = resolve(__dirname, "../miniprogram/miniprogram");
+const wxssPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/contact/index.wxss"
+);
 function loadContactData() {
   const module = { exports: {} };
   vm.runInNewContext(readFileSync(dataPath, "utf8"), {
@@ -43,7 +46,7 @@ function loadContactService(wxMock = {}) {
   return module.exports;
 }
 
-function loadContactPage(wxMock = {}, serviceMock = {}) {
+function loadContactPage(wxMock = {}, serviceMock = {}, runtimeMock = {}) {
   let page;
   const contactData = loadContactData();
   const fetchPublicContact =
@@ -62,11 +65,15 @@ function loadContactPage(wxMock = {}, serviceMock = {}) {
       }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
+    setTimeout: runtimeMock.setTimeout || setTimeout,
+    clearTimeout: runtimeMock.clearTimeout || clearTimeout,
     wx: {
       openLocation() {},
       previewImage() {},
       setClipboardData() {},
       showToast() {},
+      showLoading() {},
+      hideLoading() {},
       makePhoneCall() {},
       navigateTo() {},
       ...wxMock,
@@ -75,10 +82,26 @@ function loadContactPage(wxMock = {}, serviceMock = {}) {
   vm.runInNewContext(readFileSync(pagePath, "utf8"), sandbox, {
     filename: pagePath,
   });
-  page.setData = function setData(patch) {
+  page.setData = function setData(patch, callback) {
     this.data = { ...this.data, ...patch };
+    if (callback) callback();
   };
   return page;
+}
+
+function settleWechatQrImages(page, failedIndexes = []) {
+  const requestId = page.data.wechatQrRequestId;
+  const images = [...page.data.wechatQrImages];
+  images.forEach((_, index) => {
+    const handler = failedIndexes.includes(index)
+      ? "onWechatQrImageError"
+      : "onWechatQrImageLoad";
+    page[handler]({
+      currentTarget: {
+        dataset: { index, requestId },
+      },
+    });
+  });
 }
 
 function plain(value) {
@@ -95,7 +118,7 @@ async function test(name, fn) {
   }
 }
 
-await test("contact data keeps complete public store details and the QR fallback", () => {
+await test("contact data starts without the retired local QR fallback", () => {
   const data = plain(loadContactData());
 
   assert.equal(data.storeName, "金亿诚包装科技");
@@ -109,31 +132,20 @@ await test("contact data keeps complete public store details and the QR fallback
   assert.equal(data.longitude >= -180 && data.longitude <= 180, true);
   assert.deepEqual(data.storeImages, []);
   assert.equal(data.storeImages.length <= 9, true);
-  assert.equal(data.wechatQrImages.length, 1);
-  assert.equal(data.wechatQrImages.length <= 2, true);
-  assert.equal(data.wechatQrImage, data.wechatQrImages[0]);
+  assert.deepEqual(data.wechatQrImages, []);
+  assert.equal(data.wechatQrImage, "");
   assert.deepEqual(data.phoneNumbers, []);
-
-  data.wechatQrImages.forEach((assetPath) => {
-    const absolutePath = resolve(miniRoot, assetPath.replace(/^\//, ""));
-    assert.equal(existsSync(absolutePath), true, `${assetPath} should exist`);
-  });
-  const packageBytes = data.wechatQrImages.reduce(
-    (total, assetPath) =>
-      total + statSync(resolve(miniRoot, assetPath.replace(/^\//, ""))).size,
-    0
+  assert.equal(
+    readFileSync(dataPath, "utf8").includes("boss-wechat-qr.jpg"),
+    false
   );
-  assert.equal(packageBytes < 1024 * 1024, true);
 });
 
-await test("contact page keeps the QR fallback while cloud data is loading", () => {
+await test("contact page starts with no QR image while cloud data is loading", () => {
   const page = loadContactPage();
 
-  assert.deepEqual(
-    plain(page.data.wechatQrImages),
-    plain(loadContactData().wechatQrImages)
-  );
-  assert.equal(page.data.wechatQrImage, loadContactData().wechatQrImage);
+  assert.deepEqual(plain(page.data.wechatQrImages), []);
+  assert.equal(page.data.wechatQrImage, "");
   assert.equal(page.data.wechatQrLoading, true);
   assert.equal(page.data.wechatQrError, false);
 });
@@ -250,6 +262,7 @@ await test("contact page merges valid cloud fields and exposes the admin editor"
   );
 
   await page.loadPublicContact();
+  settleWechatQrImages(page);
   page.openContactAdmin();
 
   assert.equal(page.data.isAdmin, true);
@@ -270,7 +283,7 @@ await test("contact page merges valid cloud fields and exposes the admin editor"
   assert.equal(navigatedTo, "/pages/contact-admin/edit");
 });
 
-await test("contact page keeps the legacy single QR fallback compatible", async () => {
+await test("contact page keeps the legacy single cloud QR field compatible", async () => {
   const page = loadContactPage({}, {
     async fetchPublicContact() {
       return {
@@ -283,6 +296,7 @@ await test("contact page keeps the legacy single QR fallback compatible", async 
   });
 
   await page.loadPublicContact();
+  settleWechatQrImages(page);
 
   assert.deepEqual(plain(page.data.wechatQrImages), [
     "https://example.test/legacy-cloud-qr.png",
@@ -293,8 +307,16 @@ await test("contact page keeps the legacy single QR fallback compatible", async 
   );
 });
 
-await test("empty or failed cloud reads keep the local QR fallback", async () => {
-  const page = loadContactPage({}, {
+await test("empty or failed cloud reads never restore the retired local QR", async () => {
+  const nativeLoadingEvents = [];
+  const page = loadContactPage({
+    showLoading(request) {
+      nativeLoadingEvents.push({ type: "show", request });
+    },
+    hideLoading() {
+      nativeLoadingEvents.push({ type: "hide" });
+    },
+  }, {
     async fetchPublicContact() {
       return {
         isAdmin: false,
@@ -311,14 +333,15 @@ await test("empty or failed cloud reads keep the local QR fallback", async () =>
   assert.deepEqual(plain(page.data.storeImages), []);
   assert.equal(page.data.storeImagesLoading, false);
   assert.equal(page.data.storeImagesError, false);
-  assert.deepEqual(
-    plain(page.data.wechatQrImages),
-    plain(loadContactData().wechatQrImages)
-  );
-  assert.equal(page.data.wechatQrImage, loadContactData().wechatQrImage);
+  assert.deepEqual(plain(page.data.wechatQrImages), []);
+  assert.equal(page.data.wechatQrImage, "");
   assert.equal(page.data.wechatQrLoading, false);
   assert.equal(page.data.wechatQrError, false);
   assert.deepEqual(plain(page.data.phoneNumbers), []);
+  assert.deepEqual(plain(nativeLoadingEvents), [
+    { type: "show", request: { title: "加载中", mask: true } },
+    { type: "hide" },
+  ]);
 
   page.data.storeImages = ["https://example.test/current-cloud.jpg"];
   page.data.wechatQrImages = ["https://example.test/current-cloud-qr.jpg"];
@@ -339,11 +362,8 @@ await test("empty or failed cloud reads keep the local QR fallback", async () =>
   assert.deepEqual(plain(offlinePage.data.storeImages), []);
   assert.equal(offlinePage.data.storeImagesLoading, false);
   assert.equal(offlinePage.data.storeImagesError, true);
-  assert.deepEqual(
-    plain(offlinePage.data.wechatQrImages),
-    plain(loadContactData().wechatQrImages)
-  );
-  assert.equal(offlinePage.data.wechatQrImage, loadContactData().wechatQrImage);
+  assert.deepEqual(plain(offlinePage.data.wechatQrImages), []);
+  assert.equal(offlinePage.data.wechatQrImage, "");
   assert.equal(offlinePage.data.wechatQrLoading, false);
   assert.equal(offlinePage.data.wechatQrError, true);
   assert.deepEqual(plain(offlinePage.data.phoneNumbers), [
@@ -360,17 +380,23 @@ await test("empty or failed cloud reads keep the local QR fallback", async () =>
   assert.deepEqual(plain(freshOfflinePage.data.storeImages), []);
   assert.equal(freshOfflinePage.data.storeImagesLoading, false);
   assert.equal(freshOfflinePage.data.storeImagesError, true);
-  assert.deepEqual(
-    plain(freshOfflinePage.data.wechatQrImages),
-    plain(loadContactData().wechatQrImages)
-  );
+  assert.deepEqual(plain(freshOfflinePage.data.wechatQrImages), []);
+  assert.equal(freshOfflinePage.data.wechatQrImage, "");
   assert.equal(freshOfflinePage.data.wechatQrLoading, false);
   assert.equal(freshOfflinePage.data.wechatQrError, true);
 });
 
-await test("contact refresh keeps the QR fallback before new cloud data arrives", async () => {
+await test("contact refresh hides old QR images until every new image is loaded", async () => {
   let resolveContact;
-  const page = loadContactPage({}, {
+  const nativeLoadingEvents = [];
+  const page = loadContactPage({
+    showLoading(request) {
+      nativeLoadingEvents.push({ type: "show", request });
+    },
+    hideLoading() {
+      nativeLoadingEvents.push({ type: "hide" });
+    },
+  }, {
     fetchPublicContact() {
       return new Promise((resolveContactRequest) => {
         resolveContact = resolveContactRequest;
@@ -384,19 +410,22 @@ await test("contact refresh keeps the QR fallback before new cloud data arrives"
   const loading = page.loadPublicContact();
 
   assert.deepEqual(plain(page.data.storeImages), []);
-  assert.deepEqual(
-    plain(page.data.wechatQrImages),
-    plain(loadContactData().wechatQrImages)
-  );
-  assert.equal(page.data.wechatQrImage, loadContactData().wechatQrImage);
+  assert.deepEqual(plain(page.data.wechatQrImages), []);
+  assert.equal(page.data.wechatQrImage, "");
   assert.equal(page.data.storeImagesLoading, true);
   assert.equal(page.data.wechatQrLoading, true);
   assert.equal(page.data.wechatQrError, false);
+  assert.deepEqual(plain(nativeLoadingEvents), [
+    { type: "show", request: { title: "加载中", mask: true } },
+  ]);
   resolveContact({
     isAdmin: false,
     storeImages: ["https://example.test/new-cloud.jpg"],
-    wechatQrImages: ["https://example.test/new-cloud-qr.jpg"],
-    wechatQrImage: "https://example.test/new-cloud-qr.jpg",
+    wechatQrImages: [
+      "https://example.test/new-cloud-qr-1.jpg",
+      "https://example.test/new-cloud-qr-2.jpg",
+    ],
+    wechatQrImage: "https://example.test/new-cloud-qr-1.jpg",
     phoneNumbers: [],
   });
   await loading;
@@ -405,21 +434,162 @@ await test("contact refresh keeps the QR fallback before new cloud data arrives"
     "https://example.test/new-cloud.jpg",
   ]);
   assert.deepEqual(plain(page.data.wechatQrImages), [
-    "https://example.test/new-cloud-qr.jpg",
+    "https://example.test/new-cloud-qr-1.jpg",
+    "https://example.test/new-cloud-qr-2.jpg",
   ]);
   assert.equal(
     page.data.wechatQrImage,
-    "https://example.test/new-cloud-qr.jpg"
+    "https://example.test/new-cloud-qr-1.jpg"
   );
   assert.equal(page.data.storeImagesLoading, false);
   assert.equal(page.data.storeImagesError, false);
+  assert.equal(page.data.wechatQrLoading, true);
+  assert.equal(page.data.wechatQrError, false);
+  assert.deepEqual(nativeLoadingEvents.map((event) => event.type), ["show"]);
+
+  page.onWechatQrImageLoad({
+    currentTarget: {
+      dataset: { index: 0, requestId: page.data.wechatQrRequestId },
+    },
+  });
+  assert.equal(page.data.wechatQrLoading, true);
+  assert.deepEqual(nativeLoadingEvents.map((event) => event.type), ["show"]);
+
+  page.onWechatQrImageLoad({
+    currentTarget: {
+      dataset: { index: 1, requestId: page.data.wechatQrRequestId },
+    },
+  });
+
+  assert.equal(page.data.wechatQrLoading, false);
+  assert.deepEqual(nativeLoadingEvents.map((event) => event.type), [
+    "show",
+    "hide",
+  ]);
+});
+
+await test("failed new QR images close native loading and show an error", async () => {
+  const nativeLoadingEvents = [];
+  const page = loadContactPage({
+    showLoading() {
+      nativeLoadingEvents.push("show");
+    },
+    hideLoading() {
+      nativeLoadingEvents.push("hide");
+    },
+  }, {
+    async fetchPublicContact() {
+      return {
+        isAdmin: false,
+        storeImages: [],
+        wechatQrImages: [
+          "https://example.test/broken-qr-1.jpg",
+          "https://example.test/broken-qr-2.jpg",
+        ],
+        phoneNumbers: [],
+      };
+    },
+  });
+
+  await page.loadPublicContact();
+  settleWechatQrImages(page, [0, 1]);
+
+  assert.deepEqual(plain(page.data.wechatQrImages), []);
+  assert.equal(page.data.wechatQrImage, "");
+  assert.equal(page.data.wechatQrLoading, false);
+  assert.equal(page.data.wechatQrError, true);
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+});
+
+await test("a partial QR image failure keeps the successfully loaded image", async () => {
+  const nativeLoadingEvents = [];
+  const page = loadContactPage({
+    showLoading() {
+      nativeLoadingEvents.push("show");
+    },
+    hideLoading() {
+      nativeLoadingEvents.push("hide");
+    },
+  }, {
+    async fetchPublicContact() {
+      return {
+        isAdmin: false,
+        storeImages: [],
+        wechatQrImages: [
+          "https://example.test/broken-qr.jpg",
+          "https://example.test/working-qr.jpg",
+        ],
+        phoneNumbers: [],
+      };
+    },
+  });
+
+  await page.loadPublicContact();
+  settleWechatQrImages(page, [0]);
+
+  assert.deepEqual(plain(page.data.wechatQrImages), [
+    "https://example.test/working-qr.jpg",
+  ]);
+  assert.equal(page.data.wechatQrImage, "https://example.test/working-qr.jpg");
   assert.equal(page.data.wechatQrLoading, false);
   assert.equal(page.data.wechatQrError, false);
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+});
+
+await test("a QR image timeout cannot leave the native loading overlay stuck", async () => {
+  const nativeLoadingEvents = [];
+  const clearedTimeouts = [];
+  let pendingTimeout;
+  const page = loadContactPage({
+    showLoading() {
+      nativeLoadingEvents.push("show");
+    },
+    hideLoading() {
+      nativeLoadingEvents.push("hide");
+    },
+  }, {
+    async fetchPublicContact() {
+      return {
+        isAdmin: false,
+        storeImages: [],
+        wechatQrImages: ["https://example.test/hanging-qr.jpg"],
+        phoneNumbers: [],
+      };
+    },
+  }, {
+    setTimeout(callback, delay) {
+      pendingTimeout = { callback, delay };
+      return 42;
+    },
+    clearTimeout(timeoutId) {
+      clearedTimeouts.push(timeoutId);
+    },
+  });
+
+  await page.loadPublicContact();
+  assert.equal(pendingTimeout.delay, 15000);
+  assert.deepEqual(nativeLoadingEvents, ["show"]);
+
+  pendingTimeout.callback();
+
+  assert.deepEqual(plain(page.data.wechatQrImages), []);
+  assert.equal(page.data.wechatQrLoading, false);
+  assert.equal(page.data.wechatQrError, true);
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+  assert.deepEqual(clearedTimeouts, [42]);
 });
 
 await test("only the latest overlapping contact request can update the QR image", async () => {
   const pendingRequests = [];
-  const page = loadContactPage({}, {
+  const nativeLoadingEvents = [];
+  const page = loadContactPage({
+    showLoading() {
+      nativeLoadingEvents.push("show");
+    },
+    hideLoading() {
+      nativeLoadingEvents.push("hide");
+    },
+  }, {
     fetchPublicContact() {
       return new Promise((resolveRequest) => {
         pendingRequests.push(resolveRequest);
@@ -436,6 +606,9 @@ await test("only the latest overlapping contact request can update the QR image"
     phoneNumbers: [],
   });
   await latestRequest;
+  assert.deepEqual(nativeLoadingEvents, ["show"]);
+  settleWechatQrImages(page);
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
   pendingRequests[0]({
     isAdmin: false,
     storeImages: [],
@@ -450,6 +623,94 @@ await test("only the latest overlapping contact request can update the QR image"
   assert.equal(page.data.wechatQrImage, "https://example.test/latest-qr.jpg");
   assert.equal(page.data.wechatQrLoading, false);
   assert.equal(page.data.wechatQrError, false);
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+});
+
+await test("stale QR image events cannot finish the latest contact request", async () => {
+  const pendingRequests = [];
+  const nativeLoadingEvents = [];
+  const page = loadContactPage({
+    showLoading() {
+      nativeLoadingEvents.push("show");
+    },
+    hideLoading() {
+      nativeLoadingEvents.push("hide");
+    },
+  }, {
+    fetchPublicContact() {
+      return new Promise((resolveRequest) => {
+        pendingRequests.push(resolveRequest);
+      });
+    },
+  });
+
+  const firstLoad = page.loadPublicContact();
+  pendingRequests[0]({
+    isAdmin: false,
+    storeImages: [],
+    wechatQrImages: ["https://example.test/old-qr.jpg"],
+    phoneNumbers: [],
+  });
+  await firstLoad;
+  const staleRequestId = page.data.wechatQrRequestId;
+
+  const latestLoad = page.loadPublicContact();
+  page.onWechatQrImageLoad({
+    currentTarget: {
+      dataset: { index: 0, requestId: staleRequestId },
+    },
+  });
+  assert.deepEqual(nativeLoadingEvents, ["show"]);
+
+  pendingRequests[1]({
+    isAdmin: false,
+    storeImages: [],
+    wechatQrImages: ["https://example.test/latest-qr.jpg"],
+    phoneNumbers: [],
+  });
+  await latestLoad;
+  settleWechatQrImages(page);
+
+  assert.deepEqual(plain(page.data.wechatQrImages), [
+    "https://example.test/latest-qr.jpg",
+  ]);
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+});
+
+await test("leaving during a contact read hides loading and ignores late images", async () => {
+  let resolveContact;
+  const nativeLoadingEvents = [];
+  const page = loadContactPage({
+    showLoading() {
+      nativeLoadingEvents.push("show");
+    },
+    hideLoading() {
+      nativeLoadingEvents.push("hide");
+    },
+  }, {
+    fetchPublicContact() {
+      return new Promise((resolveRequest) => {
+        resolveContact = resolveRequest;
+      });
+    },
+  });
+
+  const loading = page.loadPublicContact();
+  page.onHide();
+  page.onUnload();
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+
+  resolveContact({
+    isAdmin: false,
+    storeImages: [],
+    wechatQrImages: ["https://example.test/late-qr.jpg"],
+    phoneNumbers: [],
+  });
+  await loading;
+
+  assert.deepEqual(plain(page.data.wechatQrImages), []);
+  assert.equal(page.data.wechatQrImage, "");
+  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
 });
 
 await test("contact page previews store images and the WeChat QR image", () => {
@@ -595,6 +856,7 @@ await test("contact page exposes friend and timeline sharing", () => {
 
 await test("contact page enables gallery and long-press QR behavior", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
+  const wxss = readFileSync(wxssPath, "utf8");
 
   assert.equal(wxml.includes('wx:for="{{storeImages}}"'), true);
   assert.equal(wxml.includes('wx:if="{{storeImages.length}}"'), true);
@@ -616,12 +878,16 @@ await test("contact page enables gallery and long-press QR behavior", () => {
   assert.equal(wxml.includes('bindtap="callPhone"'), true);
   assert.equal(wxml.includes("<button"), true);
   assert.equal(wxml.includes('show-menu-by-longpress="{{true}}"'), true);
-  assert.equal(wxml.includes('lazy-load="{{true}}"'), true);
+  assert.equal(wxml.includes('lazy-load="{{true}}"'), false);
+  assert.equal(wxml.includes('data-request-id="{{wechatQrRequestId}}"'), true);
+  assert.equal(wxml.includes('bindload="onWechatQrImageLoad"'), true);
+  assert.equal(wxml.includes('binderror="onWechatQrImageError"'), true);
+  assert.equal(wxml.includes("qr-image-loading"), true);
+  assert.equal(wxss.includes(".qr-image-loading"), true);
   assert.equal(wxml.includes('wx:if="{{wechatQrImages.length}}"'), true);
   assert.equal(wxml.includes('wx:for="{{wechatQrImages}}"'), true);
-  assert.equal(wxml.includes('wx:elif="{{wechatQrLoading}}"'), true);
   assert.equal(wxml.includes('wx:elif="{{wechatQrError}}"'), true);
-  assert.equal(wxml.includes("微信二维码加载中…"), true);
+  assert.equal(wxml.includes("微信二维码加载中…"), false);
   assert.equal(
     wxml.includes("微信二维码暂时无法加载，请稍后重试"),
     true
