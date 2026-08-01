@@ -8,6 +8,7 @@ const CONTACT_DATA = Object.freeze({
   longitude: 106.395409,
   // 门店实景只展示管理员保存到云端的最新图片，避免云端数据返回前闪现旧内置图。
   storeImages: Object.freeze([]),
+  // 云端未配置或短暂不可用时，保留现有二维码作为可用性兜底。
   wechatQrImages: Object.freeze([DEFAULT_WECHAT_QR_IMAGE]),
   // 保留单张别名，兼容已发布版本与旧分享/预览逻辑。
   wechatQrImage: DEFAULT_WECHAT_QR_IMAGE,

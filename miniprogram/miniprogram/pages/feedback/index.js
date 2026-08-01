@@ -9,12 +9,22 @@ const SOURCE_PAGE_MAP = {
   profile: "pages/profile/index",
 };
 
+const CONTACT_TYPE_OPTIONS = [
+  { label: "微信号", placeholder: "请输入微信号" },
+  { label: "手机号", placeholder: "请输入手机号" },
+  { label: "邮箱", placeholder: "请输入邮箱" },
+];
+
 Page({
   data: {
     feedbackTypes: FEEDBACK_TYPES,
     selectedType: "",
     content: "",
     contact: "",
+    contactTypes: CONTACT_TYPE_OPTIONS.map((item) => item.label),
+    selectedContactTypeIndex: 0,
+    selectedContactType: CONTACT_TYPE_OPTIONS[0].label,
+    contactPlaceholder: CONTACT_TYPE_OPTIONS[0].placeholder,
     contentMaxLength: CONTENT_MAX_LENGTH,
     submitting: false,
     sourcePage: "",
@@ -49,6 +59,18 @@ Page({
   updateContact(event) {
     this.setData({
       contact: event.detail.value,
+    });
+  },
+
+  changeContactType(event) {
+    const index = Number(event.detail.value);
+    const selectedOption = CONTACT_TYPE_OPTIONS[index];
+    if (!selectedOption) return;
+
+    this.setData({
+      selectedContactTypeIndex: index,
+      selectedContactType: selectedOption.label,
+      contactPlaceholder: selectedOption.placeholder,
     });
   },
 

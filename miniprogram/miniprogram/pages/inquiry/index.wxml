@@ -65,13 +65,27 @@
         <view class="field-title">联系方式</view>
         <view class="field-required">必填</view>
       </view>
-      <input
-        class="input"
-        value="{{draft.contact}}"
-        maxlength="{{contactMaxLength}}"
-        placeholder="微信号 / 手机 / 邮箱"
-        bindinput="updateContact"
-      />
+      <view class="contact-input-row">
+        <picker
+          class="contact-type-picker"
+          mode="selector"
+          range="{{contactTypes}}"
+          value="{{contactTypeIndex}}"
+          bindchange="changeContactType"
+        >
+          <view class="contact-type-value">
+            <text>{{selectedContactType}}</text>
+            <text class="contact-type-action">切换</text>
+          </view>
+        </picker>
+        <input
+          class="input contact-input"
+          value="{{draft.contact}}"
+          maxlength="{{contactMaxLength}}"
+          placeholder="{{contactPlaceholder}}"
+          bindinput="updateContact"
+        />
+      </view>
       <view class="field-helper">{{draft.contact.length}}/{{contactMaxLength}}</view>
     </view>
   </view>

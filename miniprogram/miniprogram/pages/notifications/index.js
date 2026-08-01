@@ -179,11 +179,44 @@ async function saveSubscriptionGrantWithRetry(type, templateId, status) {
   }
 }
 
+function beginNotificationLoading(page) {
+  const requestId = (page._notificationLoadSequence || 0) + 1;
+  page._notificationLoadSequence = requestId;
+  page._activeNotificationLoadRequestId = requestId;
+  if (page._notificationLoadingVisible) return requestId;
+  page._notificationLoadingVisible = true;
+  wx.showLoading({
+    title: "加载中",
+    mask: true,
+  });
+  return requestId;
+}
+
+function isCurrentNotificationLoad(page, requestId) {
+  return page._activeNotificationLoadRequestId === requestId;
+}
+
+function finishNotificationLoading(page, requestId) {
+  if (!isCurrentNotificationLoad(page, requestId)) return;
+  page._activeNotificationLoadRequestId = 0;
+  page._notificationLoadingVisible = false;
+  page.setData({ loading: false });
+  wx.hideLoading();
+}
+
+function cancelNotificationLoading(page) {
+  page._notificationLoadSequence = (page._notificationLoadSequence || 0) + 1;
+  page._activeNotificationLoadRequestId = 0;
+  if (!page._notificationLoadingVisible) return;
+  page._notificationLoadingVisible = false;
+  wx.hideLoading();
+}
+
 Page({
   data: {
     tabs: TAB_ITEMS,
     activeTab: "all",
-    loading: false,
+    loading: true,
     subscribingType: "",
     errorMessage: "",
     publicNotifications: [],
@@ -198,7 +231,16 @@ Page({
     this.loadNotifications();
   },
 
+  onHide() {
+    cancelNotificationLoading(this);
+  },
+
+  onUnload() {
+    cancelNotificationLoading(this);
+  },
+
   async loadNotifications() {
+    const requestId = beginNotificationLoading(this);
     this.setData({
       loading: true,
       errorMessage: "",
@@ -209,8 +251,8 @@ Page({
         fetchPublicNotifications(),
         fetchSubscriptionStatus(),
       ]);
+      if (!isCurrentNotificationLoad(this, requestId)) return;
       this.setData({
-        loading: false,
         publicNotifications,
         subscriptions: subscriptionResult.subscriptions,
         templateIds: subscriptionResult.templateIds,
@@ -223,11 +265,13 @@ Page({
       });
       this.refreshDisplayNotifications();
     } catch (error) {
+      if (!isCurrentNotificationLoad(this, requestId)) return;
       console.error("消息通知读取失败", error);
       this.setData({
-        loading: false,
         errorMessage: "暂时读取不到消息通知，请稍后重试。",
       });
+    } finally {
+      finishNotificationLoading(this, requestId);
     }
   },
 

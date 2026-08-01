@@ -100,7 +100,7 @@
   <view class="section qr-section">
     <view class="section-title">添加微信咨询</view>
     <view class="section-subtitle qr-tip">点击放大，或长按识别二维码</view>
-    <view class="qr-image-list">
+    <view wx:if="{{wechatQrImages.length}}" class="qr-image-list">
       <view
         wx:for="{{wechatQrImages}}"
         wx:key="*this"
@@ -118,5 +118,10 @@
         />
       </view>
     </view>
+    <view wx:elif="{{wechatQrLoading}}" class="qr-image-state">微信二维码加载中…</view>
+    <view wx:elif="{{wechatQrError}}" class="qr-image-state qr-image-state-error">
+      微信二维码暂时无法加载，请稍后重试
+    </view>
+    <view wx:else class="qr-image-state">微信二维码暂未配置</view>
   </view>
 </view>
