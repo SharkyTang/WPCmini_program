@@ -32,16 +32,18 @@ function test(name, fn) {
   }
 }
 
-test("detail page exposes one clear return action for unavailable cases", () => {
+test("detail page renders a skeleton without a blocking native overlay", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
   const source = readFileSync(pagePath, "utf8");
 
   assert.equal(wxml.includes("返回继续筛选"), false);
   assert.equal(wxml.includes("返回案例库"), true);
   assert.equal(wxml.includes('type="waiting"'), false);
-  assert.equal(wxml.includes("正在读取案例"), false);
-  assert.equal(source.includes("wx.showLoading"), true);
-  assert.match(source, /title:\s*"加载中",\s*\n\s*mask:\s*true/);
+  assert.equal(wxml.includes('class="detail-skeleton"'), true);
+  assert.equal(wxml.includes("正在读取案例"), true);
+  assert.equal(wxml.includes('bindtap="retryLoadCase"'), true);
+  assert.equal(wxml.includes("重新加载"), true);
+  assert.equal(source.includes("wx.showLoading"), false);
 });
 
 test("detail consult action opens official customer service", () => {
@@ -96,7 +98,7 @@ test("detail page supports a gallery and native image preview", () => {
   assert.equal(source.includes("currentImageUrl"), true);
   assert.equal(wxml.includes('src="{{item.renderUrl}}"'), true);
   assert.equal(wxml.includes('bindtap="previewImage"'), true);
-  assert.equal(source.includes("loaded: index === 0"), true);
+  assert.equal(source.includes("loaded: Boolean(item.displayUrl || item.url)"), true);
   assert.equal(source.includes("renderUrl: item.displayUrl"), true);
   assert.equal(source.includes("wx.previewImage"), true);
   assert.equal(source.includes("showmenu: true"), true);
@@ -128,6 +130,7 @@ function loadDetailInteractionPage(options = {}) {
   const toasts = [];
   const nativeLoadingEvents = [];
   const previewCalls = [];
+  const clientFaults = [];
   const caseItem = options.caseItem || {
     id: "case_1",
     title: "鎏金礼盒",
@@ -153,6 +156,21 @@ function loadDetailInteractionPage(options = {}) {
       if (moduleName === "../../utils/caseCatalogService") {
         return {
           fetchCaseDetail: options.fetchCaseDetail || (async () => caseItem),
+          fetchCaseDetailPatch:
+            options.fetchCaseDetailPatch ||
+            (async (_id, indexes) =>
+              indexes.map((index) => {
+                const image = (caseItem.gallery || [])[index] || {};
+                return {
+                  index,
+                  fileID: image.fileID || "",
+                  displayUrl: image.displayUrl || "",
+                  downloadUrl: image.downloadUrl || image.displayUrl || "",
+                };
+              })),
+          isLegacyCatalogFallbackAllowed:
+            options.isLegacyCatalogFallbackAllowed ||
+            ((error) => error && error.code === "FUNCTION_NOT_FOUND"),
         };
       }
       if (moduleName === "../../utils/caseData") {
@@ -175,7 +193,8 @@ function loadDetailInteractionPage(options = {}) {
       }
       if (moduleName === "../../utils/favoriteService") {
         return {
-          fetchFavoriteForCase: async () => null,
+          fetchFavoriteForCase:
+            options.fetchFavoriteForCase || (async () => null),
           toggleFavorite:
             options.toggleFavorite ||
             (async () => ({
@@ -190,6 +209,8 @@ function loadDetailInteractionPage(options = {}) {
       }
       if (moduleName === "../../utils/libraryAccessService") {
         return {
+          clearPendingLibraryAction:
+            options.clearPendingLibraryAction || (() => {}),
           async requestLibraryAccess(request) {
             accessRequests.push(request);
             if (options.requestLibraryAccess) {
@@ -213,6 +234,18 @@ function loadDetailInteractionPage(options = {}) {
             (async () => false),
         };
       }
+      if (moduleName === "../../utils/errorTelemetry") {
+        return {
+          reportClientFault(payload) {
+            clientFaults.push(payload);
+            if (options.reportClientFault) {
+              return options.reportClientFault(payload);
+            }
+            return true;
+          },
+          reportPerformanceEvent: () => false,
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     wx: {
@@ -228,14 +261,19 @@ function loadDetailInteractionPage(options = {}) {
       previewImage(payload) {
         previewCalls.push(payload);
       },
+      nextTick(callback) {
+        callback();
+      },
+      reportEvent() {},
     },
   };
 
   vm.runInNewContext(readFileSync(pagePath, "utf8"), sandbox, {
     filename: pagePath,
   });
-  page.setData = function setData(patch) {
+  page.setData = function setData(patch, callback) {
     this.data = { ...this.data, ...patch };
+    if (callback) callback();
   };
   page.setData({
     caseItem,
@@ -250,6 +288,7 @@ function loadDetailInteractionPage(options = {}) {
     toasts,
     nativeLoadingEvents,
     previewCalls,
+    clientFaults,
   };
 }
 
@@ -260,6 +299,7 @@ test("detail image tap opens the selected image in the native gallery", () => {
       { displayUrl: "https://temp/display-1" },
       { displayUrl: "https://temp/display-2" },
     ],
+    currentImageIndex: 1,
     currentImageUrl: "https://temp/display-2",
   });
 
@@ -285,6 +325,7 @@ test("detail image tap opens the selected image in the native gallery", () => {
 
   page.setData({
     galleryItems: [],
+    currentImageIndex: 0,
     currentImageUrl: "",
   });
   page.previewImage();
@@ -298,21 +339,17 @@ test("detail image tap opens the selected image in the native gallery", () => {
   );
 });
 
-await asyncTest("detail case reads use the native loading overlay on success and failure", async () => {
+await asyncTest("detail case reads avoid the native loading overlay on success and failure", async () => {
   const success = loadDetailInteractionPage();
 
   assert.equal(await success.page.loadCase("case_1"), true);
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(success.nativeLoadingEvents)),
-    [
-      { type: "show", payload: { title: "加载中", mask: true } },
-      { type: "hide" },
-    ]
-  );
+  assert.deepEqual(JSON.parse(JSON.stringify(success.nativeLoadingEvents)), []);
 
+  const unavailable = new Error("catalog unavailable");
+  unavailable.code = "FUNCTION_NOT_FOUND";
   const failure = loadDetailInteractionPage({
     fetchCaseDetail: async () => {
-      throw new Error("catalog unavailable");
+      throw unavailable;
     },
     fetchCaseById: async () => {
       throw new Error("detail unavailable");
@@ -322,13 +359,7 @@ await asyncTest("detail case reads use the native loading overlay on success and
   assert.equal(await failure.page.loadCase("case_2"), false);
   assert.equal(failure.page.data.loading, false);
   assert.match(failure.page.data.errorMessage, /暂时读取不到/);
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(failure.nativeLoadingEvents)),
-    [
-      { type: "show", payload: { title: "加载中", mask: true } },
-      { type: "hide" },
-    ]
-  );
+  assert.deepEqual(JSON.parse(JSON.stringify(failure.nativeLoadingEvents)), []);
 });
 
 await asyncTest("detail case loading ignores stale requests and cleans up on unload", async () => {
@@ -352,32 +383,282 @@ await asyncTest("detail case loading ignores stale requests and cleans up on unl
   pending.get("new_case")(buildCase("new_case"));
   assert.equal(await secondLoad, true);
   assert.equal(context.page.data.caseItem.id, "new_case");
-  assert.equal(
-    context.nativeLoadingEvents.filter((event) => event.type === "hide").length,
-    1
-  );
 
   pending.get("old_case")(buildCase("old_case"));
   assert.equal(await firstLoad, false);
   assert.equal(context.page.data.caseItem.id, "new_case");
-  assert.equal(
-    context.nativeLoadingEvents.filter((event) => event.type === "hide").length,
-    1
-  );
 
   const unloadLoad = context.page.loadCase("unload_case");
   context.page.onUnload();
-  assert.equal(
-    context.nativeLoadingEvents.filter((event) => event.type === "hide").length,
-    2
-  );
   pending.get("unload_case")(buildCase("unload_case"));
   assert.equal(await unloadLoad, false);
   assert.equal(context.page.data.caseItem.id, "new_case");
-  assert.equal(
-    context.nativeLoadingEvents.filter((event) => event.type === "hide").length,
-    2
+});
+
+await asyncTest("detail network failures do not fan out to the legacy reader", async () => {
+  let legacyCalls = 0;
+  const networkError = Object.assign(new Error("request timeout"), {
+    code: "NETWORK_ERROR",
+  });
+  const context = loadDetailInteractionPage({
+    fetchCaseDetail: async () => {
+      throw networkError;
+    },
+    fetchCaseById: async () => {
+      legacyCalls += 1;
+      return {};
+    },
+    isLegacyCatalogFallbackAllowed: () => false,
+  });
+
+  assert.equal(await context.page.loadCase("case_1"), false);
+  assert.equal(legacyCalls, 0);
+  assert.match(context.page.data.errorMessage, /暂时读取不到/);
+});
+
+await asyncTest("detail reports fallback and final failures without business identifiers", async () => {
+  const catalogError = Object.assign(new Error("function unavailable"), {
+    code: "FUNCTION_NOT_FOUND",
+  });
+  const context = loadDetailInteractionPage({
+    fetchCaseDetail: async () => {
+      throw catalogError;
+    },
+    fetchCaseById: async () => {
+      throw Object.assign(new Error("legacy unavailable"), {
+        code: "LEGACY_UNAVAILABLE",
+      });
+    },
+  });
+
+  assert.equal(await context.page.loadCase("private_case_id"), false);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.clientFaults.map((fault) => fault.stage))),
+    ["catalog_fallback", "load_error"]
   );
+  context.clientFaults.forEach((fault) => {
+    assert.equal(fault.route, "pages/detail/index");
+    assert.equal(Object.hasOwn(fault, "id"), false);
+    assert.equal(Object.hasOwn(fault, "caseId"), false);
+    assert.equal(Object.hasOwn(fault, "url"), false);
+    assert.equal(Object.hasOwn(fault, "query"), false);
+  });
+  assert.equal(context.clientFaults[0].fallbackUsed, true);
+  assert.equal(context.clientFaults[1].fallbackUsed, false);
+});
+
+await asyncTest("detail error state retries the same case without another navigation", async () => {
+  let attempts = 0;
+  const recoveredCase = {
+    id: "case_retry",
+    title: "恢复案例",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+  };
+  const context = loadDetailInteractionPage({
+    fetchCaseDetail: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("offline");
+      return recoveredCase;
+    },
+    isLegacyCatalogFallbackAllowed: () => false,
+  });
+
+  assert.equal(await context.page.loadCase("case_retry"), false);
+  assert.equal(context.page.data.errorCanRetry, true);
+  assert.equal(await context.page.retryLoadCase(), true);
+  assert.equal(attempts, 2);
+  assert.equal(context.page.data.errorMessage, "");
+  assert.equal(context.page.data.caseItem.id, "case_retry");
+});
+
+await asyncTest("detail hydrates only the selected gallery image before preview", async () => {
+  const patchCalls = [];
+  const partialCase = {
+    id: "doc_1",
+    title: "部分图库",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+    gallery: [
+      {
+        index: 0,
+        fileID: "cloud://env/display-0.jpg",
+        heroUrl: "https://temp/hero-0",
+        thumbnailUrl: "https://temp/thumb-0",
+        displayUrl: "",
+      },
+      {
+        index: 1,
+        fileID: "cloud://env/display-1.jpg",
+        thumbnailUrl: "https://temp/thumb-1",
+        displayUrl: "",
+      },
+    ],
+  };
+  const context = loadDetailInteractionPage({
+    caseItem: partialCase,
+    fetchCaseDetail: async () => partialCase,
+    fetchCaseDetailPatch: async (_id, indexes) => {
+      patchCalls.push(indexes.slice());
+      return indexes.map((index) => ({
+        index,
+        fileID: `cloud://env/display-${index}.jpg`,
+        displayUrl: `https://temp/display-${index}`,
+        downloadUrl: `https://temp/display-${index}`,
+      }));
+    },
+  });
+
+  assert.equal(await context.page.loadCase("doc_1"), true);
+  assert.equal(context.page.data.galleryItems[0].renderUrl, "https://temp/hero-0");
+  assert.equal(context.page.data.galleryItems[1].renderUrl, "https://temp/thumb-1");
+
+  await context.page.showGalleryImage(1);
+  assert.deepEqual(JSON.parse(JSON.stringify(patchCalls)), [[1]]);
+  assert.equal(context.page.data.galleryItems[1].renderUrl, "https://temp/display-1");
+  assert.equal(context.page.data.currentImageUrl, "https://temp/display-1");
+
+  await context.page.previewImage();
+  assert.deepEqual(JSON.parse(JSON.stringify(patchCalls)), [[1], [0]]);
+  assert.equal(context.previewCalls.length, 1);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.previewCalls[0].urls)),
+    ["https://temp/display-0", "https://temp/display-1"]
+  );
+});
+
+await asyncTest("detail reports a gallery patch failure and keeps the page usable", async () => {
+  const partialCase = {
+    id: "doc_patch_failure",
+    title: "图库降级",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+    gallery: [
+      {
+        index: 0,
+        fileID: "cloud://env/display-0.jpg",
+        heroUrl: "https://temp/hero-0",
+      },
+      {
+        index: 1,
+        fileID: "cloud://env/display-1.jpg",
+        thumbnailUrl: "https://temp/thumb-1",
+      },
+    ],
+  };
+  const context = loadDetailInteractionPage({
+    caseItem: partialCase,
+    fetchCaseDetail: async () => partialCase,
+    fetchCaseDetailPatch: async () => {
+      throw Object.assign(new Error("patch offline"), { code: "NETWORK_ERROR" });
+    },
+  });
+
+  assert.equal(await context.page.loadCase("doc_patch_failure"), true);
+  await context.page.showGalleryImage(1);
+  const patchFault = context.clientFaults.find(
+    (fault) => fault.stage === "gallery_patch_error"
+  );
+  assert.ok(patchFault);
+  assert.equal(patchFault.action, "gallery_patch");
+  assert.equal(patchFault.requestKind, "gallery_patch_v2");
+  assert.equal(context.page.data.renderPhase, "ready");
+  assert.equal(context.page.data.galleryItems[1].patchError, true);
+});
+
+await asyncTest("an older gallery patch cannot replace the latest selected image", async () => {
+  const pending = new Map();
+  const partialCase = {
+    id: "doc_race",
+    title: "图库竞态",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+    gallery: [0, 1, 2].map((index) => ({
+      index,
+      fileID: `cloud://env/race-${index}.jpg`,
+      thumbnailUrl: `https://temp/race-thumb-${index}`,
+      displayUrl: "",
+    })),
+  };
+  const context = loadDetailInteractionPage({
+    caseItem: partialCase,
+    fetchCaseDetail: async () => partialCase,
+    fetchCaseDetailPatch: async (_id, indexes) => new Promise((resolvePromise) => {
+      pending.set(indexes[0], resolvePromise);
+    }),
+  });
+  await context.page.loadCase("doc_race");
+
+  const older = context.page.showGalleryImage(1);
+  const latest = context.page.showGalleryImage(2);
+  pending.get(2)([{
+    index: 2,
+    fileID: "cloud://env/race-2.jpg",
+    displayUrl: "https://temp/race-display-2",
+  }]);
+  await latest;
+  pending.get(1)([{
+    index: 1,
+    fileID: "cloud://env/race-1.jpg",
+    displayUrl: "https://temp/race-display-1",
+  }]);
+  await older;
+
+  assert.equal(context.page.data.currentImageIndex, 2);
+  assert.equal(context.page.data.currentImageUrl, "https://temp/race-display-2");
+});
+
+await asyncTest("a late initial favorite read cannot undo a completed favorite mutation", async () => {
+  let resolveFavoriteRead;
+  const context = loadDetailInteractionPage({
+    fetchFavoriteForCase: () => new Promise((resolvePromise) => {
+      resolveFavoriteRead = resolvePromise;
+    }),
+  });
+  await context.page.loadCase("case_1");
+  assert.equal(typeof resolveFavoriteRead, "function");
+
+  assert.equal(await context.page.performToggleFavorite(), true);
+  assert.equal(context.page.data.isFavorited, true);
+  resolveFavoriteRead(null);
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  assert.equal(context.page.data.isFavorited, true);
+  assert.equal(context.page.data.favorite._id, "favorite_1");
+});
+
+await asyncTest("an unloaded detail ignores a retained favorite resume callback", async () => {
+  let clearCalls = 0;
+  const context = loadDetailInteractionPage({
+    clearPendingLibraryAction(source) {
+      assert.equal(source, "detail_favorite");
+      clearCalls += 1;
+    },
+  });
+  context.page.onUnload();
+  assert.equal(
+    await context.page.performToggleFavorite({ resumedAfterProfileSetup: true }),
+    false
+  );
+  assert.equal(clearCalls, 1);
+  assert.equal(context.toasts.length, 0);
+});
+
+await asyncTest("detail state update failures stay inside async page handlers", async () => {
+  const context = loadDetailInteractionPage();
+  context.page.setData({
+    galleryItems: [{
+      displayUrl: "https://temp/display-0",
+      renderUrl: "https://temp/thumb-0",
+    }],
+  });
+  context.page.setData = () => {
+    throw new Error("page disposed");
+  };
+  await assert.doesNotReject(context.page.showGalleryImage(0));
 });
 
 await asyncTest("detail favorite requests access and performs immediately when ready", async () => {
@@ -621,12 +902,16 @@ await asyncTest("detail loads one display image and upgrades only the selected t
       }
       if (moduleName === "../../utils/libraryAccessService") {
         return {
+          clearPendingLibraryAction: () => {},
           requestLibraryAccess: async () => ({ status: "cancelled" }),
           resumePendingLibraryAction: async () => false,
         };
       }
       if (moduleName === "../../utils/userService") {
         return { resumePendingProfileAction: async () => false };
+      }
+      if (moduleName === "../../utils/errorTelemetry") {
+        return { reportPerformanceEvent: () => false };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
@@ -638,8 +923,9 @@ await asyncTest("detail loads one display image and upgrades only the selected t
   vm.runInNewContext(readFileSync(pagePath, "utf8"), sandbox, {
     filename: pagePath,
   });
-  page.setData = function setData(patch) {
+  page.setData = function setData(patch, callback) {
     this.data = { ...this.data, ...patch };
+    if (callback) callback();
   };
   await page.loadCase("case_1");
   assert.equal(page.data.errorMessage, "");
@@ -743,12 +1029,16 @@ await asyncTest("detail shares the selected case with a direct-entry path", asyn
       }
       if (moduleName === "../../utils/libraryAccessService") {
         return {
+          clearPendingLibraryAction: () => {},
           requestLibraryAccess: async () => ({ status: "cancelled" }),
           resumePendingLibraryAction: async () => false,
         };
       }
       if (moduleName === "../../utils/userService") {
         return { resumePendingProfileAction: async () => false };
+      }
+      if (moduleName === "../../utils/errorTelemetry") {
+        return { reportPerformanceEvent: () => false };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
@@ -761,8 +1051,9 @@ await asyncTest("detail shares the selected case with a direct-entry path", asyn
   vm.runInNewContext(readFileSync(pagePath, "utf8"), sandbox, {
     filename: pagePath,
   });
-  page.setData = function setData(patch) {
+  page.setData = function setData(patch, callback) {
     this.data = { ...this.data, ...patch };
+    if (callback) callback();
   };
   await page.loadCase("case 1");
 

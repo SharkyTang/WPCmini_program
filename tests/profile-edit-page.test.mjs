@@ -17,9 +17,21 @@ function loadEditPage(wxMock = {}, service = {}) {
       if (moduleName === "../../../utils/profileService") {
         return {
           cacheProfile: service.cacheProfile || (() => {}),
-          fetchProfile: service.fetchProfile || (async () => null),
+          fetchSessionSummary:
+            service.fetchSessionSummary
+            || (async () => ({
+              openid: "openid_1",
+              profile: service.fetchProfile ? await service.fetchProfile() : null,
+              roles: {},
+            })),
           getLegacyProfile: service.getLegacyProfile || (() => ({})),
-          hasCompletedProfile: service.hasCompletedProfile || ((profile) => Boolean(profile.nickname && String(profile.avatarFileId || "").startsWith("cloud://"))),
+          hasCompletedProfile:
+            service.hasCompletedProfile ||
+            ((profile) => Boolean(
+              profile
+              && profile.nickname
+              && String(profile.avatarFileId || "").startsWith("cloud://")
+            )),
           saveProfile: service.saveProfile || (async (profile) => ({ ...profile, avatarUrl: "https://avatar" })),
           uploadProfileAvatar: service.uploadProfileAvatar || (async () => "cloud://uploaded"),
         };
@@ -60,10 +72,16 @@ function loadEditPage(wxMock = {}, service = {}) {
           reportLibraryEvent: service.reportLibraryEvent || (() => false),
         };
       }
+      if (moduleName === "../../../utils/errorTelemetry") {
+        return {
+          reportPerformanceEvent: service.reportPerformanceEvent || (() => false),
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     console,
-    setTimeout(callback) { callback(); },
+    setTimeout: service.setTimeout || ((callback) => { callback(); return 1; }),
+    clearTimeout: service.clearTimeout || (() => {}),
     wx: {
       showLoading() {},
       hideLoading() {},
@@ -73,7 +91,10 @@ function loadEditPage(wxMock = {}, service = {}) {
     },
   };
   vm.runInNewContext(readFileSync(modulePath, "utf8"), sandbox, { filename: modulePath });
-  pageConfig.setData = function setData(nextData) { this.data = { ...this.data, ...nextData }; };
+  pageConfig.setData = function setData(nextData, callback) {
+    this.data = { ...this.data, ...nextData };
+    if (callback) callback();
+  };
   return pageConfig;
 }
 
@@ -89,6 +110,10 @@ async function test(name, fn) {
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function flushAsync() {
+  return new Promise((resolvePromise) => setImmediate(resolvePromise));
 }
 
 await test("setup page exposes the native avatar chooser and nickname input", () => {
@@ -107,6 +132,10 @@ await test("setup page exposes the native avatar chooser and nickname input", ()
   assert.equal(wxml.includes("<mp-toptips"), true);
   assert.equal(wxml.includes("nickname-count"), true);
   assert.equal(wxml.includes("正在读取资料"), false);
+  assert.equal(wxml.includes("isLoading"), false);
+  assert.equal(wxml.includes("loadError"), false);
+  assert.equal(wxml.includes('bindtap="retryProfileSync"'), true);
+  assert.equal(wxml.includes('binderror="onAvatarImageError"'), true);
   assert.match(
     wxss,
     /\.profile-row-nickname\s*\{[\s\S]*?grid-template-columns:\s*100rpx minmax\(0,\s*1fr\);[\s\S]*?align-items:\s*start;/
@@ -117,8 +146,31 @@ await test("setup page exposes the native avatar chooser and nickname input", ()
   );
 });
 
-await test("profile reads use the native WeChat loading overlay", async () => {
-  let resolveProfile;
+await test("profile reports the local form milestone without another request", async () => {
+  const reports = [];
+  const page = loadEditPage({}, {
+    getLegacyProfile: () => ({ nickname: "本地资料", avatarFileId: "cloud://local" }),
+    fetchSessionSummary: async () => ({
+      openid: "openid_1",
+      profile: { nickname: "云端资料", avatarFileId: "cloud://remote" },
+      roles: {},
+    }),
+    reportPerformanceEvent(name, payload) {
+      reports.push({ name, payload });
+      return true;
+    },
+  });
+
+  page.onLoad({ mode: "edit" });
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].name, "page_ready_result");
+  assert.equal(reports[0].payload.stage, "local_form_visible");
+  assert.equal(reports[0].payload.cacheState, "hit");
+  await flushAsync();
+});
+
+await test("profile shows the local draft immediately without a mask and merges untouched remote fields", async () => {
+  let resolveSummary;
   const loadingEvents = [];
   const page = loadEditPage(
     {
@@ -130,72 +182,154 @@ await test("profile reads use the native WeChat loading overlay", async () => {
       },
     },
     {
-      fetchProfile: () =>
+      getLegacyProfile: () => ({
+        nickname: "本地昵称",
+        avatarFileId: "cloud://local-avatar",
+        avatarUrl: "https://local-avatar",
+      }),
+      fetchSessionSummary: () =>
         new Promise((resolvePromise) => {
-          resolveProfile = resolvePromise;
+          resolveSummary = resolvePromise;
         }),
     }
   );
 
-  const loadPromise = page.loadProfile();
-  assert.deepEqual(plain(loadingEvents), [
-    ["show", { title: "读取资料", mask: true }],
-  ]);
-  resolveProfile(null);
-  await loadPromise;
+  page.onLoad({ mode: "edit" });
+  assert.equal(page.data.profileDraft.nickname, "本地昵称");
+  assert.equal(page.data.syncState, "refreshing");
+  assert.deepEqual(plain(loadingEvents), []);
 
-  assert.deepEqual(plain(loadingEvents), [
-    ["show", { title: "读取资料", mask: true }],
-    ["hide"],
-  ]);
-  assert.equal(page.data.isLoading, false);
-  assert.equal(page.data.loadError, false);
-});
-
-await test("profile native loading pauses while hidden and resumes if still reading", async () => {
-  let resolveProfile;
-  const loadingEvents = [];
-  const page = loadEditPage(
-    {
-      showLoading() {
-        loadingEvents.push("show");
-      },
-      hideLoading() {
-        loadingEvents.push("hide");
-      },
+  page.onNicknameInput({ detail: { value: "正在输入的新昵称" } });
+  resolveSummary({
+    openid: "openid_1",
+    profile: {
+      nickname: "云端昵称",
+      avatarFileId: "cloud://remote-avatar",
+      avatarUrl: "https://remote-avatar",
     },
-    {
-      fetchProfile: () =>
-        new Promise((resolvePromise) => {
-          resolveProfile = resolvePromise;
-        }),
-    }
-  );
+    roles: {},
+  });
+  await flushAsync();
 
-  const loadPromise = page.loadProfile();
-  page.onHide();
-  page.onShow();
-  assert.deepEqual(loadingEvents, ["show", "hide", "show"]);
-
-  resolveProfile(null);
-  await loadPromise;
-  assert.deepEqual(loadingEvents, ["show", "hide", "show", "hide"]);
+  assert.equal(page.data.syncState, "ready");
+  assert.equal(page.data.profileDraft.nickname, "正在输入的新昵称");
+  assert.equal(page.data.profileDraft.avatarFileId, "cloud://remote-avatar");
+  assert.equal(page.data.hasUnsavedChanges, true);
 });
 
-await test("only the latest overlapping profile read can update and close loading", async () => {
+await test("a locally selected avatar survives refresh while an untouched nickname updates", async () => {
+  let resolveSummary;
+  const page = loadEditPage({}, {
+    getLegacyProfile: () => ({
+      nickname: "本地昵称",
+      avatarFileId: "cloud://local-avatar",
+      avatarUrl: "https://local-avatar",
+    }),
+    fetchSessionSummary: () => new Promise((resolvePromise) => {
+      resolveSummary = resolvePromise;
+    }),
+  });
+
+  page.onLoad({ mode: "edit" });
+  page.onChooseWechatAvatar({ detail: { avatarUrl: "/tmp/new-avatar.png" } });
+  resolveSummary({
+    openid: "openid_1",
+    profile: {
+      nickname: "云端昵称",
+      avatarFileId: "cloud://remote-avatar",
+      avatarUrl: "https://remote-avatar",
+    },
+    roles: {},
+  });
+  await flushAsync();
+
+  assert.equal(page.data.profileDraft.nickname, "云端昵称");
+  assert.equal(page.data.profileDraft.avatarLocalPath, "/tmp/new-avatar.png");
+  assert.equal(page.data.profileDraft.avatarFileId, "");
+  assert.equal(page.data.hasUnsavedChanges, true);
+});
+
+await test("nickname and avatar edits both survive a late remote profile merge", async () => {
+  let resolveSummary;
+  const page = loadEditPage({}, {
+    getLegacyProfile: () => ({
+      nickname: "本地昵称",
+      avatarFileId: "cloud://local-avatar",
+      avatarUrl: "https://local-avatar",
+    }),
+    fetchSessionSummary: () => new Promise((resolvePromise) => {
+      resolveSummary = resolvePromise;
+    }),
+  });
+
+  page.onLoad({ mode: "edit" });
+  page.onNicknameInput({ detail: { value: "用户新昵称" } });
+  page.onChooseWechatAvatar({ detail: { avatarUrl: "/tmp/user-new-avatar.png" } });
+  resolveSummary({
+    openid: "openid_1",
+    profile: {
+      nickname: "云端昵称",
+      avatarFileId: "cloud://remote-avatar",
+      avatarUrl: "https://remote-avatar",
+    },
+    roles: {},
+  });
+  await flushAsync();
+
+  assert.equal(page.data.profileDraft.nickname, "用户新昵称");
+  assert.equal(page.data.profileDraft.avatarLocalPath, "/tmp/user-new-avatar.png");
+  assert.equal(page.data.profileDraft.avatarFileId, "");
+  assert.deepEqual(plain(page._dirtyFields), { nickname: true, avatar: true });
+  assert.equal(page.data.hasUnsavedChanges, true);
+});
+
+await test("restoring nickname and avatar to their baseline clears both dirty flags", () => {
+  const page = loadEditPage();
+  const baseline = {
+    nickname: "原昵称",
+    avatarFileId: "",
+    avatarUrl: "/tmp/original-avatar.png",
+    avatarLocalPath: "/tmp/original-avatar.png",
+  };
+  page.setData({
+    profileDraft: { ...baseline },
+    initialDraft: { ...baseline },
+    hasUnsavedChanges: false,
+  });
+
+  page.onNicknameInput({ detail: { value: "临时昵称" } });
+  page.onChooseWechatAvatar({ detail: { avatarUrl: "/tmp/temporary-avatar.png" } });
+  assert.deepEqual(plain(page._dirtyFields), { nickname: true, avatar: true });
+
+  page.onNicknameInput({ detail: { value: "原昵称" } });
+  page.onChooseWechatAvatar({ detail: { avatarUrl: "/tmp/original-avatar.png" } });
+  assert.deepEqual(plain(page._dirtyFields), { nickname: false, avatar: false });
+  assert.equal(page.data.hasUnsavedChanges, false);
+});
+
+await test("avatar image errors keep the persistent avatar identity intact", () => {
+  const page = loadEditPage();
+  page.setData({
+    profileDraft: {
+      nickname: "酒友",
+      avatarFileId: "cloud://avatar",
+      avatarUrl: "https://expired-avatar",
+      avatarLocalPath: "",
+    },
+  });
+
+  page.onAvatarImageError();
+
+  assert.equal(page.data.profileDraft.avatarUrl, "");
+  assert.equal(page.data.profileDraft.avatarFileId, "cloud://avatar");
+});
+
+await test("only the latest overlapping profile sync can update the draft", async () => {
   const pendingReads = [];
-  const loadingEvents = [];
   const page = loadEditPage(
+    {},
     {
-      showLoading() {
-        loadingEvents.push("show");
-      },
-      hideLoading() {
-        loadingEvents.push("hide");
-      },
-    },
-    {
-      fetchProfile: () =>
+      fetchSessionSummary: () =>
         new Promise((resolvePromise) => {
           pendingReads.push(resolvePromise);
         }),
@@ -204,98 +338,167 @@ await test("only the latest overlapping profile read can update and close loadin
 
   const olderRead = page.loadProfile();
   const latestRead = page.loadProfile();
-  assert.deepEqual(loadingEvents, ["show"]);
 
   pendingReads[1]({
-    nickname: "新资料",
-    avatarFileId: "cloud://new-avatar",
-    avatarUrl: "https://new-avatar",
+    openid: "openid_1",
+    profile: {
+      nickname: "新资料",
+      avatarFileId: "cloud://new-avatar",
+      avatarUrl: "https://new-avatar",
+    },
+    roles: {},
   });
   await latestRead;
   assert.equal(page.data.profileDraft.nickname, "新资料");
-  assert.deepEqual(loadingEvents, ["show", "hide"]);
+  assert.equal(page.data.syncState, "ready");
 
   pendingReads[0]({
-    nickname: "旧资料",
-    avatarFileId: "cloud://old-avatar",
-    avatarUrl: "https://old-avatar",
+    openid: "openid_1",
+    profile: {
+      nickname: "旧资料",
+      avatarFileId: "cloud://old-avatar",
+      avatarUrl: "https://old-avatar",
+    },
+    roles: {},
   });
   await olderRead;
   assert.equal(page.data.profileDraft.nickname, "新资料");
-  assert.deepEqual(loadingEvents, ["show", "hide"]);
 });
 
-await test("profile retry and unload both close native loading safely", async () => {
-  let failureAttempts = 0;
-  const failureEvents = [];
-  const failedPage = loadEditPage(
-    {
-      showLoading() {
-        failureEvents.push("show");
-      },
-      hideLoading() {
-        failureEvents.push("hide");
-      },
+await test("saving invalidates a profile sync that finishes after the save", async () => {
+  let resolveLateSummary;
+  const page = loadEditPage({}, {
+    fetchSessionSummary: () => new Promise((resolvePromise) => {
+      resolveLateSummary = resolvePromise;
+    }),
+    saveProfile: async (profile) => ({
+      ...profile,
+      avatarUrl: "https://saved-avatar",
+    }),
+  });
+
+  const lateSync = page.loadProfile();
+  page.setData({
+    syncState: "ready",
+    profileDraft: {
+      nickname: "已保存昵称",
+      avatarFileId: "cloud://saved-avatar",
+      avatarUrl: "https://saved-avatar",
+      avatarLocalPath: "",
     },
+    initialDraft: {
+      nickname: "旧昵称",
+      avatarFileId: "cloud://old-avatar",
+      avatarUrl: "https://old-avatar",
+      avatarLocalPath: "",
+    },
+    hasUnsavedChanges: true,
+  });
+
+  await page.saveProfileDraft();
+  resolveLateSummary({
+    openid: "openid_1",
+    profile: {
+      nickname: "迟到的云端昵称",
+      avatarFileId: "cloud://late-avatar",
+      avatarUrl: "https://late-avatar",
+    },
+    roles: {},
+  });
+  await lateSync;
+
+  assert.equal(page.data.profileDraft.nickname, "已保存昵称");
+  assert.equal(page.data.profileDraft.avatarFileId, "cloud://saved-avatar");
+  assert.equal(page.data.initialDraft.nickname, "已保存昵称");
+  assert.equal(page.data.hasUnsavedChanges, false);
+});
+
+await test("sync failure keeps the draft, disables saving, and can be retried", async () => {
+  let failureAttempts = 0;
+  let saveCalls = 0;
+  const failedPage = loadEditPage(
+    {},
     {
-      fetchProfile: async () => {
+      fetchSessionSummary: async () => {
         failureAttempts += 1;
         if (failureAttempts === 1) throw new Error("offline");
         return {
-          nickname: "恢复资料",
-          avatarFileId: "cloud://recovered-avatar",
-          avatarUrl: "https://recovered-avatar",
+          openid: "openid_1",
+          profile: {
+            nickname: "恢复资料",
+            avatarFileId: "cloud://recovered-avatar",
+            avatarUrl: "https://recovered-avatar",
+          },
+          roles: {},
         };
+      },
+      saveProfile: async (profile) => {
+        saveCalls += 1;
+        return profile;
       },
     }
   );
-  await failedPage.loadProfile();
-  assert.equal(failedPage.data.loadError, true);
-  assert.deepEqual(failureEvents, ["show", "hide"]);
-  await failedPage.loadProfile();
-  assert.equal(failedPage.data.loadError, false);
-  assert.equal(failedPage.data.profileDraft.nickname, "恢复资料");
-  assert.deepEqual(failureEvents, ["show", "hide", "show", "hide"]);
-
-  let resolveLateProfile;
-  const unloadEvents = [];
-  const unloadedPage = loadEditPage(
-    {
-      showLoading() {
-        unloadEvents.push("show");
-      },
-      hideLoading() {
-        unloadEvents.push("hide");
-      },
+  failedPage.setData({
+    profileDraft: {
+      nickname: "保留的本地资料",
+      avatarFileId: "cloud://local-avatar",
+      avatarUrl: "https://local-avatar",
+      avatarLocalPath: "",
     },
+    initialDraft: {
+      nickname: "保留的本地资料",
+      avatarFileId: "cloud://local-avatar",
+      avatarUrl: "https://local-avatar",
+      avatarLocalPath: "",
+    },
+  });
+  await failedPage.loadProfile();
+  assert.equal(failedPage.data.syncState, "error");
+  assert.equal(failedPage.data.profileDraft.nickname, "保留的本地资料");
+  await failedPage.saveProfileDraft();
+  assert.equal(saveCalls, 0);
+  assert.equal(failedPage.data.topTips.message, "请先重新同步云端资料");
+
+  await failedPage.retryProfileSync();
+  assert.equal(failedPage.data.syncState, "ready");
+  assert.equal(failedPage.data.profileDraft.nickname, "恢复资料");
+});
+
+await test("unload invalidates a late profile sync without changing the visible draft", async () => {
+  let resolveLateProfile;
+  const unloadedPage = loadEditPage(
+    {},
     {
       getLegacyProfile: () => ({ nickname: "本地资料" }),
-      fetchProfile: () =>
+      fetchSessionSummary: () =>
         new Promise((resolvePromise) => {
           resolveLateProfile = resolvePromise;
         }),
     }
   );
-  const lateRead = unloadedPage.loadProfile();
+  unloadedPage.onLoad({ mode: "edit" });
   unloadedPage.onUnload();
-  assert.deepEqual(unloadEvents, ["show", "hide"]);
   resolveLateProfile({
-    nickname: "迟到资料",
-    avatarFileId: "cloud://late-avatar",
-    avatarUrl: "https://late-avatar",
+    openid: "openid_1",
+    profile: {
+      nickname: "迟到资料",
+      avatarFileId: "cloud://late-avatar",
+      avatarUrl: "https://late-avatar",
+    },
+    roles: {},
   });
-  await lateRead;
+  await flushAsync();
   assert.equal(unloadedPage.data.profileDraft.nickname, "本地资料");
-  assert.deepEqual(unloadEvents, ["show", "hide"]);
 });
 
-await test("setup mode uses a legacy nickname as a draft without treating it as completed", async () => {
+await test("setup mode shows a legacy draft immediately then accepts an empty remote baseline", async () => {
   const page = loadEditPage({}, { getLegacyProfile: () => ({ nickname: "旧昵称", avatarUrl: "/tmp/avatar.jpg" }) });
   page.onLoad({ mode: "setup" });
+  assert.equal(page.data.profileDraft.nickname, "旧昵称");
   await page.loadProfile();
   assert.equal(page.data.mode, "setup");
   assert.equal(page.data.pageTitle, "完善资料");
-  assert.equal(page.data.profileDraft.nickname, "旧昵称");
+  assert.equal(page.data.profileDraft.nickname, "");
 });
 
 await test("identity gate uses the exact copy for every whitelisted source", async () => {
@@ -383,8 +586,10 @@ await test("saving uploads a selected avatar and persists profile data", async (
     }
   );
   page.setData({
+    syncState: "ready",
     profileDraft: { nickname: "酒友", avatarFileId: "", avatarUrl: "/tmp/avatar.png", avatarLocalPath: "/tmp/avatar.png" },
     initialDraft: { nickname: "", avatarFileId: "", avatarUrl: "", avatarLocalPath: "" },
+    hasUnsavedChanges: true,
   });
   await page.saveProfileDraft();
   assert.equal(uploadInput, "/tmp/avatar.png");
@@ -393,6 +598,80 @@ await test("saving uploads a selected avatar and persists profile data", async (
   assert.equal(cachedIdentity.openid, "openid_1");
   assert.equal(cachedIdentity.profile.avatarFileId, "cloud://uploaded");
   assert.equal(navigatedBack, true);
+});
+
+await test("a save finishing after unload cannot mutate the page or navigate", async () => {
+  let resolveSave;
+  let navigateBackCalls = 0;
+  const page = loadEditPage(
+    {
+      navigateBack() { navigateBackCalls += 1; },
+    },
+    {
+      saveProfile: () => new Promise((resolvePromise) => {
+        resolveSave = resolvePromise;
+      }),
+    }
+  );
+  page.setData({
+    syncState: "ready",
+    hasUnsavedChanges: true,
+    profileDraft: {
+      nickname: "酒友",
+      avatarFileId: "cloud://avatar",
+      avatarUrl: "https://avatar",
+      avatarLocalPath: "",
+    },
+  });
+
+  const savePromise = page.saveProfileDraft();
+  page.onUnload();
+  resolveSave({
+    nickname: "酒友",
+    avatarFileId: "cloud://avatar",
+    avatarUrl: "https://avatar",
+  });
+  await savePromise;
+
+  assert.equal(page.data.profileSaved, false);
+  assert.equal(navigateBackCalls, 0);
+});
+
+await test("unload cancels the delayed return after a successful normal save", async () => {
+  let returnCallback;
+  let clearedTimer = null;
+  let navigateBackCalls = 0;
+  const page = loadEditPage(
+    {
+      navigateBack() { navigateBackCalls += 1; },
+    },
+    {
+      setTimeout(callback) {
+        returnCallback = callback;
+        return 77;
+      },
+      clearTimeout(timerId) {
+        clearedTimer = timerId;
+      },
+    }
+  );
+  page.setData({
+    syncState: "ready",
+    hasUnsavedChanges: true,
+    profileDraft: {
+      nickname: "酒友",
+      avatarFileId: "cloud://avatar",
+      avatarUrl: "https://avatar",
+      avatarLocalPath: "",
+    },
+  });
+
+  await page.saveProfileDraft();
+  assert.equal(navigateBackCalls, 0);
+  page.onUnload();
+  assert.equal(clearedTimer, 77);
+  returnCallback();
+  assert.equal(navigateBackCalls, 0);
 });
 
 await test("identity gate saves without a success toast and leaves resume to the source page", async () => {
@@ -414,6 +693,7 @@ await test("identity gate saves without a success toast and leaves resume to the
     }
   );
   page.setData({
+    syncState: "ready",
     identityGate: true,
     source: "profile_favorites",
     profileDraft: {
@@ -485,6 +765,7 @@ await test("navigateBack failures keep the saved page open with recovery guidanc
     },
   });
   page.setData({
+    syncState: "ready",
     identityGate: true,
     source: "profile_history",
     profileDraft: {
@@ -516,6 +797,7 @@ await test("identity gate reports profile save failures without clearing its pen
     },
   });
   page.setData({
+    syncState: "ready",
     identityGate: true,
     source: "profile_history",
     profileDraft: {
@@ -542,6 +824,8 @@ await test("identity gate reports profile save failures without clearing its pen
 await test("profile validation uses top tips instead of a toast", async () => {
   const page = loadEditPage();
   page.setData({
+    syncState: "ready",
+    mode: "setup",
     profileDraft: { nickname: "", avatarFileId: "", avatarUrl: "", avatarLocalPath: "" },
   });
 

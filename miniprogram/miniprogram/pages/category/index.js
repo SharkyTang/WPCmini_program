@@ -7,16 +7,19 @@ const { attachCaseImageUrls, fetchVisibleCases, refreshImageUrl } = require("../
 const {
   fetchCatalogImageUrls,
   fetchCatalogSnapshot,
+  isLegacyCatalogFallbackAllowed,
 } = require("../../utils/caseCatalogService");
+const catalogCache = require("../../utils/catalogCache");
 const {
   CATALOG_CACHE_KEY,
   readCache,
   writeCache,
-} = require("../../utils/catalogCache");
+} = catalogCache;
 const {
   getCaseDataVersion,
   shouldRefreshCaseData,
 } = require("../../utils/caseRefresh");
+const { reportClientFault } = require("../../utils/errorTelemetry");
 
 const FILTER_TITLE_OVERRIDES = {
   packageTypes: "包装",
@@ -42,6 +45,84 @@ const PANEL_SUBTITLES = {
   priceLevel: "按价位感查看产品与案例",
   scenes: "按使用场景查看产品与案例",
 };
+
+function reportCategoryFault(stage, error, options = {}) {
+  reportClientFault({
+    type: options.type || "category_error",
+    stage,
+    error,
+    code: options.code,
+    route: "pages/category/index",
+    action: options.action || "category_load",
+    requestKind: options.requestKind,
+    cacheState: options.cacheState,
+    fallbackUsed: options.fallbackUsed,
+    disposed: options.disposed,
+  });
+}
+
+function isPageAlive(page) {
+  return Boolean(page) && page._alive === true;
+}
+
+function isCurrentDataRequest(page, requestVersion) {
+  return (
+    isPageAlive(page) &&
+    (requestVersion === undefined || page._dataRequestVersion === requestVersion)
+  );
+}
+
+function isCurrentImageRequest(page, requestVersion) {
+  return (
+    isPageAlive(page) &&
+    (requestVersion === undefined || page._imageRequestVersion === requestVersion)
+  );
+}
+
+function normalizeLoadResult(result = {}) {
+  if (result.status) return result;
+  if (result.cancelled) return { ...result, status: "stale" };
+  if (result.cached || result.notModified) return { ...result, status: "cache" };
+  if (result.ok) return { ...result, status: "success" };
+  return { ...result, status: "error" };
+}
+
+function safeSetData(page, data, options = {}) {
+  if (!isPageAlive(page)) return false;
+  if (
+    options.dataRequestVersion !== undefined &&
+    !isCurrentDataRequest(page, options.dataRequestVersion)
+  ) {
+    return false;
+  }
+  if (
+    options.imageRequestVersion !== undefined &&
+    !isCurrentImageRequest(page, options.imageRequestVersion)
+  ) {
+    return false;
+  }
+  try {
+    page.setData(data);
+    return true;
+  } catch (error) {
+    console.error("分类页状态更新失败", error);
+    reportCategoryFault(options.stage || "set_data", error, {
+      action: "set_data",
+      disposed: !isPageAlive(page),
+    });
+    return false;
+  }
+}
+
+function stopPullDownRefresh() {
+  try {
+    if (typeof wx !== "undefined" && typeof wx.stopPullDownRefresh === "function") {
+      wx.stopPullDownRefresh();
+    }
+  } catch (error) {
+    reportCategoryFault("stop_pull_down", error, { action: "pull_down" });
+  }
+}
 
 function createFilters() {
   return DEFAULT_FILTERS.filter((filter) => FILTER_KEYS.includes(filter.key)).map((filter) => ({
@@ -176,6 +257,11 @@ function isValidSortKey(sortKey) {
   return SORT_OPTIONS.some((option) => option.key === sortKey);
 }
 
+function normalizeCatalogRevision(value) {
+  const revision = Number(value);
+  return Number.isFinite(revision) && revision >= 0 ? revision : 0;
+}
+
 function normalizeInitialSort(sortKey) {
   return isValidSortKey(sortKey) ? sortKey : "default";
 }
@@ -184,10 +270,16 @@ function showLoadMoreIndicator(page) {
   const token = Number(page._loadMoreIndicatorVersion || 0) + 1;
   page._loadMoreIndicatorVersion = token;
   page._loadMoreIndicatorToken = token;
-  wx.showLoading({
-    title: "加载更多",
-    mask: false,
-  });
+  try {
+    if (typeof wx !== "undefined" && typeof wx.showLoading === "function") {
+      wx.showLoading({
+        title: "加载更多",
+        mask: false,
+      });
+    }
+  } catch (error) {
+    reportCategoryFault("show_loading", error, { action: "load_more" });
+  }
   return token;
 }
 
@@ -195,23 +287,45 @@ function hideLoadMoreIndicator(page, token) {
   if (!page._loadMoreIndicatorToken) return;
   if (token && page._loadMoreIndicatorToken !== token) return;
   page._loadMoreIndicatorToken = null;
-  wx.hideLoading();
+  try {
+    if (typeof wx !== "undefined" && typeof wx.hideLoading === "function") {
+      wx.hideLoading();
+    }
+  } catch (error) {
+    reportCategoryFault("hide_loading", error, { action: "load_more" });
+  }
 }
 
 function takePendingCategorySort() {
   let sortKey = "";
-  if (typeof getApp === "function") {
-    const app = getApp();
-    if (app && app.globalData && app.globalData[PENDING_CATEGORY_SORT_KEY]) {
-      sortKey = app.globalData[PENDING_CATEGORY_SORT_KEY];
-      app.globalData[PENDING_CATEGORY_SORT_KEY] = "";
+  try {
+    if (typeof getApp === "function") {
+      const app = getApp();
+      if (app && app.globalData && app.globalData[PENDING_CATEGORY_SORT_KEY]) {
+        sortKey = app.globalData[PENDING_CATEGORY_SORT_KEY];
+        app.globalData[PENDING_CATEGORY_SORT_KEY] = "";
+      }
     }
+  } catch (error) {
+    reportCategoryFault("pending_sort_app", error, { action: "read_sort" });
   }
-  if (!sortKey && wx.getStorageSync) {
-    sortKey = wx.getStorageSync(PENDING_CATEGORY_SORT_KEY) || "";
+  try {
+    if (
+      !sortKey &&
+      typeof wx !== "undefined" &&
+      typeof wx.getStorageSync === "function"
+    ) {
+      sortKey = wx.getStorageSync(PENDING_CATEGORY_SORT_KEY) || "";
+    }
+  } catch (error) {
+    reportCategoryFault("pending_sort_read", error, { action: "read_sort" });
   }
-  if (wx.removeStorageSync) {
-    wx.removeStorageSync(PENDING_CATEGORY_SORT_KEY);
+  try {
+    if (typeof wx !== "undefined" && typeof wx.removeStorageSync === "function") {
+      wx.removeStorageSync(PENDING_CATEGORY_SORT_KEY);
+    }
+  } catch (error) {
+    reportCategoryFault("pending_sort_remove", error, { action: "clear_sort" });
   }
   return sortKey;
 }
@@ -316,6 +430,10 @@ Page({
   },
 
   onLoad(options = {}) {
+    options = options || {};
+    this._alive = true;
+    this._dataRequestVersion = 0;
+    this._loadPromise = null;
     this._allCases = [];
     this._filteredCases = [];
     this._displayLimit = CARD_PAGE_SIZE;
@@ -338,6 +456,7 @@ Page({
   },
 
   onShow() {
+    if (!isPageAlive(this)) return Promise.resolve({ ok: false, cancelled: true });
     const pendingSort = normalizeInitialSort(takePendingCategorySort());
     if (pendingSort !== "default") {
       this.applySortFromEntry(pendingSort);
@@ -348,8 +467,9 @@ Page({
       }
     }
     if (!this.data.loading && shouldRefreshCaseData(this.data.caseDataVersion)) {
-      this.loadData({ silent: true, forceRefresh: true });
+      return this.loadData({ silent: true, forceRefresh: true });
     }
+    return this._loadPromise || Promise.resolve({ ok: true, skipped: true });
   },
 
   onHide() {
@@ -357,7 +477,24 @@ Page({
   },
 
   onPullDownRefresh() {
-    this.loadData({ forceRefresh: true }).finally(() => wx.stopPullDownRefresh());
+    return this.loadData({ forceRefresh: true }).then(
+      (result) => {
+        stopPullDownRefresh();
+        return result;
+      },
+      (error) => {
+        stopPullDownRefresh();
+        reportCategoryFault("pull_down", error, { action: "pull_down" });
+        return { ok: false, error };
+      }
+    );
+  },
+
+  retryLoadData() {
+    if (!isPageAlive(this)) {
+      return Promise.resolve({ ok: false, status: "stale", cancelled: true });
+    }
+    return this.loadData({ forceRefresh: true });
   },
 
   onShareAppMessage() {
@@ -374,86 +511,223 @@ Page({
   },
 
   onUnload() {
+    this._alive = false;
+    this._dataRequestVersion = Number(this._dataRequestVersion || 0) + 1;
+    this._loadPromise = null;
     if (this._searchTimer) clearTimeout(this._searchTimer);
+    this._searchTimer = null;
     this._imageRequestVersion += 1;
     hideLoadMoreIndicator(this);
   },
 
   applyCatalogItems(items, options = {}) {
-    this._allCases = items || [];
-    this.setData({
+    if (!isCurrentDataRequest(this, options.dataRequestVersion)) return false;
+    if (!Array.isArray(items)) {
+      reportCategoryFault("catalog_items_validate", null, {
+        code: "CATALOG_INVALID_ITEMS",
+        action: "apply_catalog",
+      });
+      items = [];
+    }
+    this._allCases = items;
+    const committed = safeSetData(this, {
       caseDataVersion: getCaseDataVersion(),
-      catalogRevision: Number(options.revision) || 1,
+      catalogRevision: normalizeCatalogRevision(options.revision),
       loading: false,
       errorMessage: "",
+    }, {
+      dataRequestVersion: options.dataRequestVersion,
+      stage: "apply_catalog",
     });
-    this.applyFilters();
+    if (!committed) return false;
+    return this.applyFilters();
   },
 
-  async loadData(options = {}) {
+  loadData(options = {}) {
+    options = options || {};
+    if (!isPageAlive(this)) {
+      return Promise.resolve(normalizeLoadResult({ ok: false, cancelled: true }));
+    }
+    if (this._loadPromise && !options.forceRefresh) {
+      return this._loadPromise;
+    }
+    const requestVersion = Number(this._dataRequestVersion || 0) + 1;
+    this._dataRequestVersion = requestVersion;
+
     if (!options.silent) {
-      this.setData({
+      safeSetData(this, {
         loading: true,
         errorMessage: "",
+      }, {
+        dataRequestVersion: requestVersion,
+        stage: "load_start",
       });
-    } else {
-      this.setData({
+    } else if (this.data.errorMessage) {
+      safeSetData(this, {
         errorMessage: "",
+      }, {
+        dataRequestVersion: requestVersion,
+        stage: "load_start",
       });
     }
 
+    const safePromise = Promise.resolve()
+      .then(() => this.performLoadData(options, requestVersion))
+      .catch((error) => {
+        if (!isCurrentDataRequest(this, requestVersion)) {
+          return { ok: false, cancelled: true };
+        }
+        console.error("分类数据读取失败", error);
+        reportCategoryFault("load_unexpected", error, { action: "load_catalog" });
+        safeSetData(this, {
+          loading: false,
+          errorMessage: "暂时读取不到案例数据，请检查云环境和数据库权限。",
+        }, {
+          dataRequestVersion: requestVersion,
+          stage: "load_unexpected",
+        });
+        return { ok: false, error };
+      })
+      .then(normalizeLoadResult);
+    this._loadPromise = safePromise;
+    safePromise.then(() => {
+      if (this._loadPromise === safePromise) this._loadPromise = null;
+    });
+    return safePromise;
+  },
+
+  async performLoadData(options, requestVersion) {
     try {
-      const knownRevision =
-        !options.forceRefresh && this._catalogCache && this._catalogCache.fresh
-          ? this._catalogCache.revision
-          : undefined;
+      const cachedRevision = this._catalogCache
+        ? normalizeCatalogRevision(this._catalogCache.revision)
+        : 0;
+      const knownRevision = !options.forceRefresh && cachedRevision > 0
+        ? cachedRevision
+        : undefined;
       let result;
       try {
         result = await fetchCatalogSnapshot({ knownRevision });
       } catch (catalogError) {
+        if (!isCurrentDataRequest(this, requestVersion)) {
+          return { ok: false, cancelled: true };
+        }
+        if (!isLegacyCatalogFallbackAllowed(catalogError)) {
+          throw catalogError;
+        }
         console.warn("分类聚合接口不可用，使用兼容读取", catalogError);
+        reportCategoryFault("catalog_fallback", catalogError, {
+          action: "load_catalog",
+          requestKind: "fallback",
+          fallbackUsed: true,
+        });
         const cases = await fetchVisibleCases({
           includeImageUrls: false,
           forceRefresh: options.forceRefresh,
         });
+        if (!isCurrentDataRequest(this, requestVersion)) {
+          return { ok: false, cancelled: true };
+        }
+        if (!Array.isArray(cases)) {
+          const error = new Error("分类兼容接口返回数据异常");
+          error.code = "INVALID_FALLBACK_ITEMS";
+          throw error;
+        }
         result = {
-          revision: getCaseDataVersion() || 1,
+          revision: normalizeCatalogRevision(getCaseDataVersion()),
           notModified: false,
           items: cases,
         };
       }
-      if (result.notModified && this._catalogCache) {
-        this.applyCatalogItems(this._catalogCache.data.items || [], {
-          revision: result.revision,
-        });
-        return;
+      if (!isCurrentDataRequest(this, requestVersion)) {
+        return { ok: false, cancelled: true };
       }
-      const items = result.items || [];
-      this._catalogCache = {
-        revision: result.revision,
+      if (!result || typeof result !== "object") {
+        const error = new Error("分类聚合接口返回数据异常");
+        error.code = "CATALOG_INVALID_RESULT";
+        throw error;
+      }
+      if (result.notModified && this._catalogCache) {
+        const applied = this.applyCatalogItems(this._catalogCache.data.items, {
+          revision: result.revision,
+          dataRequestVersion: requestVersion,
+        });
+        return applied
+          ? { ok: true, notModified: true }
+          : { ok: false, cancelled: true };
+      }
+      if (result.notModified) {
+        const error = new Error("分类目录未返回内容，且本地没有可用缓存");
+        error.code = "CATALOG_NOT_MODIFIED_WITHOUT_CACHE";
+        throw error;
+      }
+      if (!Array.isArray(result.items)) {
+        const error = new Error("分类聚合数据缺少案例列表");
+        error.code = "CATALOG_INVALID_ITEMS";
+        throw error;
+      }
+      const items = result.items;
+      if (!isCurrentDataRequest(this, requestVersion)) {
+        return { ok: false, cancelled: true };
+      }
+      const nextCache = {
+        revision: normalizeCatalogRevision(result.revision),
         cachedAt: Date.now(),
         fresh: true,
         data: { items },
       };
-      writeCache(CATALOG_CACHE_KEY, result.revision, { items });
-      this.applyCatalogItems(items, { revision: result.revision });
-    } catch (error) {
-      console.error("分类数据读取失败", error);
-      if (this._catalogCache) {
-        this.applyCatalogItems(this._catalogCache.data.items || [], {
-          revision: this._catalogCache.revision,
-        });
-        return;
+      const applied = this.applyCatalogItems(items, {
+        revision: result.revision,
+        dataRequestVersion: requestVersion,
+      });
+      if (applied && isCurrentDataRequest(this, requestVersion)) {
+        this._catalogCache = nextCache;
+        setTimeout(() => {
+          if (!isCurrentDataRequest(this, requestVersion)) return;
+          if (typeof catalogCache.writeCacheAsync === "function") {
+            void catalogCache.writeCacheAsync(
+              CATALOG_CACHE_KEY,
+              result.revision,
+              { items }
+            );
+            return;
+          }
+          writeCache(CATALOG_CACHE_KEY, result.revision, { items });
+        }, 0);
       }
-      this.setData({
+      return applied
+        ? { ok: true, notModified: false }
+        : { ok: false, cancelled: true };
+    } catch (error) {
+      if (!isCurrentDataRequest(this, requestVersion)) {
+        return { ok: false, cancelled: true };
+      }
+      console.error("分类数据读取失败", error);
+      reportCategoryFault("load_catalog", error, {
+        action: "load_catalog",
+        cacheState: this._catalogCache ? "fallback" : "miss",
+        fallbackUsed: Boolean(this._catalogCache),
+      });
+      if (this._catalogCache) {
+        const applied = this.applyCatalogItems(this._catalogCache.data.items, {
+          revision: this._catalogCache.revision,
+          dataRequestVersion: requestVersion,
+        });
+        return { ok: false, cached: applied, error };
+      }
+      safeSetData(this, {
         loading: false,
         errorMessage: "暂时读取不到案例数据，请检查云环境和数据库权限。",
+      }, {
+        dataRequestVersion: requestVersion,
+        stage: "load_error",
       });
+      return { ok: false, error };
     }
   },
 
   refreshPanels() {
-    this.setData({
+    if (!isPageAlive(this)) return false;
+    return safeSetData(this, {
       selectedPills: buildSelectedPills(
         this.data.filters,
         this.data.selectedSort
@@ -469,83 +743,162 @@ Page({
         this.data.selectedSort,
         this.data.focusedFilterValue
       ),
+    }, {
+      stage: "refresh_panels",
     });
   },
 
   applySortFromEntry(sortKey) {
-    if (sortKey === "default") return;
-    this.setData({
+    if (sortKey === "default") return true;
+    return safeSetData(this, {
       selectedSort: sortKey,
       activeNavKey: "sort",
       expandedNavKey: "sort",
+    }, {
+      stage: "apply_sort",
     });
   },
 
   applyFilters() {
+    if (!isPageAlive(this)) return false;
     hideLoadMoreIndicator(this);
-    const selectedFilters = buildSelectedFilters(this.data.filters);
-    const filteredCases = filterCases(this._allCases || [], {
-      query: this.data.query,
-      selectedFilters,
-      pinnedFirst: this.data.selectedSort === "default",
-    });
-    const sortedCases =
-      this.data.selectedSort === "latest"
-        ? filteredCases.filter(isLatestCase).sort((a, b) => b.sortOrder - a.sortOrder)
-        : this.data.selectedSort === "popular"
-          ? filteredCases.filter(isPopularCase)
-          : filteredCases;
+    try {
+      const selectedFilters = buildSelectedFilters(this.data.filters);
+      const filteredCases = filterCases(
+        Array.isArray(this._allCases) ? this._allCases : [],
+        {
+          query: this.data.query,
+          selectedFilters,
+          pinnedFirst: this.data.selectedSort === "default",
+        }
+      );
+      const sortedCases =
+        this.data.selectedSort === "latest"
+          ? filteredCases
+              .filter(isLatestCase)
+              .sort((a, b) => Number(b.sortOrder || 0) - Number(a.sortOrder || 0))
+          : this.data.selectedSort === "popular"
+            ? filteredCases.filter(isPopularCase)
+            : filteredCases;
 
-    this._filteredCases = buildCaseCards(sortedCases);
-    this._displayLimit = CARD_PAGE_SIZE;
-    this.setData({
-      filteredCount: this._filteredCases.length,
-      selectedCount: selectedFilterCount(selectedFilters),
-    });
-    this.refreshPanels();
-    this.refreshVisibleCards();
+      this._filteredCases = buildCaseCards(sortedCases);
+      this._displayLimit = CARD_PAGE_SIZE;
+      const committed = safeSetData(this, {
+        filteredCount: this._filteredCases.length,
+        selectedCount: selectedFilterCount(selectedFilters),
+      }, {
+        stage: "apply_filters",
+      });
+      if (!committed) return false;
+      this.refreshPanels();
+      void this.refreshVisibleCards();
+      return true;
+    } catch (error) {
+      console.error("分类条件处理失败", error);
+      reportCategoryFault("apply_filters", error, { action: "filter_catalog" });
+      safeSetData(this, {
+        filteredCount: 0,
+        visibleCards: [],
+        isLoadingMore: false,
+      }, {
+        stage: "apply_filters_error",
+      });
+      return false;
+    }
   },
 
-  async refreshVisibleCards(options = {}) {
-    const requestVersion = this._imageRequestVersion + 1;
+  refreshVisibleCards(options = {}) {
+    options = options || {};
+    if (!isPageAlive(this)) {
+      return Promise.resolve({ ok: false, cancelled: true });
+    }
+    const requestVersion = Number(this._imageRequestVersion || 0) + 1;
     this._imageRequestVersion = requestVersion;
-    const start = options.append ? this.data.visibleCards.length : 0;
-    const sourceCards = this._filteredCases.slice(start, this._displayLimit);
-    this.setData({ isLoadingMore: true });
+    const currentCards = Array.isArray(this.data.visibleCards)
+      ? this.data.visibleCards
+      : [];
+    const filteredCases = Array.isArray(this._filteredCases)
+      ? this._filteredCases
+      : [];
+    const start = options.append ? currentCards.length : 0;
+    const sourceCards = filteredCases.slice(start, this._displayLimit);
+    safeSetData(this, { isLoadingMore: true }, {
+      imageRequestVersion: requestVersion,
+      stage: "image_load_start",
+    });
+
+    let hydrationPromise;
     try {
-      const visibleCards = await this.hydrateVisibleCardImages(sourceCards);
-      if (this._imageRequestVersion !== requestVersion) return;
-      if (!options.append) {
-        this.setData({ visibleCards, isLoadingMore: false });
-        return;
-      }
-      const patch = { isLoadingMore: false };
-      visibleCards.forEach((item, index) => {
-        patch[`visibleCards[${start + index}]`] = item;
-      });
-      this.setData(patch);
+      hydrationPromise = this.hydrateVisibleCardImages(sourceCards, requestVersion);
     } catch (error) {
-      console.warn("分类图片链接读取失败", error);
-      if (this._imageRequestVersion === requestVersion) {
+      hydrationPromise = Promise.reject(error);
+    }
+    return Promise.resolve(hydrationPromise)
+      .then((visibleCards) => {
+        if (!isCurrentImageRequest(this, requestVersion)) {
+          return { ok: false, cancelled: true };
+        }
+        if (!options.append) {
+          const committed = safeSetData(this, {
+            visibleCards,
+            isLoadingMore: false,
+          }, {
+            imageRequestVersion: requestVersion,
+            stage: "image_load_complete",
+          });
+          return { ok: committed, cards: visibleCards };
+        }
+        const patch = { isLoadingMore: false };
+        visibleCards.forEach((item, index) => {
+          patch[`visibleCards[${start + index}]`] = item;
+        });
+        const committed = safeSetData(this, patch, {
+          imageRequestVersion: requestVersion,
+          stage: "image_append_complete",
+        });
+        return { ok: committed, cards: visibleCards };
+      })
+      .catch((error) => {
+        if (!isCurrentImageRequest(this, requestVersion)) {
+          return { ok: false, cancelled: true };
+        }
+        console.warn("分类图片链接读取失败", error);
+        reportCategoryFault("image_hydration", error, {
+          action: "load_images",
+          fallbackUsed: true,
+        });
         const failedCards = sourceCards.map((item) => ({
           ...item,
           coverImageUrl: "",
           imageLoadState: "failed",
         }));
         if (!options.append) {
-          this.setData({ visibleCards: failedCards, isLoadingMore: false });
-          return;
+          safeSetData(this, {
+            visibleCards: failedCards,
+            isLoadingMore: false,
+          }, {
+            imageRequestVersion: requestVersion,
+            stage: "image_load_error",
+          });
+          return { ok: false, cards: failedCards, error };
         }
         const patch = { isLoadingMore: false };
         failedCards.forEach((item, index) => {
           patch[`visibleCards[${start + index}]`] = item;
         });
-        this.setData(patch);
-      }
-    }
+        safeSetData(this, patch, {
+          imageRequestVersion: requestVersion,
+          stage: "image_append_error",
+        });
+        return { ok: false, cards: failedCards, error };
+      });
   },
 
-  rememberCatalogImages(cards = []) {
+  rememberCatalogImages(cards = [], requestVersion) {
+    if (!isCurrentImageRequest(this, requestVersion)) return false;
+    if (!this._catalogImageCache || typeof this._catalogImageCache !== "object") {
+      this._catalogImageCache = {};
+    }
     cards.forEach((item) => {
       const imageFileId = getCardImageFileId(item);
       if (!item.id || !imageFileId || !item.coverImageUrl) return;
@@ -554,27 +907,39 @@ Page({
         thumbnailUrl: item.coverImageUrl,
       };
     });
+    return true;
   },
 
-  async hydrateVisibleCardImages(sourceCards = []) {
-    let cards = applyCatalogImageMap(sourceCards, this._catalogImageCache);
+  async hydrateVisibleCardImages(sourceCards = [], requestVersion) {
+    const imageCache =
+      this._catalogImageCache && typeof this._catalogImageCache === "object"
+        ? this._catalogImageCache
+        : {};
+    let cards = applyCatalogImageMap(sourceCards, imageCache);
     let missingCards = cards.filter(needsImageUrl);
     if (!missingCards.length) return cards;
+    let allowLegacyImageFallback = !this._catalogImageEndpointAvailable;
 
     if (this._catalogImageEndpointAvailable) {
       try {
         const images = await fetchCatalogImageUrls(
           missingCards.map((item) => item.id).filter(Boolean)
         );
+        if (!isCurrentImageRequest(this, requestVersion)) return cards;
+        const safeImages =
+          images && typeof images === "object" && !Array.isArray(images)
+            ? images
+            : {};
         this._catalogImageCache = {
           ...this._catalogImageCache,
-          ...images,
+          ...safeImages,
         };
-        cards = applyCatalogImageMap(cards, images);
+        cards = applyCatalogImageMap(cards, safeImages);
       } catch (error) {
-        if (error && error.code === "UNKNOWN_ACTION") {
-          this._catalogImageEndpointAvailable = false;
-        }
+        if (!isCurrentImageRequest(this, requestVersion)) return cards;
+        if (!isLegacyCatalogFallbackAllowed(error)) throw error;
+        this._catalogImageEndpointAvailable = false;
+        allowLegacyImageFallback = true;
         console.warn("分类图片批量接口不可用，使用兼容读取", error);
       }
     }
@@ -587,93 +952,150 @@ Page({
       missingCards.push(item);
     });
     if (!missingCards.length) {
-      this.rememberCatalogImages(cards);
+      this.rememberCatalogImages(cards, requestVersion);
       return cards;
+    }
+    if (!allowLegacyImageFallback) {
+      return cards.map((item) => needsImageUrl(item)
+        ? { ...item, coverImageUrl: "", imageLoadState: "failed" }
+        : item);
     }
 
     const fallbackCards = await attachCaseImageUrls(missingCards, {
       preferBanner: true,
     });
+    if (!isCurrentImageRequest(this, requestVersion)) return cards;
+    if (!Array.isArray(fallbackCards)) {
+      const error = new Error("分类图片兼容接口返回数据异常");
+      error.code = "INVALID_IMAGE_FALLBACK";
+      throw error;
+    }
     missingIndexes.forEach((cardIndex, index) => {
-      cards[cardIndex] = fallbackCards[index];
+      if (fallbackCards[index]) cards[cardIndex] = fallbackCards[index];
     });
-    this.rememberCatalogImages(cards);
+    this.rememberCatalogImages(cards, requestVersion);
     return cards;
   },
 
   async loadMore() {
+    if (!isPageAlive(this)) return false;
+    const filteredCases = Array.isArray(this._filteredCases)
+      ? this._filteredCases
+      : [];
+    const visibleCards = Array.isArray(this.data.visibleCards)
+      ? this.data.visibleCards
+      : [];
     if (
       this.data.isLoadingMore ||
-      this.data.visibleCards.length >= this._filteredCases.length
+      visibleCards.length >= filteredCases.length
     ) return false;
     const indicatorToken = showLoadMoreIndicator(this);
     this._displayLimit += CARD_PAGE_SIZE;
     try {
       await this.refreshVisibleCards({ append: true });
       return true;
+    } catch (error) {
+      reportCategoryFault("load_more", error, { action: "load_more" });
+      return false;
     } finally {
       hideLoadMoreIndicator(this, indicatorToken);
     }
   },
 
   async retryCardImage(event) {
-    const id = event.currentTarget.dataset.id;
-    const card = this.data.visibleCards.find((item) => item.id === id);
-    if (!card || !card.imageFileId) return;
+    if (!isPageAlive(this)) return false;
+    const requestVersion = this._imageRequestVersion;
+    const target = event && event.currentTarget ? event.currentTarget : {};
+    const dataset = target.dataset || {};
+    const id = dataset.id;
+    const visibleCards = Array.isArray(this.data.visibleCards)
+      ? this.data.visibleCards
+      : [];
+    const card = visibleCards.find((item) => item.id === id);
+    if (!card || !card.imageFileId) return false;
     const retryCount = Number(card.imageRetryCount || 0);
-    const manualRetry = event.currentTarget.dataset.manual === true;
-    if (retryCount >= 1 && !manualRetry) return;
-    console.warn("案例图片加载失败", { caseId: card.id, fileId: card.imageFileId, error: event.detail && event.detail.errMsg });
+    const manualRetry = dataset.manual === true;
+    if (retryCount >= 1 && !manualRetry) return false;
+    console.warn("案例图片加载失败", {
+      caseId: card.id,
+      error: event && event.detail && event.detail.errMsg,
+    });
     try {
       const coverImageUrl = await refreshImageUrl(card.imageFileId);
-      const index = this.data.visibleCards.findIndex((item) => item.id === id);
-      if (index === -1) return;
-      this.setData({
+      if (!isCurrentImageRequest(this, requestVersion)) return false;
+      const currentCards = Array.isArray(this.data.visibleCards)
+        ? this.data.visibleCards
+        : [];
+      const index = currentCards.findIndex((item) => item.id === id);
+      if (index === -1) return false;
+      return safeSetData(this, {
         [`visibleCards[${index}].coverImageUrl`]: coverImageUrl,
         [`visibleCards[${index}].imageRetryCount`]: manualRetry ? 0 : retryCount + 1,
         [`visibleCards[${index}].imageLoadState`]: coverImageUrl ? "retrying" : "failed",
+      }, {
+        imageRequestVersion: requestVersion,
+        stage: "image_retry_complete",
       });
     } catch (error) {
-      const index = this.data.visibleCards.findIndex((item) => item.id === id);
-      if (index === -1) return;
-      this.setData({
+      if (!isCurrentImageRequest(this, requestVersion)) return false;
+      reportCategoryFault("image_retry", error, { action: "retry_image" });
+      const currentCards = Array.isArray(this.data.visibleCards)
+        ? this.data.visibleCards
+        : [];
+      const index = currentCards.findIndex((item) => item.id === id);
+      if (index === -1) return false;
+      return safeSetData(this, {
         [`visibleCards[${index}].coverImageUrl`]: "",
         [`visibleCards[${index}].imageRetryCount`]: retryCount + 1,
         [`visibleCards[${index}].imageLoadState`]: "failed",
+      }, {
+        imageRequestVersion: requestVersion,
+        stage: "image_retry_error",
       });
     }
   },
 
   onSearchInput(event) {
-    this.setData({
-      query: event.detail.value,
+    if (!isPageAlive(this)) return;
+    safeSetData(this, {
+      query: event && event.detail ? event.detail.value : "",
+    }, {
+      stage: "search_input",
     });
     if (this._searchTimer) clearTimeout(this._searchTimer);
     this._searchTimer = setTimeout(() => {
       this._searchTimer = null;
+      if (!isPageAlive(this)) return;
       this.applyFilters();
     }, SEARCH_DEBOUNCE_MS);
   },
 
   selectNav(event) {
+    if (!isPageAlive(this)) return;
     const key = event.currentTarget.dataset.key;
     const expandedNavKey = this.data.expandedNavKey === key ? "" : key;
-    this.setData({
+    safeSetData(this, {
       activeNavKey: key,
       expandedNavKey,
+    }, {
+      stage: "select_nav",
     });
     this.refreshPanels();
   },
 
   selectSort(event) {
+    if (!isPageAlive(this)) return;
     const value = event.currentTarget.dataset.value;
-    this.setData({
+    safeSetData(this, {
       selectedSort: value,
+    }, {
+      stage: "select_sort",
     });
     this.applyFilters();
   },
 
   toggleFilterOption(event) {
+    if (!isPageAlive(this)) return;
     const { key, value } = event.currentTarget.dataset;
     let focusedFilterValue = this.data.focusedFilterValue;
     const filters = this.data.filters.map((filter) => {
@@ -705,14 +1127,19 @@ Page({
       });
     });
 
-    this.setData({ filters, focusedFilterValue });
+    safeSetData(this, { filters, focusedFilterValue }, {
+      stage: "toggle_filter",
+    });
     this.applyFilters();
   },
 
   removeSelectedPill(event) {
+    if (!isPageAlive(this)) return;
     const { key, value } = event.currentTarget.dataset;
     if (key === "sort") {
-      this.setData({ selectedSort: "default" });
+      safeSetData(this, { selectedSort: "default" }, {
+        stage: "remove_sort",
+      });
       this.applyFilters();
       return;
     }
@@ -733,28 +1160,41 @@ Page({
         selectedValues,
       });
     });
-    this.setData({ filters, focusedFilterValue });
+    safeSetData(this, { filters, focusedFilterValue }, {
+      stage: "remove_filter",
+    });
     this.applyFilters();
   },
 
   clearFilters() {
+    if (!isPageAlive(this)) return;
     const filters = createFilters();
-    this.setData({
+    safeSetData(this, {
       query: "",
       selectedSort: "default",
       activeNavKey: "packageTypes",
       expandedNavKey: "packageTypes",
       filters,
       focusedFilterValue: null,
+    }, {
+      stage: "clear_filters",
     });
     this.applyFilters();
   },
 
   navigateToCase(event) {
+    if (!isPageAlive(this)) return;
     const id = event.currentTarget.dataset.id;
     if (!id) return;
-    wx.navigateTo({
-      url: `/pages/detail/index?id=${encodeURIComponent(id)}`,
-    });
+    try {
+      wx.navigateTo({
+        url: `/pages/detail/index?id=${encodeURIComponent(id)}`,
+        fail: (error) => {
+          reportCategoryFault("navigate_detail", error, { action: "navigate" });
+        },
+      });
+    } catch (error) {
+      reportCategoryFault("navigate_detail", error, { action: "navigate" });
+    }
   },
 });

@@ -113,10 +113,6 @@ function resolveImageUrl(fileID, tempUrlMap = {}) {
   return tempUrlMap[fileID] || (isCloudFileId(fileID) ? "" : fileID);
 }
 
-function isStableCaseId(id) {
-  return typeof id === "string" && id.indexOf("case_") === 0;
-}
-
 async function getTempUrlMap(fileIds, options = {}) {
   const uniqueFileIds = Array.from(new Set(fileIds.filter(isCloudFileId)));
   if (!uniqueFileIds.length) return {};
@@ -279,35 +275,29 @@ function createCaseNotFoundError(id) {
 
 async function fetchCaseById(id) {
   const db = getDb();
-  if (isStableCaseId(id)) {
-    const response = await db
-      .collection(CASE_COLLECTION)
-      .where({ caseId: id })
-      .limit(1)
-      .get();
-    const record = (response.data || [])[0];
-    if (!record) {
-      throw createCaseNotFoundError(id);
-    }
-    const cases = await attachCaseDetailImageUrls([normalizeCaseRecord(record)]);
-    return cases[0];
-  }
+  let record = null;
 
   try {
     const response = await db.collection(CASE_COLLECTION).doc(id).get();
-    const cases = await attachCaseDetailImageUrls([normalizeCaseRecord(response.data)]);
-    return cases[0];
+    if (response && response.data && response.data.isVisible === true) {
+      record = response.data;
+    }
   } catch (error) {
+    // 兼容历史 caseId：doc 查询不存在时继续走索引查询。
+  }
+
+  if (!record) {
     const response = await db
       .collection(CASE_COLLECTION)
-      .where({ caseId: id })
+      .where({ caseId: id, isVisible: true })
       .limit(1)
       .get();
-    const record = (response.data || [])[0];
-    if (!record) throw createCaseNotFoundError(id);
-    const cases = await attachCaseDetailImageUrls([normalizeCaseRecord(record)]);
-    return cases[0];
+    record = (response.data || []).find((item) => item && item.isVisible === true) || null;
   }
+
+  if (!record) throw createCaseNotFoundError(id);
+  const cases = await attachCaseDetailImageUrls([normalizeCaseRecord(record)]);
+  return cases[0];
 }
 
 module.exports = {

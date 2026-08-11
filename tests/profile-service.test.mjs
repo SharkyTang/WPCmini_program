@@ -10,7 +10,7 @@ const modulePath = resolve(
   "../miniprogram/miniprogram/utils/profileService.js"
 );
 
-function loadProfileService(callUserData) {
+function loadProfileService(callUserData, wxOverrides = {}) {
   const sandbox = {
     module: { exports: {} },
     exports: {},
@@ -23,7 +23,9 @@ function loadProfileService(callUserData) {
         return null;
       },
       setStorageSync() {},
+      ...wxOverrides,
     },
+    console,
   };
   sandbox.exports = sandbox.module.exports;
   vm.runInNewContext(readFileSync(modulePath, "utf8"), sandbox, {
@@ -110,4 +112,64 @@ await test("concurrent session summary readers share one cloud request and cache
   assert.equal(calls, 1);
   assert.equal((await service.fetchSessionSummary()).openid, "openid_1");
   assert.equal(calls, 1);
+
+  const expired = service.fetchSessionSummary({ maxAgeMs: 0 });
+  assert.equal(calls, 2);
+  resolveRequest({
+    openid: "openid_2",
+    profile: null,
+    roles: {},
+  });
+  assert.equal((await expired).openid, "openid_2");
+  assert.equal(service.SESSION_SUMMARY_TTL_MS, 60 * 1000);
+});
+
+await test("force refresh still shares an in-flight session summary request", async () => {
+  let calls = 0;
+  let resolveRequest;
+  const service = loadProfileService(() => {
+    calls += 1;
+    return new Promise((resolve) => {
+      resolveRequest = resolve;
+    });
+  });
+
+  const first = service.fetchSessionSummary();
+  const forced = service.fetchSessionSummary({ forceRefresh: true });
+  assert.equal(calls, 1);
+  resolveRequest({ openid: "openid_1", profile: null, roles: {} });
+  assert.equal((await first).openid, "openid_1");
+  assert.equal((await forced).openid, "openid_1");
+});
+
+await test("avatar URL failures degrade only the avatar and keep profile data usable", async () => {
+  const service = loadProfileService(
+    async (action, payload) => {
+      assert.equal(action, "saveProfile");
+      return { profile: payload.profile };
+    },
+    {
+      cloud: {
+        async getTempFileURL() {
+          throw new Error("temporary URL unavailable");
+        },
+      },
+    }
+  );
+
+  const hydrated = await service.hydrateProfile({
+    nickname: "酒友",
+    avatarFileId: "cloud://avatar",
+  });
+  assert.equal(hydrated.nickname, "酒友");
+  assert.equal(hydrated.avatarFileId, "cloud://avatar");
+  assert.equal(hydrated.avatarUrl, "");
+
+  const saved = await service.saveProfile({
+    nickname: "酒友",
+    avatarFileId: "cloud://avatar",
+  });
+  assert.equal(saved.nickname, "酒友");
+  assert.equal(saved.avatarFileId, "cloud://avatar");
+  assert.equal(saved.avatarUrl, "");
 });

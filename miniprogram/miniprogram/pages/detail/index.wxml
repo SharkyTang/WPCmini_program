@@ -1,5 +1,13 @@
 <view class="page">
-  <block wx:if="{{loading}}"></block>
+  <view wx:if="{{loading}}" class="detail-skeleton" aria-label="正在读取案例">
+    <view class="skeleton-hero"></view>
+    <view class="skeleton-line skeleton-line-title"></view>
+    <view class="skeleton-card">
+      <view class="skeleton-line"></view>
+      <view class="skeleton-line skeleton-line-short"></view>
+      <view class="skeleton-line"></view>
+    </view>
+  </view>
   <view wx:elif="{{errorMessage}}" class="state-shell state-shell-error">
     <mp-msg
       ext-class="brand-msg"
@@ -7,7 +15,10 @@
       title="案例暂不可用"
       desc="{{errorMessage}}"
     />
-    <view class="back-button" bindtap="goBack">返回案例库</view>
+    <view class="error-actions">
+      <view wx:if="{{errorCanRetry}}" class="retry-button" bindtap="retryLoadCase">重新加载</view>
+      <view class="back-button" bindtap="goBack">返回案例库</view>
+    </view>
   </view>
   <view wx:elif="{{caseItem}}" class="detail">
     <view wx:if="{{galleryItems.length}}" class="hero-image-wrap">
@@ -17,8 +28,17 @@
         circular="{{galleryItems.length > 1}}"
         bindchange="onGalleryChange"
       >
-        <swiper-item wx:for="{{galleryItems}}" wx:key="fileID">
-          <image class="hero-image" mode="aspectFill" src="{{item.renderUrl}}" bindtap="previewImage"></image>
+        <swiper-item wx:for="{{galleryItems}}" wx:key="index">
+          <image
+            wx:if="{{item.renderUrl}}"
+            class="hero-image"
+            mode="aspectFill"
+            src="{{item.renderUrl}}"
+            data-index="{{index}}"
+            binderror="onHeroImageError"
+            bindtap="previewImage"
+          ></image>
+          <view wx:else class="hero-image hero-image-empty">图片暂不可用</view>
         </swiper-item>
       </swiper>
       <view
@@ -53,12 +73,13 @@
       <view class="gallery-thumbnails-track">
         <view
           wx:for="{{galleryItems}}"
-          wx:key="fileID"
+          wx:key="index"
           class="gallery-thumbnail {{currentImageIndex === index ? 'gallery-thumbnail-active' : ''}}"
           data-index="{{index}}"
           bindtap="selectGalleryImage"
         >
-          <image class="gallery-thumbnail-image" src="{{item.thumbnailUrl}}" mode="aspectFill" lazy-load></image>
+          <image wx:if="{{item.thumbnailUrl}}" class="gallery-thumbnail-image" src="{{item.thumbnailUrl}}" mode="aspectFill" lazy-load></image>
+          <view wx:else class="gallery-thumbnail-image gallery-thumbnail-empty"></view>
         </view>
       </view>
     </scroll-view>

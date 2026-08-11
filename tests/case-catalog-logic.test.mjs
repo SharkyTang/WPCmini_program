@@ -8,8 +8,13 @@ const require = createRequire(import.meta.url);
 const {
   buildCatalogSnapshot,
   buildDetail,
+  buildDetailPatch,
   buildHomeFeed,
+  buildIndexedHomeFeed,
+  buildInitialDetail,
   chunkList,
+  collectDetailPatchFileIds,
+  collectInitialDetailImageFileIds,
   mergeUserLibrary,
 } = require(resolve(
   __dirname,
@@ -216,6 +221,129 @@ test("detail preserves all nine case images", () => {
   assert.equal(detail.gallery.length, 9);
   assert.equal(detail.gallery[8].fileID, galleryImages[8]);
   assert.equal(detail.gallery[8].thumbnailUrl, urlMap[galleryThumbnails[8]]);
+});
+
+test("initial detail signs only the hero and thumbnails", () => {
+  const displays = [
+    "cloud://env/display-0.jpg",
+    "cloud://env/display-1.jpg",
+  ];
+  const thumbnails = [
+    "cloud://env/thumb-0.jpg",
+    "cloud://env/thumb-1.jpg",
+  ];
+  const hero = "cloud://env/hero-0.jpg";
+  const record = buildCase(1, {
+    galleryImages: displays,
+    galleryThumbnails: thumbnails,
+    galleryBanners: [hero],
+    coverImage: displays[0],
+    coverThumbnail: thumbnails[0],
+    coverBanner: hero,
+  });
+  assert.deepEqual(
+    plain(collectInitialDetailImageFileIds(record)),
+    [hero, ...thumbnails]
+  );
+  const detail = buildInitialDetail(record, {
+    [hero]: "https://temp/hero",
+    [thumbnails[0]]: "https://temp/thumb-0",
+    [thumbnails[1]]: "https://temp/thumb-1",
+    [displays[0]]: "https://temp/should-not-be-used",
+  });
+  assert.equal(detail.coverImageUrl, "https://temp/hero");
+  assert.equal(detail.gallery.length, 2);
+  assert.equal(detail.gallery[0].heroUrl, "https://temp/hero");
+  assert.equal(detail.gallery[0].displayUrl, "");
+  assert.equal(detail.gallery[1].thumbnailUrl, "https://temp/thumb-1");
+  assert.equal(detail.gallery[1].heroUrl, "");
+  assert.equal(Object.prototype.hasOwnProperty.call(detail, "sourceGalleryImages"), false);
+});
+
+test("initial detail keeps the full gallery while limiting signed thumbnails to nine", () => {
+  const displays = Array.from(
+    { length: 12 },
+    (_, index) => `cloud://env/full-display-${index}.jpg`
+  );
+  const thumbnails = Array.from(
+    { length: 12 },
+    (_, index) => `cloud://env/full-thumb-${index}.jpg`
+  );
+  const hero = "cloud://env/full-hero.jpg";
+  const record = buildCase(12, {
+    coverImage: displays[0],
+    galleryImages: displays,
+    galleryThumbnails: thumbnails,
+    galleryBanners: [hero],
+    imageVariantVersion: 2,
+  });
+  const signedIds = collectInitialDetailImageFileIds(record);
+  assert.equal(signedIds.length, 10);
+  assert.deepEqual(plain(signedIds), [hero, ...thumbnails.slice(0, 9)]);
+  const urlMap = signedIds.reduce((map, fileID) => {
+    map[fileID] = `https://temp/${fileID.split("/").pop()}`;
+    return map;
+  }, {});
+  const detail = buildInitialDetail(record, urlMap);
+  assert.equal(detail.gallery.length, 12);
+  assert.notEqual(detail.gallery[8].thumbnailUrl, "");
+  assert.equal(detail.gallery[9].thumbnailUrl, "");
+  assert.equal(detail.gallery[11].fileID, displays[11]);
+});
+
+test("detail patch signs only requested display indexes", () => {
+  const displays = Array.from(
+    { length: 3 },
+    (_, index) => `cloud://env/display-${index}.jpg`
+  );
+  const record = buildCase(1, {
+    galleryImages: displays,
+    imageVariantVersion: 2,
+  });
+  assert.deepEqual(
+    plain(collectDetailPatchFileIds(record, [2, 0])),
+    [displays[2], displays[0]]
+  );
+  assert.deepEqual(
+    plain(buildDetailPatch(record, [2], {
+      [displays[2]]: "https://temp/display-2",
+    })),
+    [{
+      index: 2,
+      fileID: displays[2],
+      displayUrl: "https://temp/display-2",
+      downloadUrl: "https://temp/display-2",
+    }]
+  );
+});
+
+test("indexed home feed preserves legacy limits and ordering", () => {
+  const popularRecords = Array.from({ length: 4 }, (_, index) =>
+    buildCase(index + 1, { homeSections: { values: ["popular"] } })
+  );
+  const latestRecords = Array.from({ length: 6 }, (_, index) =>
+    buildCase(index + 10, { homeSections: { values: ["latest"] } })
+  );
+  const fallbackBannerRecords = [
+    buildCase(30, { homeSections: { values: ["banner"] } }),
+  ];
+  const urlMap = [...popularRecords, ...latestRecords, ...fallbackBannerRecords]
+    .reduce((map, record) => {
+      map[record.coverImage] = `https://temp/${record._id}`;
+      return map;
+    }, {});
+  const feed = buildIndexedHomeFeed({
+    popularRecords,
+    latestRecords,
+    fallbackBannerRecords,
+  }, [], urlMap);
+  assert.equal(feed.popularCases.length, 4);
+  assert.equal(feed.latestCases.length, 6);
+  assert.deepEqual(
+    plain(feed.latestCases.map((item) => item.sortOrder)),
+    [15, 14, 13, 12, 11, 10]
+  );
+  assert.equal(feed.banners.length, 1);
 });
 
 test("home banners prefer optimized independent and case banner variants", () => {

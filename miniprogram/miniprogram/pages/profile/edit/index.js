@@ -1,6 +1,6 @@
 const {
   cacheProfile,
-  fetchProfile,
+  fetchSessionSummary,
   getLegacyProfile,
   hasCompletedProfile,
   saveProfile,
@@ -16,6 +16,7 @@ const {
   getProfileSetupCopy,
   reportLibraryEvent,
 } = require("../../../utils/libraryAccessService");
+const { reportPerformanceEvent } = require("../../../utils/errorTelemetry");
 
 const PROFILE_SETUP_SOURCES = new Set([
   "detail_favorite",
@@ -54,7 +55,7 @@ function createDraft(profile = {}) {
     nickname: trimText(profile.nickname),
     avatarFileId: profile.avatarFileId || "",
     avatarUrl: profile.avatarUrl || "",
-    avatarLocalPath: "",
+    avatarLocalPath: profile.avatarLocalPath || "",
   };
 }
 
@@ -66,44 +67,35 @@ function comparableDraft(draft = {}) {
   });
 }
 
-function showProfileLoading(page) {
-  if (!page._activeProfileLoadRequestId || page._profileLoadingVisible) return;
-  page._profileLoadingVisible = true;
-  wx.showLoading({
-    title: "读取资料",
-    mask: true,
+function comparableAvatar(draft = {}) {
+  return JSON.stringify({
+    avatarFileId: draft.avatarFileId || "",
+    avatarLocalPath: draft.avatarLocalPath || "",
   });
 }
 
-function beginProfileLoading(page) {
-  const requestId = (page._profileLoadSequence || 0) + 1;
-  page._profileLoadSequence = requestId;
-  page._activeProfileLoadRequestId = requestId;
-  showProfileLoading(page);
-  return requestId;
+function ensureDirtyFields(page) {
+  if (!page._dirtyFields) {
+    page._dirtyFields = {
+      nickname: false,
+      avatar: false,
+    };
+  }
+  return page._dirtyFields;
 }
 
-function isCurrentProfileLoad(page, requestId) {
-  return page._activeProfileLoadRequestId === requestId;
+function isCurrentProfileSync(page, requestId) {
+  return (
+    page._isPageAlive !== false
+    && page._activeProfileSyncId === requestId
+  );
 }
 
-function hideProfileLoading(page) {
-  if (!page._profileLoadingVisible) return;
-  page._profileLoadingVisible = false;
-  wx.hideLoading();
-}
-
-function finishProfileLoading(page, requestId) {
-  if (!isCurrentProfileLoad(page, requestId)) return;
-  page._activeProfileLoadRequestId = 0;
-  page.setData({ isLoading: false });
-  hideProfileLoading(page);
-}
-
-function cancelProfileLoading(page) {
-  page._profileLoadSequence = (page._profileLoadSequence || 0) + 1;
-  page._activeProfileLoadRequestId = 0;
-  hideProfileLoading(page);
+function isCurrentProfileSave(page, requestId) {
+  return (
+    page._isPageAlive !== false
+    && page._activeProfileSaveId === requestId
+  );
 }
 
 Page({
@@ -113,8 +105,8 @@ Page({
     pageSubtitle: "修改你的头像和名称",
     profileDraft: createDraft(),
     initialDraft: createDraft(),
-    isLoading: true,
-    loadError: false,
+    syncState: "refreshing",
+    syncErrorMessage: "",
     isSaving: false,
     hasUnsavedChanges: false,
     identityGate: false,
@@ -129,15 +121,25 @@ Page({
   },
 
   onLoad(options = {}) {
-    this._profileLoadSequence = 0;
-    this._activeProfileLoadRequestId = 0;
-    this._profileLoadingVisible = false;
+    const profilePageStartedAt = Date.now();
+    this._isPageAlive = true;
+    this._profileSyncSequence = 0;
+    this._activeProfileSyncId = 0;
+    this._profileSaveSequence = 0;
+    this._activeProfileSaveId = 0;
+    this._returnTimer = null;
+    this._sessionOpenId = "";
+    this._dirtyFields = {
+      nickname: false,
+      avatar: false,
+    };
     this.profileSetupStartedAt = Date.now();
     const mode = options.mode === "setup" ? "setup" : "edit";
     const pageTitle = mode === "setup" ? "完善资料" : "个人资料";
     const identityGate = options.identityGate === "1";
     const source = identityGate ? normalizeProfileSetupSource(options.source) : "";
     const setupPresentation = getSetupPresentation(source);
+    const localDraft = createDraft(getLegacyProfile());
     this.setData({
       mode,
       pageTitle,
@@ -146,21 +148,37 @@ Page({
       profileSaved: false,
       source,
       saveButtonText: mode === "setup" ? setupPresentation.buttonText : "保存资料",
+      profileDraft: localDraft,
+      initialDraft: createDraft(localDraft),
+      syncState: "refreshing",
+      syncErrorMessage: "",
+      isSaving: false,
+      hasUnsavedChanges: false,
+    }, () => {
+      reportPerformanceEvent("page_ready_result", {
+        route: "pages/profile/edit/index",
+        stage: "local_form_visible",
+        durationMs: Date.now() - profilePageStartedAt,
+        success: true,
+        action: "profile_local_first_paint",
+        requestKind: "local",
+        cacheState: localDraft.nickname || localDraft.avatarFileId ? "hit" : "miss",
+      });
     });
     if (wx.setNavigationBarTitle) wx.setNavigationBarTitle({ title: pageTitle });
     this.loadProfile();
   },
 
-  onShow() {
-    showProfileLoading(this);
-  },
-
-  onHide() {
-    hideProfileLoading(this);
-  },
-
   onUnload() {
-    cancelProfileLoading(this);
+    this._isPageAlive = false;
+    this._profileSyncSequence = (this._profileSyncSequence || 0) + 1;
+    this._activeProfileSyncId = 0;
+    this._profileSaveSequence = (this._profileSaveSequence || 0) + 1;
+    this._activeProfileSaveId = 0;
+    if (this._returnTimer !== null && typeof clearTimeout === "function") {
+      clearTimeout(this._returnTimer);
+      this._returnTimer = null;
+    }
     if (wx.disableAlertBeforeUnload) wx.disableAlertBeforeUnload();
     if (this.data.identityGate && !this.data.profileSaved && this.data.source) {
       clearPendingLibraryAction(this.data.source);
@@ -169,54 +187,105 @@ Page({
     }
   },
 
-  async loadProfile() {
-    const requestId = beginProfileLoading(this);
+  async loadProfile(options = {}) {
+    if (this._isPageAlive === false) return;
+    ensureDirtyFields(this);
+    const requestId = (this._profileSyncSequence || 0) + 1;
+    this._profileSyncSequence = requestId;
+    this._activeProfileSyncId = requestId;
     this.setData({
-      isLoading: true,
-      loadError: false,
-      hasUnsavedChanges: false,
+      syncState: "refreshing",
+      syncErrorMessage: "",
     });
 
     try {
-      const legacyProfile = getLegacyProfile();
-      const legacyDraft = createDraft({
-        nickname: legacyProfile.nickname,
-        avatarUrl: legacyProfile.avatarUrl,
-        avatarFileId: legacyProfile.avatarFileId,
+      const summary = await fetchSessionSummary({
+        forceRefresh: options.forceRefresh === true,
       });
-      if (!isCurrentProfileLoad(this, requestId)) return;
+      if (!isCurrentProfileSync(this, requestId)) return;
+      if (summary && summary.openid) this._sessionOpenId = summary.openid;
+      const profile = summary && summary.profile;
+      const remoteDraft = createDraft(profile || {});
+      const currentDraft = createDraft(this.data.profileDraft);
+      const dirtyFields = ensureDirtyFields(this);
+      const profileDraft = {
+        nickname: dirtyFields.nickname
+          ? currentDraft.nickname
+          : remoteDraft.nickname,
+        avatarFileId: dirtyFields.avatar
+          ? currentDraft.avatarFileId
+          : remoteDraft.avatarFileId,
+        avatarUrl: dirtyFields.avatar
+          ? currentDraft.avatarUrl
+          : remoteDraft.avatarUrl,
+        avatarLocalPath: dirtyFields.avatar
+          ? currentDraft.avatarLocalPath
+          : remoteDraft.avatarLocalPath,
+      };
+      dirtyFields.nickname = (
+        dirtyFields.nickname
+        && trimText(profileDraft.nickname) !== trimText(remoteDraft.nickname)
+      );
+      dirtyFields.avatar = (
+        dirtyFields.avatar
+        && comparableAvatar(profileDraft) !== comparableAvatar(remoteDraft)
+      );
+      const hasUnsavedChanges = (
+        comparableDraft(profileDraft) !== comparableDraft(remoteDraft)
+      );
+      const keepGatePresentation = this.data.identityGate && Boolean(this.data.source);
+      const completed = hasCompletedProfile(profile);
+      const pageTitle = keepGatePresentation
+        ? "完善资料"
+        : completed
+          ? "个人资料"
+          : this.data.pageTitle;
+      // A null remote profile is an authoritative empty baseline. Persisting the
+      // empty shape prevents stale local data from flashing again next time,
+      // while dirty fields above still preserve input made during this request.
+      cacheProfile(profile || {});
       this.setData({
-        profileDraft: legacyDraft,
-        initialDraft: createDraft(legacyDraft),
+        mode: keepGatePresentation
+          ? "setup"
+          : completed
+            ? "edit"
+            : this.data.mode,
+        pageTitle,
+        pageSubtitle: keepGatePresentation
+          ? this.data.pageSubtitle
+          : completed
+            ? "修改你的头像和名称"
+            : this.data.pageSubtitle,
+        saveButtonText: keepGatePresentation
+          ? this.data.saveButtonText
+          : completed
+            ? "保存资料"
+            : this.data.saveButtonText,
+        profileDraft,
+        initialDraft: remoteDraft,
+        hasUnsavedChanges,
       });
-      const profile = await fetchProfile();
-      if (!isCurrentProfileLoad(this, requestId)) return;
-      if (profile && hasCompletedProfile(profile)) {
-        const profileDraft = createDraft(profile);
-        const keepGatePresentation = this.data.identityGate && Boolean(this.data.source);
-        const pageTitle = keepGatePresentation ? "完善资料" : "个人资料";
-        cacheProfile(profile);
-        this.setData({
-          mode: keepGatePresentation ? "setup" : "edit",
-          pageTitle,
-          pageSubtitle: keepGatePresentation
-            ? this.data.pageSubtitle
-            : "修改你的头像和名称",
-          saveButtonText: keepGatePresentation
-            ? this.data.saveButtonText
-            : "保存资料",
-          profileDraft,
-          initialDraft: createDraft(profileDraft),
-        });
-        if (wx.setNavigationBarTitle) wx.setNavigationBarTitle({ title: pageTitle });
-      }
+      if (wx.setNavigationBarTitle) wx.setNavigationBarTitle({ title: pageTitle });
+      this.updateUnloadAlert(hasUnsavedChanges);
+      if (!isCurrentProfileSync(this, requestId)) return;
+      this._activeProfileSyncId = 0;
+      this.setData({
+        syncState: "ready",
+        syncErrorMessage: "",
+      });
     } catch (error) {
-      if (!isCurrentProfileLoad(this, requestId)) return;
+      if (!isCurrentProfileSync(this, requestId)) return;
       console.error("读取个人资料失败", error);
-      this.setData({ loadError: true });
-    } finally {
-      finishProfileLoading(this, requestId);
+      this._activeProfileSyncId = 0;
+      this.setData({
+        syncState: "error",
+        syncErrorMessage: "云端资料同步失败，请检查网络后重试",
+      });
     }
+  },
+
+  retryProfileSync() {
+    return this.loadProfile({ forceRefresh: true });
   },
 
   onChooseWechatAvatar(event) {
@@ -228,24 +297,47 @@ Page({
       avatarFileId: "",
       avatarLocalPath: avatarUrl,
     };
-    this.setData({ profileDraft });
-    this.refreshUnsavedState();
+    ensureDirtyFields(this).avatar = (
+      comparableAvatar(profileDraft) !== comparableAvatar(this.data.initialDraft)
+    );
+    this.refreshUnsavedState(profileDraft);
+  },
+
+  onAvatarImageError(event) {
+    const profileDraft = this.data.profileDraft || createDraft();
+    if (!profileDraft.avatarUrl) return;
+    const failedUrl = event && event.currentTarget && event.currentTarget.dataset
+      ? event.currentTarget.dataset.url
+      : "";
+    if (failedUrl && failedUrl !== profileDraft.avatarUrl) return;
+    // 临时 URL 失效只切回头像占位，不清空可持久化的 fileId / 本地待上传路径。
+    this.setData({
+      profileDraft: {
+        ...profileDraft,
+        avatarUrl: "",
+      },
+    });
   },
 
   onNicknameInput(event) {
     const nickname = event && event.detail ? event.detail.value : "";
-    this.setData({
-      profileDraft: {
-        ...this.data.profileDraft,
-        nickname,
-      },
-    });
-    this.refreshUnsavedState();
+    const profileDraft = {
+      ...this.data.profileDraft,
+      nickname,
+    };
+    ensureDirtyFields(this).nickname = (
+      trimText(profileDraft.nickname) !== trimText(this.data.initialDraft.nickname)
+    );
+    this.refreshUnsavedState(profileDraft);
   },
 
-  refreshUnsavedState() {
-    const hasUnsavedChanges = comparableDraft(this.data.profileDraft) !== comparableDraft(this.data.initialDraft);
-    this.setData({ hasUnsavedChanges });
+  refreshUnsavedState(profileDraft = this.data.profileDraft) {
+    const hasUnsavedChanges = comparableDraft(profileDraft) !== comparableDraft(this.data.initialDraft);
+    this.setData({ profileDraft, hasUnsavedChanges });
+    this.updateUnloadAlert(hasUnsavedChanges);
+  },
+
+  updateUnloadAlert(hasUnsavedChanges) {
     if (!hasUnsavedChanges && wx.disableAlertBeforeUnload) {
       wx.disableAlertBeforeUnload();
       return;
@@ -256,6 +348,7 @@ Page({
   },
 
   showTopTips(message, type = "error") {
+    if (this._isPageAlive === false) return;
     this.setData({
       topTips: {
         show: true,
@@ -282,7 +375,20 @@ Page({
   },
 
   async saveProfileDraft() {
-    if (this.data.isSaving) return;
+    if (this._isPageAlive === false || this.data.isSaving) return;
+    if (this.data.syncState !== "ready") {
+      this.showTopTips(
+        this.data.syncState === "error"
+          ? "请先重新同步云端资料"
+          : "资料正在同步，请稍候"
+      );
+      return;
+    }
+    if (
+      this.data.mode === "edit"
+      && !this.data.identityGate
+      && !this.data.hasUnsavedChanges
+    ) return;
     const draft = this.data.profileDraft;
     const nickname = trimText(draft.nickname);
     if (!nickname) {
@@ -298,13 +404,21 @@ Page({
       return;
     }
 
+    const saveRequestId = (this._profileSaveSequence || 0) + 1;
+    this._profileSaveSequence = saveRequestId;
+    this._activeProfileSaveId = saveRequestId;
+    // 保存以用户当前确认的草稿为准，任何迟到的刷新都不能再覆盖它。
+    this._profileSyncSequence = (this._profileSyncSequence || 0) + 1;
+    this._activeProfileSyncId = 0;
     this.setData({ isSaving: true });
     let avatarFileId = draft.avatarFileId;
     if (!avatarFileId) {
       try {
         avatarFileId = await uploadProfileAvatar(draft.avatarLocalPath);
       } catch (error) {
+        if (!isCurrentProfileSave(this, saveRequestId)) return;
         console.error("头像上传失败", error);
+        this._activeProfileSaveId = 0;
         this.setData({ isSaving: false });
         this.reportProfileSetup("profile_setup_fail", "fail");
         this.showTopTips("头像上传失败，请重新选择后再试");
@@ -314,14 +428,24 @@ Page({
 
     try {
       const savedProfile = await saveProfile({ nickname, avatarFileId });
+      if (!isCurrentProfileSave(this, saveRequestId)) return;
       cacheProfile(savedProfile);
       try {
-        const openid = await fetchOpenId();
+        const openid = this._sessionOpenId || await fetchOpenId();
+        if (!isCurrentProfileSave(this, saveRequestId)) return;
+        this._sessionOpenId = openid;
         cacheCompletedProfileIdentity(openid, savedProfile);
       } catch (identityError) {
+        if (!isCurrentProfileSave(this, saveRequestId)) return;
         console.warn("资料已保存，但本次身份缓存恢复失败", identityError);
       }
+      if (!isCurrentProfileSave(this, saveRequestId)) return;
       const profileDraft = createDraft(savedProfile);
+      this._dirtyFields = {
+        nickname: false,
+        avatar: false,
+      };
+      this._activeProfileSaveId = 0;
       this.setData({
         profileDraft,
         initialDraft: createDraft(profileDraft),
@@ -336,9 +460,14 @@ Page({
         return;
       }
       wx.showToast({ title: "已保存", icon: "success" });
-      setTimeout(() => this.navigateBackAfterSave(), 500);
+      this._returnTimer = setTimeout(() => {
+        this._returnTimer = null;
+        if (this._isPageAlive !== false) this.navigateBackAfterSave();
+      }, 500);
     } catch (error) {
+      if (!isCurrentProfileSave(this, saveRequestId)) return;
       console.error("保存个人资料失败", error);
+      this._activeProfileSaveId = 0;
       this.setData({ isSaving: false });
       this.reportProfileSetup("profile_setup_fail", "fail");
       this.showTopTips(error && error.message ? error.message : "保存失败，请重试");
@@ -346,8 +475,10 @@ Page({
   },
 
   navigateBackAfterSave() {
+    if (this._isPageAlive === false) return;
     wx.navigateBack({
       fail: (error) => {
+        if (this._isPageAlive === false) return;
         console.error("资料已保存但返回失败", error);
         this.showTopTips("资料已保存，请返回继续操作");
       },

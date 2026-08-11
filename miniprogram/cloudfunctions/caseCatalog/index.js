@@ -3,10 +3,15 @@ const {
   USER_LIBRARY_LIMITS,
   buildCatalogSnapshot,
   buildDetail,
+  buildDetailPatch,
   buildHomeFeed,
+  buildIndexedHomeFeed,
+  buildInitialDetail,
   chunkList,
   collectDetailImageFileIds,
+  collectDetailPatchFileIds,
   collectHomeImageFileIds,
+  collectInitialDetailImageFileIds,
   getCardImageFileId,
   getLibraryType,
   mergeUserLibrary,
@@ -30,6 +35,15 @@ const URL_BATCH_SIZE = 50;
 const LOOKUP_CONCURRENCY = 4;
 const CATALOG_IMAGE_ID_LIMIT = 24;
 const CATALOG_IMAGE_ID_MAX_LENGTH = 128;
+const DETAIL_GALLERY_LIMIT = 9;
+const DETAIL_INITIAL_MODE = "initial_v2";
+const DETAIL_PATCH_MODE = "gallery_patch_v2";
+const HOME_INDEXED_MODE = "indexed_v2";
+
+function isEnvironmentFlagEnabled(name) {
+  if (typeof process === "undefined" || !process.env) return false;
+  return String(process.env[name] || "").trim().toLowerCase() === "true";
+}
 
 function ok(data = {}) {
   return { ok: true, ...data };
@@ -130,8 +144,88 @@ const CARD_FIELDS = {
 
 async function getHomeFeed(event) {
   const revisionState = await getRevision();
-  if (isKnownRevision(event, revisionState)) {
-    return ok({ revision: revisionState.revision, notModified: true });
+  const useIndexedFeed =
+    event.feedMode === HOME_INDEXED_MODE
+    && isEnvironmentFlagEnabled("HOME_FEED_INDEXED_ENABLED");
+  const feedModeUsed = useIndexedFeed ? HOME_INDEXED_MODE : "legacy";
+  const modeAwareClient = event.feedMode === HOME_INDEXED_MODE;
+  const cacheModeMatches = trimText(event.knownFeedMode) === feedModeUsed;
+  if (
+    isKnownRevision(event, revisionState)
+    && (!modeAwareClient || cacheModeMatches)
+  ) {
+    return ok({
+      revision: revisionState.revision,
+      notModified: true,
+      feedModeUsed,
+    });
+  }
+  if (useIndexedFeed) {
+    const [popularResponse, latestResponse, fallbackBannerResponse, bannerResponse] =
+      await Promise.all([
+        db
+          .collection(CASE_COLLECTION)
+          .where({ isVisible: true, "homeSections.values": "popular" })
+          .field(CARD_FIELDS)
+          .orderBy("sortOrder", "asc")
+          .orderBy("caseId", "asc")
+          .limit(4)
+          .get(),
+        db
+          .collection(CASE_COLLECTION)
+          .where({ isVisible: true, "homeSections.values": "latest" })
+          .field(CARD_FIELDS)
+          .orderBy("sortOrder", "desc")
+          // Legacy sorting reverses sortOrder only; caseId remains ascending
+          // as the deterministic tie breaker.
+          .orderBy("caseId", "asc")
+          .limit(6)
+          .get(),
+        db
+          .collection(CASE_COLLECTION)
+          .where({ isVisible: true, "homeSections.values": "banner" })
+          .field(CARD_FIELDS)
+          .orderBy("sortOrder", "asc")
+          .orderBy("caseId", "asc")
+          .limit(5)
+          .get(),
+        db
+          .collection(BANNER_COLLECTION)
+          .where({ isVisible: true })
+          .field({
+            _id: true,
+            caseId: true,
+            title: true,
+            image: true,
+            optimizedImage: true,
+            imageVariantVersion: true,
+            sortOrder: true,
+            isVisible: true,
+          })
+          .orderBy("sortOrder", "asc")
+          .limit(5)
+          .get(),
+      ]);
+    const groups = {
+      popularRecords: popularResponse.data || [],
+      latestRecords: latestResponse.data || [],
+      fallbackBannerRecords: fallbackBannerResponse.data || [],
+    };
+    const bannerRecords = bannerResponse.data || [];
+    const caseRecords = [
+      ...groups.popularRecords,
+      ...groups.latestRecords,
+      ...groups.fallbackBannerRecords,
+    ];
+    const urlMap = await getTempUrlMap(
+      collectHomeImageFileIds(caseRecords, bannerRecords)
+    );
+    return ok({
+      revision: revisionState.revision,
+      notModified: false,
+      feedModeUsed,
+      ...buildIndexedHomeFeed(groups, bannerRecords, urlMap),
+    });
   }
   const [caseRecords, bannerRecords] = await Promise.all([
     fetchAll(CASE_COLLECTION, {
@@ -160,6 +254,7 @@ async function getHomeFeed(event) {
   return ok({
     revision: revisionState.revision,
     notModified: false,
+    feedModeUsed,
     ...buildHomeFeed(caseRecords, bannerRecords, urlMap),
   });
 }
@@ -252,8 +347,59 @@ async function getCaseDetail(event) {
   if (!id) return fail("INVALID_ID", "缺少案例 ID");
   const record = await findCaseById(id);
   if (!record) return fail("CASE_NOT_FOUND", "案例不存在或已隐藏");
+  const requestedMode = trimText(event.detailMode);
+  const detailV2Enabled = isEnvironmentFlagEnabled("DETAIL_INITIAL_MODE_ENABLED");
+  if (detailV2Enabled && requestedMode === DETAIL_INITIAL_MODE) {
+    const urlMap = await getTempUrlMap(
+      collectInitialDetailImageFileIds(record)
+    );
+    return ok({
+      detailSchemaVersion: 2,
+      detailMode: DETAIL_INITIAL_MODE,
+      item: buildInitialDetail(record, urlMap),
+    });
+  }
+  if (detailV2Enabled && requestedMode === DETAIL_PATCH_MODE) {
+    const normalized = normalizeCaseRecord(record);
+    const indexes = normalizeDetailIndexes(event.indexes, normalized.galleryImages.length);
+    if (!indexes) {
+      return fail(
+        "INVALID_DETAIL_INDEXES",
+        `图库索引必须是不超过 ${DETAIL_GALLERY_LIMIT} 项的唯一整数数组`
+      );
+    }
+    const urlMap = await getTempUrlMap(
+      collectDetailPatchFileIds(record, indexes)
+    );
+    return ok({
+      detailSchemaVersion: 2,
+      detailMode: DETAIL_PATCH_MODE,
+      galleryPatch: buildDetailPatch(record, indexes, urlMap),
+    });
+  }
   const urlMap = await getTempUrlMap(collectDetailImageFileIds(record));
-  return ok({ item: buildDetail(record, urlMap) });
+  return ok({
+    item: buildDetail(record, urlMap),
+  });
+}
+
+function normalizeDetailIndexes(value, galleryLength) {
+  if (!Array.isArray(value) || !value.length || value.length > DETAIL_GALLERY_LIMIT) {
+    return null;
+  }
+  const indexes = value.slice();
+  if (
+    indexes.some(
+      (index) =>
+        !Number.isInteger(index)
+        || index < 0
+        || index >= galleryLength
+    )
+    || new Set(indexes).size !== indexes.length
+  ) {
+    return null;
+  }
+  return indexes;
 }
 
 async function runWithConcurrency(tasks, concurrency = LOOKUP_CONCURRENCY) {

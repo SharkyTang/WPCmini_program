@@ -55,6 +55,10 @@ page {
   display: block;
 }
 
+.banner-placeholder {
+  background: linear-gradient(135deg, #f5e2ae 0%, #ead1a1 100%);
+}
+
 .banner-card-preview {
   opacity: 0.72;
 }
@@ -254,4 +258,22 @@ page {
   color: #9d2b22;
   background: #fff5f2;
   border-color: #efc3ba;
+}
+
+.state-preview {
+  color: #8a5a22;
+  background: #fff8ed;
+  border-color: #efd2a8;
+}
+
+.state-retry {
+  width: fit-content;
+  margin: 24rpx auto 0;
+  padding: 14rpx 28rpx;
+  border: 2rpx solid currentColor;
+  border-radius: 8rpx;
+  color: #9d2b22;
+  font-size: 24rpx;
+  line-height: 1.2;
+  font-weight: 700;
 }

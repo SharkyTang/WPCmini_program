@@ -356,3 +356,20 @@ page {
   background: #fff5f2;
   border-color: #efc3ba;
 }
+
+.state-retry-button {
+  margin: 24rpx auto 0;
+  width: 220rpx;
+  height: 68rpx;
+  border: 0;
+  border-radius: 8rpx;
+  background: var(--brand-green);
+  color: #fff;
+  font-size: 24rpx;
+  font-weight: 700;
+  line-height: 68rpx;
+}
+
+.state-retry-button::after {
+  border: 0;
+}

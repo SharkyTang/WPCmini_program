@@ -8,7 +8,7 @@ const USER_LIBRARY_LIMITS = {
   favorites: 100,
   history: 50,
 };
-const CASE_GALLERY_MAX = 9;
+const DETAIL_INITIAL_THUMBNAIL_LIMIT = 9;
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -39,8 +39,7 @@ function normalizeGallery(value, fallback = "") {
       if (seen.has(fileID)) return false;
       seen.add(fileID);
       return true;
-    })
-    .slice(0, CASE_GALLERY_MAX);
+    });
 }
 
 function toNumber(value, fallback = 9999) {
@@ -134,7 +133,12 @@ function sortCases(items, direction = "asc") {
 }
 
 function buildHomeCaseGroups(records = []) {
-  const cases = records.map(normalizeCaseRecord).filter((item) => item.isVisible);
+  // Indexed queries intentionally overlap when one case belongs to multiple
+  // home sections. Deduplicate before slicing so one case cannot consume
+  // several result or URL-signing slots.
+  const cases = uniqueCaseRecords(records)
+    .map(normalizeCaseRecord)
+    .filter((item) => item.isVisible);
   const popularCases = sortCases(
     cases.filter((item) => item.homeSections.includes(HOME_SECTION_VALUES.POPULAR))
   ).slice(0, 4);
@@ -174,18 +178,29 @@ function normalizeBanner(record = {}) {
   };
 }
 
-function buildBanners(records = [], fallbackBanners = [], urlMap = {}) {
+function selectHomeBanners(records = [], fallbackBanners = []) {
   const seen = new Set();
   return [...records.map(normalizeBanner), ...fallbackBanners]
     .filter((item) => item.isVisible !== false && item.image)
-    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .sort((left, right) => {
+      if (left.sortOrder !== right.sortOrder) {
+        return left.sortOrder - right.sortOrder;
+      }
+      return String(left.caseId || left.id || left.image).localeCompare(
+        String(right.caseId || right.id || right.image)
+      );
+    })
     .filter((item) => {
       const key = item.caseId || item.image || item.id;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     })
-    .slice(0, 5)
+    .slice(0, 5);
+}
+
+function buildBanners(records = [], fallbackBanners = [], urlMap = {}) {
+  return selectHomeBanners(records, fallbackBanners)
     .map((item) => ({
       id: item.id,
       caseId: item.caseId,
@@ -209,6 +224,10 @@ function buildHomeFeed(caseRecords = [], bannerRecords = [], urlMap = {}) {
 
 function collectHomeImageFileIds(caseRecords = [], bannerRecords = []) {
   const groups = buildHomeCaseGroups(caseRecords);
+  const selectedBanners = selectHomeBanners(
+    bannerRecords,
+    groups.fallbackBanners
+  );
   return Array.from(
     new Set(
       [
@@ -218,8 +237,7 @@ function collectHomeImageFileIds(caseRecords = [], bannerRecords = []) {
         ...groups.latestCases.map((item) =>
           getCardImageFileId(item, { preferBanner: true })
         ),
-        ...bannerRecords.map((item) => normalizeBanner(item).image),
-        ...groups.fallbackBanners.map((item) => item.image),
+        ...selectedBanners.map((item) => item.image),
       ].filter(Boolean)
     )
   );
@@ -293,6 +311,156 @@ function buildDetail(record = {}, urlMap = {}) {
   };
 }
 
+function resolvePublicUrl(fileID, urlMap = {}) {
+  if (!fileID) return "";
+  if (urlMap[fileID]) return urlMap[fileID];
+  return String(fileID).indexOf("cloud://") === 0 ? "" : String(fileID);
+}
+
+function getUnsafeDetailSourceIds(record, item) {
+  const explicitSources = normalizeGallery(record.sourceGalleryImages);
+  if (explicitSources.length) return new Set(explicitSources);
+  const hasReliableVariants = (
+    item.imageVariantVersion >= 2
+    || normalizeGallery(record.galleryThumbnails).length > 0
+    || normalizeGallery(record.galleryBanners).length > 0
+  );
+  return hasReliableVariants ? new Set() : new Set(item.galleryImages);
+}
+
+function getSafeDetailFileId(fileID, unsafeSourceIds) {
+  return fileID && !unsafeSourceIds.has(fileID) ? fileID : "";
+}
+
+function getDetailThumbnailFileId(item, index, unsafeSourceIds = new Set()) {
+  return getSafeDetailFileId(
+    item.galleryThumbnails[index]
+      || item.coverThumbnail
+      || item.galleryImages[index]
+      || "",
+    unsafeSourceIds
+  );
+}
+
+function getDetailHeroFileId(item, unsafeSourceIds = new Set()) {
+  return getSafeDetailFileId(
+    item.galleryBanners[0]
+    || item.coverBanner
+    || getDetailThumbnailFileId(item, 0, unsafeSourceIds)
+    || item.galleryImages[0]
+    || "",
+    unsafeSourceIds
+  );
+}
+
+function buildInitialDetail(record = {}, urlMap = {}) {
+  const item = normalizeCaseRecord(record);
+  const {
+    sourceGalleryImages: _sourceGalleryImages,
+    galleryImages: _galleryImages,
+    galleryThumbnails: _galleryThumbnails,
+    galleryBanners: _galleryBanners,
+    coverImage: _coverImage,
+    coverThumbnail: _coverThumbnail,
+    coverBanner: _coverBanner,
+    ...publicItem
+  } = item;
+  const unsafeSourceIds = getUnsafeDetailSourceIds(record, item);
+  const heroFileID = getDetailHeroFileId(item, unsafeSourceIds);
+  const gallery = item.galleryImages.map((fileID, index) => {
+    const safeDisplayFileID = getSafeDetailFileId(fileID, unsafeSourceIds);
+    const thumbnailFileID = getDetailThumbnailFileId(
+      item,
+      index,
+      unsafeSourceIds
+    );
+    const heroUrl = index === 0 ? resolvePublicUrl(heroFileID, urlMap) : "";
+    return {
+      index,
+      fileID: safeDisplayFileID,
+      thumbnailUrl: index < DETAIL_INITIAL_THUMBNAIL_LIMIT
+        ? resolvePublicUrl(thumbnailFileID, urlMap) || heroUrl
+        : "",
+      heroUrl,
+      displayUrl: "",
+      downloadUrl: "",
+      hydrated: false,
+    };
+  });
+  return {
+    ...publicItem,
+    gallery,
+    coverImageUrl: gallery[0] ? gallery[0].heroUrl : "",
+  };
+}
+
+function collectInitialDetailImageFileIds(record = {}) {
+  const item = normalizeCaseRecord(record);
+  const unsafeSourceIds = getUnsafeDetailSourceIds(record, item);
+  return Array.from(
+    new Set(
+      [
+        getDetailHeroFileId(item, unsafeSourceIds),
+        ...item.galleryImages
+          .slice(0, DETAIL_INITIAL_THUMBNAIL_LIMIT)
+          .map((_, index) => getDetailThumbnailFileId(
+            item,
+            index,
+            unsafeSourceIds
+          )),
+      ].filter(Boolean)
+    )
+  );
+}
+
+function collectDetailPatchFileIds(record = {}, indexes = []) {
+  const item = normalizeCaseRecord(record);
+  const unsafeSourceIds = getUnsafeDetailSourceIds(record, item);
+  return indexes
+    .map((index) => getSafeDetailFileId(
+      item.galleryImages[index],
+      unsafeSourceIds
+    ))
+    .filter(Boolean);
+}
+
+function buildDetailPatch(record = {}, indexes = [], urlMap = {}) {
+  const item = normalizeCaseRecord(record);
+  const unsafeSourceIds = getUnsafeDetailSourceIds(record, item);
+  return indexes.map((index) => {
+    const fileID = getSafeDetailFileId(
+      item.galleryImages[index],
+      unsafeSourceIds
+    );
+    const displayUrl = resolvePublicUrl(fileID, urlMap);
+    return {
+      index,
+      fileID,
+      displayUrl,
+      downloadUrl: displayUrl,
+    };
+  });
+}
+
+function uniqueCaseRecords(records = []) {
+  const seen = new Set();
+  return records.filter((record) => {
+    const key = record && (record._id || record.id || record.caseId);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildIndexedHomeFeed(groups = {}, bannerRecords = [], urlMap = {}) {
+  const caseRecords = uniqueCaseRecords([
+    ...(groups.popularRecords || []),
+    ...(groups.latestRecords || []),
+    ...(groups.fallbackBannerRecords || []),
+  ]);
+  return buildHomeFeed(caseRecords, bannerRecords, urlMap);
+}
+
 function collectDetailImageFileIds(record = {}) {
   const item = normalizeCaseRecord(record);
   return Array.from(
@@ -321,10 +489,15 @@ module.exports = {
   buildCatalogSnapshot,
   buildCard,
   buildDetail,
+  buildDetailPatch,
   buildHomeFeed,
+  buildIndexedHomeFeed,
+  buildInitialDetail,
   chunkList,
   collectDetailImageFileIds,
+  collectDetailPatchFileIds,
   collectHomeImageFileIds,
+  collectInitialDetailImageFileIds,
   getCardImageFileId,
   getLibraryCaseKey,
   getLibraryType,

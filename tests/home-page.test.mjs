@@ -9,11 +9,50 @@ const pagePath = resolve(__dirname, "../miniprogram/miniprogram/pages/index/inde
 const wxmlPath = resolve(__dirname, "../miniprogram/miniprogram/pages/index/index.wxml");
 const wxssPath = resolve(__dirname, "../miniprogram/miniprogram/pages/index/index.wxss");
 
-function loadHomePage(wxMock = {}, cases = []) {
+function loadHomePage(wxMock = {}, cases = [], options = {}) {
   let pageConfig;
   const app = {
     globalData: {},
   };
+  const calls = {
+    attachCaseImageUrls: [],
+    clearCache: [],
+    fetchHomeFeed: [],
+    fetchVisibleBanners: [],
+    fetchVisibleCases: [],
+    clientFaults: [],
+    performanceEvents: [],
+    requiredModules: [],
+    reportEvents: [],
+    setData: [],
+    stopPullDownRefresh: 0,
+    touchCache: [],
+    writeCache: [],
+  };
+  const cachedHome = Object.prototype.hasOwnProperty.call(options, "cache")
+    ? options.cache
+    : null;
+  const catalogCache = {
+    HOME_CACHE_KEY: "wineHomeFeedV3",
+    readCache: () => cachedHome,
+    clearCache(key) {
+      calls.clearCache.push(key);
+      if (options.clearCache) return options.clearCache(key);
+      return true;
+    },
+    writeCache(key, revision, data) {
+      calls.writeCache.push({ key, revision, data });
+      if (options.writeCache) return options.writeCache(key, revision, data);
+      return undefined;
+    },
+  };
+  if (options.touchCache) {
+    catalogCache.touchCache = (key, revision) => {
+      calls.touchCache.push({ key, revision });
+      return options.touchCache(key, revision);
+    };
+  }
+
   const sandbox = {
     Page(config) {
       pageConfig = config;
@@ -22,35 +61,65 @@ function loadHomePage(wxMock = {}, cases = []) {
       return app;
     },
     require(moduleName) {
+      calls.requiredModules.push(moduleName);
       if (moduleName === "../../utils/cloudData") {
         return {
-          attachCaseImageUrls: async (items) =>
-            items.map((item) => ({
+          attachCaseImageUrls: async (items, requestOptions) => {
+            calls.attachCaseImageUrls.push({ items, options: requestOptions });
+            if (options.attachCaseImageUrls) {
+              return options.attachCaseImageUrls(items, requestOptions);
+            }
+            return items.map((item) => ({
               ...item,
-              coverImageUrl: `${item.coverImage || item.id}?temp=1`,
-            })),
-          fetchVisibleCases: async () => cases,
-          fetchVisibleBanners: async () => [],
+              coverImageUrl: `${item.coverImage || item.coverImageUrl || item.id}?temp=1`,
+            }));
+          },
+          fetchVisibleCases: async (requestOptions) => {
+            calls.fetchVisibleCases.push(requestOptions);
+            if (options.fetchVisibleCases) {
+              return options.fetchVisibleCases(requestOptions);
+            }
+            return cases;
+          },
+          fetchVisibleBanners: async (items, requestOptions) => {
+            calls.fetchVisibleBanners.push({ items, options: requestOptions });
+            if (options.fetchVisibleBanners) {
+              return options.fetchVisibleBanners(items, requestOptions);
+            }
+            return [];
+          },
         };
       }
       if (moduleName === "../../utils/caseCatalogService") {
         return {
-          fetchHomeFeed: async () => {
-            throw new Error("catalog unavailable");
+          fetchHomeFeed: async (requestOptions) => {
+            calls.fetchHomeFeed.push(requestOptions);
+            if (options.fetchHomeFeed) {
+              return options.fetchHomeFeed(requestOptions);
+            }
+            throw Object.assign(new Error("unknown action"), {
+              code: "UNKNOWN_ACTION",
+            });
+          },
+          isLegacyCatalogFallbackAllowed(error) {
+            if (options.isLegacyCatalogFallbackAllowed) {
+              return options.isLegacyCatalogFallbackAllowed(error);
+            }
+            return error && ["-501000", "FUNCTION_NOT_FOUND", "UNKNOWN_ACTION"]
+              .includes(String(error.code || "").toUpperCase());
           },
         };
       }
       if (moduleName === "../../utils/catalogCache") {
-        return {
-          HOME_CACHE_KEY: "wineHomeFeedV2",
-          readCache: () => null,
-          writeCache() {},
-        };
+        return catalogCache;
       }
       if (moduleName === "../../utils/caseRefresh") {
         return {
-          getCaseDataVersion: () => 1,
-          shouldRefreshCaseData: () => false,
+          getCaseDataVersion: () => options.caseDataVersion || 1,
+          shouldRefreshCaseData: (...args) =>
+            options.shouldRefreshCaseData
+              ? options.shouldRefreshCaseData(...args)
+              : false,
         };
       }
       if (moduleName === "../../utils/caseData") {
@@ -62,12 +131,41 @@ function loadHomePage(wxMock = {}, cases = []) {
           },
         };
       }
+      if (moduleName === "../../utils/errorTelemetry") {
+        return {
+          reportClientFault(payload) {
+            calls.clientFaults.push(payload);
+            if (options.reportClientFault) {
+              return options.reportClientFault(payload);
+            }
+            return true;
+          },
+          reportPerformanceEvent(name, payload) {
+            calls.performanceEvents.push({ name, payload });
+            if (options.reportPerformanceEvent) {
+              return options.reportPerformanceEvent(name, payload);
+            }
+            return true;
+          },
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     console,
+    clearTimeout: options.clearTimeout || clearTimeout,
+    setTimeout: options.setTimeout || setTimeout,
     wx: {
       navigateTo() {},
+      nextTick(callback) {
+        callback();
+      },
+      reportEvent(name, payload) {
+        calls.reportEvents.push({ name, payload });
+      },
       setStorageSync() {},
+      stopPullDownRefresh() {
+        calls.stopPullDownRefresh += 1;
+      },
       switchTab() {},
       ...wxMock,
     },
@@ -76,16 +174,26 @@ function loadHomePage(wxMock = {}, cases = []) {
   vm.runInNewContext(readFileSync(pagePath, "utf8"), sandbox, {
     filename: pagePath,
   });
-  pageConfig.setData = function setData(nextData) {
+  pageConfig.setData = function setData(nextData, callback) {
+    calls.setData.push(nextData);
     this.data = {
       ...this.data,
       ...nextData,
     };
+    if (typeof callback === "function") callback();
   };
   return {
     app,
+    calls,
     page: pageConfig,
   };
+}
+
+async function flushTasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await Promise.resolve();
 }
 
 async function test(name, fn) {
@@ -108,6 +216,34 @@ function buildCase(index, overrides = {}) {
     statuses: [],
     homeSections: [],
     ...overrides,
+  };
+}
+
+function buildHomeFeed() {
+  return {
+    banners: Array.from({ length: 5 }, (_, index) => ({
+      id: `banner_${index + 1}`,
+      caseId: `case_${index + 1}`,
+      title: `banner_${index + 1}`,
+      imageUrl: `https://example.com/banner-${index + 1}.jpg`,
+      internalOnly: `banner-secret-${index + 1}`,
+    })),
+    popularCases: [
+      buildCase(1, {
+        coverImageUrl: "https://example.com/popular-1.jpg",
+        styles: ["国风"],
+        priceLevel: "中端",
+        internalOnly: "popular-secret",
+      }),
+    ],
+    latestCases: [
+      buildCase(2, {
+        coverImageUrl: "https://example.com/latest-2.jpg",
+        styles: ["简约"],
+        priceLevel: "高端",
+        internalOnly: "latest-secret",
+      }),
+    ],
   };
 }
 
@@ -139,7 +275,10 @@ await test("home carousel keeps one crop ratio across active and preview cards",
   assert.equal(wxss.includes("banner-image-backdrop"), false);
   assert.match(foregroundTag, /mode="aspectFill"/);
   assert.equal(foregroundTag.includes("activeBannerIndex ?"), false);
-  assert.match(foregroundTag, /src="{{item\.imageUrl}}"/);
+  assert.match(foregroundTag, /wx:if="{{item\.renderImageUrl}}"/);
+  assert.match(foregroundTag, /src="{{item\.renderImageUrl}}"/);
+  assert.match(foregroundTag, /bindload="onBannerImageLoad"/);
+  assert.match(foregroundTag, /data-index="{{bannerIndex}}"/);
   assert.match(foregroundTag, /\slazy-load(?:\s|>)/);
   assert.match(wxss, /\.banner-swiper\s*\{[^}]*height:\s*382rpx/s);
   assert.match(wxss, /\.banner-card\s*\{[^}]*height:\s*360rpx/s);
@@ -161,14 +300,28 @@ await test("home carousel keeps one crop ratio across active and preview cards",
 
 await test("home carousel tracks the active banner for its title state", () => {
   const { page } = loadHomePage();
+  page.applyHomeFeed({
+    banners: Array.from({ length: 5 }, (_, index) => ({
+      caseId: `case_${index}`,
+      imageUrl: `https://example.com/${index}.jpg`,
+    })),
+  });
 
   assert.equal(page.data.activeBannerIndex, 0);
+  assert.deepEqual(
+    page.data.banners.map((item) => Boolean(item.renderImageUrl)),
+    [true, true, false, false, true]
+  );
   page.onBannerChange({
     detail: {
       current: 2,
     },
   });
   assert.equal(page.data.activeBannerIndex, 2);
+  assert.deepEqual(
+    page.data.banners.map((item) => Boolean(item.renderImageUrl)),
+    [false, true, true, true, false]
+  );
 
   page.onBannerChange({
     detail: {
@@ -215,6 +368,486 @@ await test("home page can be shared to friends and timeline", () => {
   );
 });
 
+await test("home page uses a softer fallback in timeline single page mode", async () => {
+  const { calls, page } = loadHomePage({
+    getLaunchOptionsSync() {
+      return { scene: 1154 };
+    },
+  });
+
+  page.onLoad();
+  page.onReady();
+  await page.onShow();
+  await page.onPullDownRefresh();
+  await flushTasks();
+
+  assert.equal(page.data.timelinePreview, true);
+  assert.equal(
+    page.data.errorMessage,
+    "朋友圈预览暂时不能读取完整案例，请点击右下角“前往小程序”查看。"
+  );
+  assert.equal(calls.fetchHomeFeed.length, 0);
+  assert.equal(calls.fetchVisibleCases.length, 0);
+  assert.equal(calls.fetchVisibleBanners.length, 0);
+  assert.equal(
+    calls.requiredModules.includes("../../utils/caseCatalogService"),
+    false
+  );
+  assert.equal(calls.requiredModules.includes("../../utils/cloudData"), false);
+});
+
+await test("cached home renders one banner first, hydrates after ready, and revalidates stale revision", async () => {
+  const feed = buildHomeFeed();
+  let resolveCatalog;
+  const catalogResult = new Promise((resolve) => {
+    resolveCatalog = resolve;
+  });
+  const { calls, page } = loadHomePage({}, [], {
+    cache: {
+      revision: 17,
+      cachedAt: 1,
+      fresh: false,
+      data: feed,
+    },
+    fetchHomeFeed: () => catalogResult,
+  });
+
+  page.onLoad();
+
+  assert.equal(calls.setData.length, 1);
+  assert.equal("popularCases" in calls.setData[0], false);
+  assert.equal("latestCases" in calls.setData[0], false);
+  assert.equal(page.data.banners.length, 1);
+  assert.equal(page.data.banners[0].renderImageUrl, feed.banners[0].imageUrl);
+  assert.equal(page.data.popularCases.length, 0);
+  assert.equal(page.data.latestCases.length, 0);
+  assert.equal(page.data.homeContentReady, false);
+  assert.equal(calls.fetchHomeFeed.length, 0);
+  assert.equal(
+    calls.requiredModules.includes("../../utils/caseCatalogService"),
+    false
+  );
+  assert.equal(
+    calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
+    0
+  );
+  assert.equal(
+    calls.setData.some((entry) => entry.timelinePreview === false),
+    false
+  );
+
+  page.onBannerImageLoad({
+    currentTarget: { dataset: { index: 0 } },
+  });
+  assert.equal(
+    calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
+    1
+  );
+
+  await page.onShow();
+  assert.equal(calls.fetchHomeFeed.length, 0);
+  assert.equal(
+    calls.requiredModules.includes("../../utils/caseCatalogService"),
+    false
+  );
+
+  page.onReady();
+  assert.equal(page.data.homeContentReady, true);
+  assert.equal(page.data.banners.length, 5);
+  assert.equal(page.data.popularCases.length, 1);
+  assert.equal(page.data.latestCases.length, 1);
+  assert.equal("internalOnly" in page.data.popularCases[0], false);
+  assert.equal("homeSections" in page.data.popularCases[0], false);
+
+  await Promise.resolve();
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.fetchHomeFeed)),
+    [{ knownRevision: 17 }]
+  );
+  const setDataCountBeforeNotModified = calls.setData.length;
+  resolveCatalog({ revision: 17, notModified: true });
+  const result = await page._loadPromise;
+
+  assert.equal(result.notModified, true);
+  assert.equal(calls.setData.length, setDataCountBeforeNotModified);
+  assert.equal(calls.writeCache.length, 0);
+  await flushTasks();
+  assert.equal(calls.writeCache.length, 1);
+  assert.equal(
+    calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
+    1
+  );
+  page.onUnload();
+});
+
+await test("timeline scene with cache hydrates locally and never contacts cloud", async () => {
+  const feed = buildHomeFeed();
+  const { calls, page } = loadHomePage({
+    getEnterOptionsSync() {
+      return { scene: 1154 };
+    },
+  }, [], {
+    cache: {
+      revision: 21,
+      cachedAt: Date.now(),
+      fresh: true,
+      data: feed,
+    },
+    fetchHomeFeed: async () => {
+      throw new Error("timeline mode must not request catalog");
+    },
+  });
+
+  page.onLoad();
+  assert.equal(page.data.timelinePreview, true);
+  assert.equal(page.data.banners.length, 1);
+  page.onReady();
+  await page.onShow();
+  await page.onPullDownRefresh();
+  await flushTasks();
+
+  assert.equal(page.data.homeContentReady, true);
+  assert.equal(page.data.banners.length, 5);
+  assert.equal(calls.fetchHomeFeed.length, 0);
+  assert.equal(calls.fetchVisibleCases.length, 0);
+  assert.equal(calls.fetchVisibleBanners.length, 0);
+  assert.equal(
+    calls.requiredModules.includes("../../utils/caseCatalogService"),
+    false
+  );
+  assert.equal(calls.requiredModules.includes("../../utils/cloudData"), false);
+  assert.equal(calls.stopPullDownRefresh, 1);
+  page.onUnload();
+});
+
+await test("uncached home requests only after the shell commit and writes cache after render", async () => {
+  const feed = buildHomeFeed();
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => ({
+      revision: 30,
+      notModified: false,
+      ...feed,
+    }),
+  });
+
+  page.onLoad();
+
+  assert.equal(calls.setData.length, 1);
+  assert.equal("banners" in calls.setData[0], false);
+  assert.equal("popularCases" in calls.setData[0], false);
+  assert.equal("latestCases" in calls.setData[0], false);
+  assert.equal(calls.fetchHomeFeed.length, 0);
+  assert.equal(page.data.loading, true);
+  assert.equal(page.data.homeContentReady, false);
+  assert.equal(
+    calls.setData.some((entry) => entry.timelinePreview === false),
+    false
+  );
+  page.onReady();
+
+  const result = await page._loadPromise;
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "success");
+  assert.equal(calls.fetchHomeFeed.length, 1);
+  assert.equal(page.data.homeContentReady, true);
+  assert.equal(calls.writeCache.length, 0);
+  assert.equal(
+    calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
+    0
+  );
+
+  page.onBannerImageLoad({
+    currentTarget: { dataset: { index: 1 } },
+  });
+  assert.equal(
+    calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
+    0
+  );
+  page.onBannerImageLoad({
+    currentTarget: { dataset: { index: 0 } },
+  });
+  page.onBannerImageLoad({
+    currentTarget: { dataset: { index: 0 } },
+  });
+  assert.equal(
+    calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
+    1
+  );
+  const bootEvent = calls.performanceEvents.find(
+    (event) => event.name === "client_boot_result"
+  );
+  const durationBuckets = new Set([
+    "under_500ms",
+    "500_999ms",
+    "1000_1999ms",
+    "2000_4999ms",
+    "5000ms_plus",
+    "pending",
+    "not_applicable",
+    "unknown",
+  ]);
+  for (const key of [
+    "duration_bucket",
+    "shell_bucket",
+    "on_ready_bucket",
+    "hero_bucket",
+    "data_bucket",
+  ]) {
+    assert.equal(durationBuckets.has(bootEvent.payload[key]), true, key);
+  }
+  assert.notEqual(bootEvent.payload.shell_bucket, "pending");
+  assert.notEqual(bootEvent.payload.on_ready_bucket, "pending");
+  assert.notEqual(bootEvent.payload.hero_bucket, "pending");
+  assert.notEqual(bootEvent.payload.data_bucket, "pending");
+
+  await flushTasks();
+  assert.equal(calls.writeCache.length, 1);
+  assert.equal(calls.writeCache[0].revision, 30);
+  page.onUnload();
+});
+
+await test("home preserves revision zero in cache and never sends it as knownRevision", async () => {
+  const feed = {
+    ...buildHomeFeed(),
+    banners: [],
+  };
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => ({
+      revision: 0,
+      notModified: false,
+      ...feed,
+    }),
+  });
+
+  page.onLoad();
+  const firstResult = await page._loadPromise;
+  assert.equal(firstResult.ok, true);
+  assert.equal(firstResult.status, "success");
+  assert.equal(page.data.catalogRevision, 0);
+  assert.equal(page.data.homeContentReady, true);
+  assert.equal("knownRevision" in calls.fetchHomeFeed[0], false);
+  assert.equal(
+    calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
+    1
+  );
+
+  await page.loadData({ silent: true });
+  await flushTasks();
+  assert.equal("knownRevision" in calls.fetchHomeFeed[1], false);
+  assert.equal(calls.writeCache.length, 1);
+  assert.deepEqual(calls.writeCache.map((entry) => entry.revision), [0]);
+  assert.deepEqual(calls.clearCache, []);
+  page.onUnload();
+});
+
+await test("notModified without a cache resolves with a contract error", async () => {
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => ({
+      revision: 9,
+      notModified: true,
+    }),
+  });
+
+  const result = await page.loadData();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "error");
+  assert.equal(result.error.code, "CATALOG_NOT_MODIFIED_WITHOUT_CACHE");
+  assert.equal(calls.fetchVisibleCases.length, 0);
+  assert.match(page.data.errorMessage, /暂时读取不到案例数据/);
+});
+
+await test("cached home without a banner reports boot only after full content commits", async () => {
+  const feed = {
+    ...buildHomeFeed(),
+    banners: [],
+  };
+  const { calls, page } = loadHomePage({}, [], {
+    cache: {
+      revision: 22,
+      cachedAt: Date.now(),
+      fresh: true,
+      data: feed,
+    },
+    fetchHomeFeed: async () => ({ revision: 22, notModified: true }),
+  });
+
+  page.onLoad();
+  assert.equal(
+    calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
+    0
+  );
+  page.onReady();
+  assert.equal(page.data.homeContentReady, true);
+  assert.equal(
+    calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
+    1
+  );
+  await page._loadPromise;
+  page.onUnload();
+});
+
+await test("unloaded home ignores late responses and loadData never rejects", async () => {
+  const feed = buildHomeFeed();
+  let resolveCatalog;
+  const catalogResult = new Promise((resolve) => {
+    resolveCatalog = resolve;
+  });
+  const pending = loadHomePage({}, [], {
+    fetchHomeFeed: () => catalogResult,
+  });
+
+  pending.page.onLoad();
+  const loadPromise = pending.page._loadPromise;
+  await Promise.resolve();
+  assert.equal(pending.calls.fetchHomeFeed.length, 1);
+  const setDataCountAtUnload = pending.calls.setData.length;
+  pending.page.onUnload();
+  resolveCatalog({ revision: 31, notModified: false, ...feed });
+
+  const cancelled = await loadPromise;
+  await flushTasks();
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(cancelled.status, "stale");
+  assert.equal(pending.calls.setData.length, setDataCountAtUnload);
+  assert.equal(pending.calls.writeCache.length, 0);
+
+  const failed = loadHomePage({}, [], {
+    fetchHomeFeed: async () => {
+      throw new Error("catalog failed");
+    },
+    fetchVisibleCases: async () => {
+      throw new Error("fallback failed");
+    },
+  });
+  const failureResult = await failed.page.loadData();
+  assert.equal(failureResult.ok, false);
+  assert.equal(failureResult.status, "error");
+  assert.equal(failed.calls.fetchVisibleCases.length, 0);
+  assert.equal(failed.calls.clientFaults.length, 1);
+  assert.equal(failed.calls.clientFaults[0].stage, "load_final");
+  assert.match(failed.page.data.errorMessage, /暂时读取不到案例数据/);
+});
+
+await test("home load promise deduplicates reads and a forced request supersedes older work", async () => {
+  const feed = buildHomeFeed();
+  const resolvers = [];
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: () => new Promise((resolve) => {
+      resolvers.push(resolve);
+    }),
+  });
+
+  const first = page.loadData({ silent: true });
+  const deduplicated = page.loadData({ silent: true });
+  assert.equal(first, deduplicated);
+  await Promise.resolve();
+  assert.equal(calls.fetchHomeFeed.length, 1);
+
+  const forced = page.loadData({ silent: true, forceRefresh: true });
+  await Promise.resolve();
+  assert.equal(calls.fetchHomeFeed.length, 2);
+
+  resolvers[0]({ revision: 40, notModified: false, ...feed });
+  const staleResult = await first;
+  assert.equal(staleResult.cancelled, true);
+  assert.equal(staleResult.status, "stale");
+
+  resolvers[1]({ revision: 41, notModified: false, ...feed });
+  const latestResult = await forced;
+  assert.equal(latestResult.ok, true);
+  assert.equal(latestResult.status, "success");
+  assert.equal(page.data.catalogRevision, 41);
+  await flushTasks();
+  assert.deepEqual(calls.writeCache.map((entry) => entry.revision), [41]);
+});
+
+await test("client boot timeout reports exactly once after five seconds", async () => {
+  const timers = new Map();
+  let timerId = 0;
+  const { calls, page } = loadHomePage({}, [], {
+    clearTimeout(id) {
+      timers.delete(id);
+    },
+    fetchHomeFeed: () => new Promise(() => {}),
+    setTimeout(callback, delay) {
+      timerId += 1;
+      timers.set(timerId, { callback, delay });
+      return timerId;
+    },
+  });
+
+  page.onLoad();
+  await Promise.resolve();
+  const bootTimer = [...timers.values()].find((timer) => timer.delay === 5000);
+  assert.ok(bootTimer);
+  bootTimer.callback();
+  page.reportClientBoot("success", "late_network");
+
+  const bootEvents = calls.performanceEvents.filter(
+    (event) => event.name === "client_boot_result"
+  );
+  assert.equal(bootEvents.length, 1);
+  assert.equal(bootEvents[0].payload.stage, "timeout");
+  assert.equal(bootEvents[0].payload.shell_bucket, "under_500ms");
+  assert.equal(bootEvents[0].payload.on_ready_bucket, "pending");
+  assert.equal(bootEvents[0].payload.hero_bucket, "pending");
+  assert.equal(bootEvents[0].payload.data_bucket, "pending");
+  page.onUnload();
+});
+
+await test("home reports an allowed catalog fallback before the legacy read succeeds", async () => {
+  const cases = [
+    buildCase(1, { homeSections: ["popular", "latest"] }),
+  ];
+  const { calls, page } = loadHomePage({}, cases);
+
+  const result = await page.loadData();
+
+  assert.equal(result.status, "success");
+  assert.equal(calls.fetchVisibleCases.length, 1);
+  assert.equal(calls.clientFaults.length, 1);
+  assert.equal(calls.clientFaults[0].stage, "catalog_fallback");
+  assert.equal(calls.clientFaults[0].action, "getHomeFeed");
+  assert.equal(calls.clientFaults[0].fallbackUsed, true);
+});
+
+await test("home no-cache error exposes retry and retry can recover", async () => {
+  let requestCount = 0;
+  const feed = buildHomeFeed();
+  const { calls, page } = loadHomePage({}, [], {
+    isLegacyCatalogFallbackAllowed: () => false,
+    fetchHomeFeed: async () => {
+      requestCount += 1;
+      if (requestCount === 1) throw new Error("catalog unavailable");
+      return {
+        revision: 51,
+        notModified: false,
+        ...feed,
+      };
+    },
+  });
+
+  const failed = await page.loadData();
+  assert.equal(failed.status, "error");
+  assert.match(page.data.errorMessage, /暂时读取不到案例数据/);
+  assert.equal(page.data.loading, false);
+  assert.equal(calls.clientFaults.length, 1);
+
+  const recovered = await page.retryHomeData();
+  assert.equal(recovered.status, "success");
+  assert.equal(page.data.errorMessage, "");
+  assert.equal(page.data.homeContentReady, true);
+  assert.equal(calls.fetchHomeFeed.length, 2);
+
+  const wxml = readFileSync(wxmlPath, "utf8");
+  const wxss = readFileSync(wxssPath, "utf8");
+  assert.match(wxml, /bindtap="retryHomeData"/);
+  assert.match(wxml, /wx:if="{{!timelinePreview}}"/);
+  assert.match(wxml, />重新加载<\/view>/);
+  assert.match(wxss, /\.state-retry\s*\{/);
+});
+
 await test("home page shows only selected home section cases", async () => {
   const cases = Array.from({ length: 8 }, (_, index) =>
     buildCase(index + 1, {
@@ -230,8 +863,18 @@ await test("home page shows only selected home section cases", async () => {
 
   assert.equal(page.data.popularCases.length, 4);
   assert.equal(page.data.latestCases.length, 6);
-  assert.equal(page.data.popularCases.every((item) => item.homeSections.includes("popular")), true);
-  assert.equal(page.data.latestCases.every((item) => item.homeSections.includes("latest")), true);
+  assert.deepEqual(
+    page.data.popularCases.map((item) => item.id),
+    ["case_1", "case_2", "case_3", "case_4"]
+  );
+  assert.deepEqual(
+    page.data.latestCases.map((item) => item.id),
+    ["case_7", "case_6", "case_5", "case_4", "case_3", "case_2"]
+  );
+  assert.equal(page.data.popularCases.some((item) => "homeSections" in item), false);
+  assert.equal(page.data.latestCases.some((item) => "homeSections" in item), false);
+  assert.equal(page.data.popularCases.every((item) => item.caseId === item.id), true);
+  assert.equal(page.data.latestCases.every((item) => item.caseId === item.id), true);
   assert.equal(page.data.popularCases.every((item) => item.homeBadge === "近期热门"), true);
   assert.equal(page.data.latestCases.every((item) => item.homeBadge === "最近上新"), true);
 });
@@ -281,4 +924,27 @@ await test("home more links switch to category tab with selected sort", () => {
   assert.equal(switchedUrl, "/pages/category/index");
   assert.equal(app.globalData.pendingCategorySort, "popular");
   assert.equal(storedSort, "popular");
+});
+
+await test("home contains storage and pull-down completion API failures", async () => {
+  let switchedUrl = "";
+  const { page } = loadHomePage({
+    setStorageSync() {
+      throw new Error("storage unavailable");
+    },
+    stopPullDownRefresh() {
+      throw new Error("pull-down unavailable");
+    },
+    switchTab(options) {
+      switchedUrl = options.url;
+    },
+  });
+
+  assert.doesNotThrow(() => {
+    page.navigateToCategory({
+      currentTarget: { dataset: { sort: "latest" } },
+    });
+  });
+  assert.equal(switchedUrl, "/pages/category/index");
+  assert.equal(page.stopPullDownRefreshSafely(), false);
 });

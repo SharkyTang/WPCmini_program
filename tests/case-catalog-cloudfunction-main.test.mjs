@@ -18,10 +18,15 @@ const logic = require(resolve(
 
 function matches(record, condition = {}) {
   return Object.entries(condition).every(([key, expected]) => {
+    const actual = key.split(".").reduce(
+      (value, part) => (value && typeof value === "object" ? value[part] : undefined),
+      record
+    );
     if (expected && Array.isArray(expected.$in)) {
-      return expected.$in.includes(record[key]);
+      return expected.$in.includes(actual);
     }
-    return record[key] === expected;
+    if (Array.isArray(actual)) return actual.includes(expected);
+    return actual === expected;
   });
 }
 
@@ -41,6 +46,7 @@ function loadCaseCatalog(options = {}) {
       where: null,
       limit: Infinity,
       skip: 0,
+      orderFields: [],
     };
     const query = {
       where(condition) {
@@ -51,7 +57,8 @@ function loadCaseCatalog(options = {}) {
       field() {
         return this;
       },
-      orderBy() {
+      orderBy(field, direction = "asc") {
+        state.orderFields.push({ field, direction });
         return this;
       },
       skip(value) {
@@ -68,8 +75,23 @@ function loadCaseCatalog(options = {}) {
         const filtered = state.where
           ? source.filter((record) => matches(record, state.where))
           : source;
+        const ordered = state.orderFields.length
+          ? filtered.slice().sort((left, right) => {
+              for (const order of state.orderFields) {
+                const leftValue = left[order.field];
+                const rightValue = right[order.field];
+                const leftNumber = Number(leftValue);
+                const rightNumber = Number(rightValue);
+                const difference = Number.isFinite(leftNumber) && Number.isFinite(rightNumber)
+                  ? leftNumber - rightNumber
+                  : String(leftValue || "").localeCompare(String(rightValue || ""));
+                if (difference) return order.direction === "desc" ? -difference : difference;
+              }
+              return 0;
+            })
+          : filtered;
         return {
-          data: filtered.slice(state.skip, state.skip + state.limit),
+          data: ordered.slice(state.skip, state.skip + state.limit),
         };
       },
       doc(id) {
@@ -117,6 +139,7 @@ function loadCaseCatalog(options = {}) {
     module: { exports: {} },
     exports: {},
     console,
+    process: { env: options.env || {} },
     require(moduleName) {
       if (moduleName === "wx-server-sdk") return mockCloud;
       if (moduleName === "./caseCatalogLogic") return logic;
@@ -186,6 +209,89 @@ await test("missing revision metadata never validates a known client revision", 
   assert.equal(
     calls.some((call) => call.collection === "wine_packaging" && call.type === "get"),
     true
+  );
+});
+
+await test("home revision is notModified only when the cached feed mode matches", async () => {
+  const recordsByCollection = {
+    catalog_meta: [{ _id: "current", revision: 9 }],
+    wine_packaging: [{
+      _id: "doc_1",
+      caseId: "case_1",
+      title: "案例 1",
+      isVisible: true,
+      sortOrder: 1,
+      homeSections: { values: ["popular", "latest", "banner"] },
+      coverBanner: "cloud://env/banner-1.jpg",
+    }],
+    home_banners: [],
+  };
+
+  const matching = loadCaseCatalog({
+    env: { HOME_FEED_INDEXED_ENABLED: "true" },
+    recordsByCollection,
+  });
+  const matchingResult = await matching.main({
+    action: "getHomeFeed",
+    knownRevision: 9,
+    knownFeedMode: "indexed_v2",
+    feedMode: "indexed_v2",
+  });
+  assert.equal(matchingResult.notModified, true);
+  assert.equal(matchingResult.feedModeUsed, "indexed_v2");
+  assert.equal(
+    matching.calls.some(
+      (call) => call.collection === "wine_packaging" && call.type === "get"
+    ),
+    false
+  );
+
+  const enabling = loadCaseCatalog({
+    env: { HOME_FEED_INDEXED_ENABLED: "true" },
+    recordsByCollection,
+  });
+  const enablingResult = await enabling.main({
+    action: "getHomeFeed",
+    knownRevision: 9,
+    knownFeedMode: "legacy",
+    feedMode: "indexed_v2",
+  });
+  assert.equal(enablingResult.notModified, false);
+  assert.equal(enablingResult.feedModeUsed, "indexed_v2");
+  assert.equal(enablingResult.popularCases.length, 1);
+
+  const disabling = loadCaseCatalog({
+    env: { HOME_FEED_INDEXED_ENABLED: "false" },
+    recordsByCollection,
+  });
+  const disablingResult = await disabling.main({
+    action: "getHomeFeed",
+    knownRevision: 9,
+    knownFeedMode: "indexed_v2",
+    feedMode: "indexed_v2",
+  });
+  assert.equal(disablingResult.notModified, false);
+  assert.equal(disablingResult.feedModeUsed, "legacy");
+  assert.equal(disablingResult.popularCases.length, 1);
+});
+
+await test("legacy clients keep revision-only notModified compatibility", async () => {
+  const { main, calls } = loadCaseCatalog({
+    recordsByCollection: {
+      catalog_meta: [{ _id: "current", revision: 9 }],
+    },
+  });
+
+  const result = await main({
+    action: "getHomeFeed",
+    knownRevision: 9,
+  });
+
+  assert.equal(result.notModified, true);
+  assert.equal(result.feedModeUsed, "legacy");
+  assert.equal(
+    calls.some((call) => call.collection === "wine_packaging"),
+    false
   );
 });
 
@@ -336,6 +442,306 @@ await test("public case detail never signs source originals", async () => {
   assert.equal(tempFileRequests.includes(source), false);
   assert.equal(tempFileRequests.includes(display), true);
   assert.equal(tempFileRequests.includes(thumbnail), true);
+});
+
+await test("hidden case details stay unavailable by document id and case id", async () => {
+  const source = "cloud://env/hidden-source.jpg";
+  const options = {
+    env: { DETAIL_INITIAL_MODE_ENABLED: "true" },
+    recordsByCollection: {
+      wine_packaging: [{
+        _id: "doc_hidden",
+        caseId: "case_hidden",
+        isVisible: false,
+        galleryImages: [source],
+        sourceGalleryImages: [source],
+      }],
+    },
+  };
+
+  for (const id of ["doc_hidden", "case_hidden"]) {
+    const { main, tempFileRequests } = loadCaseCatalog(options);
+    const result = await main({
+      action: "getCaseDetail",
+      id,
+      detailMode: "initial_v2",
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, "CASE_NOT_FOUND");
+    assert.deepEqual(tempFileRequests, []);
+  }
+});
+
+await test("detail initial v2 signs only one hero and gallery thumbnails", async () => {
+  const displays = [
+    "cloud://env/display-0.jpg",
+    "cloud://env/display-1.jpg",
+  ];
+  const thumbnails = [
+    "cloud://env/thumb-0.jpg",
+    "cloud://env/thumb-1.jpg",
+  ];
+  const hero = "cloud://env/hero-0.jpg";
+  const source = "cloud://env/source-0.jpg";
+  const { main, tempFileRequests } = loadCaseCatalog({
+    env: { DETAIL_INITIAL_MODE_ENABLED: "true" },
+    recordsByCollection: {
+      wine_packaging: [{
+        _id: "doc_1",
+        caseId: "case_1",
+        title: "案例",
+        isVisible: true,
+        galleryImages: displays,
+        galleryThumbnails: thumbnails,
+        galleryBanners: [hero],
+        sourceGalleryImages: [source],
+        coverImage: displays[0],
+        coverThumbnail: thumbnails[0],
+        coverBanner: hero,
+      }],
+    },
+  });
+
+  const result = await main({
+    action: "getCaseDetail",
+    id: "doc_1",
+    detailMode: "initial_v2",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.detailSchemaVersion, 2);
+  assert.equal(result.detailMode, "initial_v2");
+  assert.equal(result.item.gallery.length, 2);
+  assert.equal(result.item.gallery[0].heroUrl, `https://temp/${encodeURIComponent(hero)}`);
+  assert.equal(result.item.gallery[0].displayUrl, "");
+  assert.equal(result.item.gallery[1].thumbnailUrl, `https://temp/${encodeURIComponent(thumbnails[1])}`);
+  assert.deepEqual(tempFileRequests, [hero, ...thumbnails]);
+  assert.equal(tempFileRequests.includes(displays[0]), false);
+  assert.equal(tempFileRequests.includes(source), false);
+});
+
+await test("detail gallery patch signs only validated database indexes", async () => {
+  const displays = Array.from(
+    { length: 3 },
+    (_, index) => `cloud://env/display-${index}.jpg`
+  );
+  const options = {
+    env: { DETAIL_INITIAL_MODE_ENABLED: "true" },
+    recordsByCollection: {
+      wine_packaging: [{
+        _id: "doc_1",
+        caseId: "case_1",
+        isVisible: true,
+        galleryImages: displays,
+        imageVariantVersion: 2,
+      }],
+    },
+  };
+  const valid = loadCaseCatalog(options);
+  const result = await valid.main({
+    action: "getCaseDetail",
+    id: "doc_1",
+    detailMode: "gallery_patch_v2",
+    indexes: [2],
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.galleryPatch)), [{
+    index: 2,
+    fileID: displays[2],
+    displayUrl: `https://temp/${encodeURIComponent(displays[2])}`,
+    downloadUrl: `https://temp/${encodeURIComponent(displays[2])}`,
+  }]);
+  assert.deepEqual(valid.tempFileRequests, [displays[2]]);
+
+  const invalid = loadCaseCatalog(options);
+  const invalidResult = await invalid.main({
+    action: "getCaseDetail",
+    id: "doc_1",
+    detailMode: "gallery_patch_v2",
+    indexes: [1, 1],
+  });
+  assert.equal(invalidResult.ok, false);
+  assert.equal(invalidResult.code, "INVALID_DETAIL_INDEXES");
+  assert.deepEqual(invalid.tempFileRequests, []);
+});
+
+await test("detail v2 never signs a source id aliased into public variants", async () => {
+  const source = "cloud://env/source-alias.jpg";
+  const options = {
+    env: { DETAIL_INITIAL_MODE_ENABLED: "true" },
+    recordsByCollection: {
+      wine_packaging: [{
+        _id: "doc_alias",
+        caseId: "case_alias",
+        isVisible: true,
+        galleryImages: [source],
+        sourceGalleryImages: [source],
+        galleryThumbnails: [source],
+        galleryBanners: [source],
+        coverImage: source,
+        coverThumbnail: source,
+        coverBanner: source,
+        imageVariantVersion: 2,
+      }],
+    },
+  };
+  const initial = loadCaseCatalog(options);
+  const initialResult = await initial.main({
+    action: "getCaseDetail",
+    id: "doc_alias",
+    detailMode: "initial_v2",
+  });
+  assert.equal(initialResult.ok, true);
+  assert.equal(initialResult.item.gallery.length, 1);
+  assert.equal(initialResult.item.gallery[0].fileID, "");
+  assert.equal(initialResult.item.gallery[0].heroUrl, "");
+  assert.equal(initialResult.item.gallery[0].thumbnailUrl, "");
+  assert.deepEqual(initial.tempFileRequests, []);
+
+  const patch = loadCaseCatalog(options);
+  const patchResult = await patch.main({
+    action: "getCaseDetail",
+    id: "doc_alias",
+    detailMode: "gallery_patch_v2",
+    indexes: [0],
+  });
+  assert.equal(patchResult.galleryPatch[0].fileID, "");
+  assert.equal(patchResult.galleryPatch[0].displayUrl, "");
+  assert.deepEqual(patch.tempFileRequests, []);
+});
+
+await test("detail v2 requests fall back to the legacy response while disabled", async () => {
+  const display = "cloud://env/display.jpg";
+  const record = {
+    _id: "doc_1",
+    isVisible: true,
+    galleryImages: [display],
+    coverImage: display,
+  };
+  const { main } = loadCaseCatalog({
+    env: { DETAIL_INITIAL_MODE_ENABLED: "false" },
+    recordsByCollection: {
+      wine_packaging: [record],
+    },
+  });
+  const result = await main({
+    action: "getCaseDetail",
+    id: "doc_1",
+    detailMode: "initial_v2",
+  });
+  const expectedItem = logic.buildDetail(record, {
+    [display]: `https://temp/${encodeURIComponent(display)}`,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+    ok: true,
+    item: JSON.parse(JSON.stringify(expectedItem)),
+  });
+});
+
+await test("indexed home feed uses bounded section queries and preserves limits", async () => {
+  const cases = Array.from({ length: 12 }, (_, index) => ({
+    _id: `doc_${index + 1}`,
+    caseId: `case_${index + 1}`,
+    title: `案例 ${index + 1}`,
+    isVisible: true,
+    sortOrder: index + 1,
+    homeSections: { values: ["popular", "latest", "banner"] },
+    coverBanner: `cloud://env/banner-${index + 1}.jpg`,
+  }));
+  const banners = Array.from({ length: 7 }, (_, index) => ({
+    _id: `banner_${index}`,
+    isVisible: true,
+    sortOrder: index,
+    optimizedImage: `cloud://env/independent-${index}.jpg`,
+  }));
+  const { main, calls, tempFileRequests } = loadCaseCatalog({
+    env: { HOME_FEED_INDEXED_ENABLED: "true" },
+    recordsByCollection: {
+      catalog_meta: [{ _id: "current", revision: 9 }],
+      wine_packaging: cases,
+      home_banners: banners,
+    },
+  });
+  const result = await main({
+    action: "getHomeFeed",
+    feedMode: "indexed_v2",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.feedModeUsed, "indexed_v2");
+  assert.equal(result.popularCases.length, 4);
+  assert.equal(result.latestCases.length, 6);
+  assert.equal(result.banners.length, 5);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.latestCases.map((item) => item.sortOrder))),
+    [12, 11, 10, 9, 8, 7]
+  );
+  const sectionQueries = calls.filter(
+    (call) =>
+      call.collection === "wine_packaging"
+      && call.type === "where"
+      && Object.prototype.hasOwnProperty.call(call.condition, "homeSections.values")
+  );
+  assert.equal(sectionQueries.length, 3);
+  assert.equal(
+    calls.filter(
+      (call) => call.collection === "wine_packaging" && call.type === "get"
+    ).length,
+    3
+  );
+  const selectedIndependent = result.banners
+    .map((item) => decodeURIComponent(item.imageUrl.replace("https://temp/", "")))
+    .filter((fileID) => fileID.includes("independent-"))
+    .sort();
+  const signedIndependent = tempFileRequests
+    .filter((fileID) => fileID.includes("independent-"))
+    .sort();
+  assert.deepEqual(signedIndependent, selectedIndependent);
+});
+
+await test("indexed home feed matches legacy selection when sortOrder values tie", async () => {
+  const caseIds = ["08", "03", "07", "01", "06", "02", "05", "04"];
+  const cases = caseIds.map((suffix) => ({
+    _id: `doc_${suffix}`,
+    caseId: `case_${suffix}`,
+    title: `案例 ${suffix}`,
+    isVisible: true,
+    sortOrder: 10,
+    homeSections: { values: ["popular", "latest", "banner"] },
+    coverBanner: `cloud://env/banner-${suffix}.jpg`,
+  }));
+  const recordsByCollection = {
+    catalog_meta: [{ _id: "current", revision: 10 }],
+    wine_packaging: cases,
+    home_banners: [],
+  };
+
+  const legacy = loadCaseCatalog({ recordsByCollection });
+  const legacyResult = await legacy.main({ action: "getHomeFeed" });
+  const indexed = loadCaseCatalog({
+    env: { HOME_FEED_INDEXED_ENABLED: "true" },
+    recordsByCollection,
+  });
+  const indexedResult = await indexed.main({
+    action: "getHomeFeed",
+    feedMode: "indexed_v2",
+  });
+
+  const selectPublicFeed = (result) => ({
+    banners: result.banners,
+    popularCases: result.popularCases,
+    latestCases: result.latestCases,
+  });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(selectPublicFeed(indexedResult))),
+    JSON.parse(JSON.stringify(selectPublicFeed(legacyResult)))
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(indexedResult.popularCases.map((item) => item.caseId))),
+    ["case_01", "case_02", "case_03", "case_04"]
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(indexedResult.latestCases.map((item) => item.caseId))),
+    ["case_01", "case_02", "case_03", "case_04", "case_05", "case_06"]
+  );
 });
 
 await test("favorites use server OPENID and batched case lookups", async () => {

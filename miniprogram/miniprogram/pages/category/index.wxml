@@ -90,7 +90,10 @@
         </view>
 
         <view wx:if="{{loading}}" class="state-box">正在读取案例...</view>
-        <view wx:elif="{{errorMessage}}" class="state-box state-error">{{errorMessage}}</view>
+        <view wx:elif="{{errorMessage}}" class="state-box state-error">
+          <view>{{errorMessage}}</view>
+          <button class="state-retry-button" bindtap="retryLoadData">重新加载</button>
+        </view>
         <view wx:elif="{{!filteredCount}}" class="state-box">暂无匹配案例，换个条件试试</view>
         <view wx:else class="case-grid">
           <view
