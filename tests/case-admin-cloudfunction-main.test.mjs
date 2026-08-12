@@ -20,6 +20,20 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function buildVariantSet(sourceFileID) {
+  const paths = logic.buildExpectedVariantPaths(sourceFileID);
+  return {
+    sourceGalleryImages: [sourceFileID],
+    galleryImages: [`cloud://env/${paths.displayPath}`],
+    galleryThumbnails: [`cloud://env/${paths.thumbnailPath}`],
+    galleryBanners: [`cloud://env/${paths.bannerPath}`],
+    coverImage: `cloud://env/${paths.displayPath}`,
+    coverThumbnail: `cloud://env/${paths.thumbnailPath}`,
+    coverBanner: `cloud://env/${paths.bannerPath}`,
+    imageVariantVersion: 2,
+  };
+}
+
 function matchesCondition(record, condition = {}) {
   return Object.keys(condition).every((field) => {
     const expected = condition[field];
@@ -36,13 +50,25 @@ function matchesCondition(record, condition = {}) {
   });
 }
 
-function createQuery(collectionName, records, calls, condition = {}, options = {}) {
+function createQuery(
+  collectionName,
+  records,
+  calls,
+  condition = {},
+  queryGetError = null
+) {
   const query = {
     limitValue: null,
     skipValue: 0,
     where(nextCondition) {
       calls.push({ collectionName, type: "where", condition: nextCondition });
-      return createQuery(collectionName, records, calls, nextCondition, options);
+      return createQuery(
+        collectionName,
+        records,
+        calls,
+        nextCondition,
+        queryGetError
+      );
     },
     field(fields) {
       calls.push({ collectionName, type: "field", fields });
@@ -63,22 +89,12 @@ function createQuery(collectionName, records, calls, condition = {}, options = {
       return this;
     },
     async get() {
-      calls.push({ collectionName, type: "get", condition });
-      const imageFields = [
-        "coverImage",
-        "coverThumbnail",
-        "galleryImages",
-        "sourceGalleryImages",
-        "galleryThumbnails",
-        "coverBanner",
-        "galleryBanners",
-      ];
       if (
-        options.failReferenceReads
-        && collectionName === "wine_packaging"
-        && imageFields.some((field) => Object.prototype.hasOwnProperty.call(condition, field))
+        queryGetError &&
+        (!queryGetError.collectionName ||
+          queryGetError.collectionName === collectionName)
       ) {
-        throw new Error("reference lookup failed");
+        throw new Error(queryGetError.message || "database unavailable");
       }
       let data = records.filter((record) => matchesCondition(record, condition));
       data = data.slice(this.skipValue);
@@ -93,26 +109,25 @@ function loadCaseAdminFunction(options = {}) {
   const calls = [];
   const deletedFiles = [];
   const tempFileRequests = [];
+  let transactionCount = 0;
   const collections = {
     wine_packaging: clone(options.cases || []),
     home_banners: clone(options.banners || []),
-    catalog_meta: clone(
-      options.catalogMeta === undefined
-        ? [{ _id: "current", revision: 7 }]
-        : options.catalogMeta
-    ),
+    catalog_meta: clone(options.catalogMeta || []),
   };
 
   const mockCloud = {
     DYNAMIC_CURRENT_ENV: "dynamic-env",
     init() {},
     getWXContext() {
+      if (options.wxContext) return clone(options.wxContext);
       return {
-        OPENID: options.openid || "admin_openid",
+        OPENID: Object.prototype.hasOwnProperty.call(options, "openid")
+          ? options.openid
+          : "admin_openid",
       };
     },
     async deleteFile({ fileList }) {
-      calls.push({ collectionName: "cloud_storage", type: "deleteFile", fileList });
       deletedFiles.push(...fileList);
       return { fileList };
     },
@@ -126,16 +141,13 @@ function loadCaseAdminFunction(options = {}) {
       };
     },
     database() {
-      const database = {
+      const databaseApi = {
         command: {
           in(values) {
             return { __op: "in", values };
           },
           gte(value) {
             return { __op: "gte", value };
-          },
-          inc(value) {
-            return { __op: "inc", value };
           },
         },
         serverDate() {
@@ -144,7 +156,13 @@ function loadCaseAdminFunction(options = {}) {
         collection(collectionName) {
           const records = collections[collectionName] || [];
           return {
-            ...createQuery(collectionName, records, calls, {}, options),
+            ...createQuery(
+              collectionName,
+              records,
+              calls,
+              {},
+              options.queryGetError
+            ),
             async add(payload) {
               const id = `created_${records.length + 1}`;
               records.push({ _id: id, ...clone(payload.data || {}) });
@@ -155,20 +173,8 @@ function loadCaseAdminFunction(options = {}) {
               return {
                 async get() {
                   const record = records.find((item) => item._id === id);
-                  if (!record) {
-                    const error = new Error("document not found");
-                    error.code = "DATABASE_DOCUMENT_NOT_EXIST";
-                    throw error;
-                  }
+                  if (!record) throw new Error("document not found");
                   return { data: clone(record) };
-                },
-                async set(payload) {
-                  const index = records.findIndex((item) => item._id === id);
-                  const next = { _id: id, ...clone(payload.data || {}) };
-                  if (index === -1) records.push(next);
-                  else records[index] = next;
-                  calls.push({ collectionName, type: "set", id, payload });
-                  return {};
                 },
                 async remove() {
                   const index = records.findIndex((item) => item._id === id);
@@ -178,18 +184,19 @@ function loadCaseAdminFunction(options = {}) {
                   return {};
                 },
                 async update(payload) {
-                  const record = records.find((item) => item._id === id);
-                  if (!record) {
-                    const error = new Error("document not found");
-                    error.code = "DATABASE_DOCUMENT_NOT_EXIST";
-                    throw error;
+                  const index = records.findIndex((item) => item._id === id);
+                  if (index !== -1) {
+                    Object.assign(records[index], clone(payload.data || {}));
                   }
-                  Object.entries(payload.data || {}).forEach(([key, value]) => {
-                    record[key] = value && value.__op === "inc"
-                      ? Number(record[key] || 0) + value.value
-                      : clone(value);
-                  });
                   calls.push({ collectionName, type: "update", id, payload });
+                  return {};
+                },
+                async set(payload) {
+                  const index = records.findIndex((item) => item._id === id);
+                  const value = { _id: id, ...clone(payload.data || {}) };
+                  if (index === -1) records.push(value);
+                  else records[index] = value;
+                  calls.push({ collectionName, type: "set", id, payload });
                   return {};
                 },
               };
@@ -197,30 +204,56 @@ function loadCaseAdminFunction(options = {}) {
           };
         },
       };
-      database.runTransaction = async (handler) => handler({
-        collection: database.collection,
-      });
-      return database;
+      if (options.transactions !== false) {
+        databaseApi.runTransaction = async (callback) => {
+          transactionCount += 1;
+          calls.push({ type: "transaction" });
+          if (transactionCount === options.transactionFailureAt) {
+            throw new Error(options.transactionFailureMessage || "transaction connection lost");
+          }
+          return callback(databaseApi);
+        };
+      }
+      return databaseApi;
     },
   };
 
   const sandbox = {
     module: { exports: {} },
     exports: {},
-    console,
+    console: {
+      ...console,
+      error() {},
+      warn() {},
+    },
     process: {
       env: {
-        ADMIN_OPENIDS: options.adminOpenids === undefined
-          ? "admin_openid"
-          : options.adminOpenids,
-        CASE_ADMIN_OPENIDS: options.caseAdminOpenids === undefined
-          ? ""
-          : options.caseAdminOpenids,
+        ADMIN_OPENIDS: options.adminOpenids || "admin_openid",
+        CASE_ADMIN_UIDS: options.adminUids || "",
+        ADMIN_WEB_WRITE_ENABLED: options.webWriteEnabled || "",
       },
     },
     require(moduleName) {
+      if (moduleName === "node:crypto") return require("node:crypto");
       if (moduleName === "wx-server-sdk") return mockCloud;
       if (moduleName === "./caseAdminLogic") return logic;
+      if (moduleName === "@cloudbase/node-sdk" && options.userInfo) {
+        return {
+          SYMBOL_CURRENT_ENV: "current-env",
+          init() {
+            return {
+              auth() {
+                return {
+                  getUserInfo() {
+                    if (options.userInfoError) throw options.userInfoError;
+                    return clone(options.userInfo);
+                  },
+                };
+              },
+            };
+          },
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
   };
@@ -262,37 +295,6 @@ await test("deleteCase rejects non admins", async () => {
   assert.deepEqual(deletedFiles, []);
 });
 
-await test("checkAccess prefers CASE_ADMIN_OPENIDS and falls back when blank", async () => {
-  const roleAdmin = loadCaseAdminFunction({
-    openid: "case_admin",
-    caseAdminOpenids: " case_admin ",
-    adminOpenids: "general_admin",
-  });
-  const excludedGeneralAdmin = loadCaseAdminFunction({
-    openid: "general_admin",
-    caseAdminOpenids: "case_admin",
-    adminOpenids: "general_admin",
-  });
-  const fallbackAdmin = loadCaseAdminFunction({
-    openid: "general_admin",
-    caseAdminOpenids: "   ",
-    adminOpenids: " general_admin ",
-  });
-
-  assert.deepEqual(clone(await roleAdmin.main({ action: "checkAccess" })), {
-    ok: true,
-    isAdmin: true,
-  });
-  assert.deepEqual(clone(await excludedGeneralAdmin.main({ action: "checkAccess" })), {
-    ok: true,
-    isAdmin: false,
-  });
-  assert.deepEqual(clone(await fallbackAdmin.main({ action: "checkAccess" })), {
-    ok: true,
-    isAdmin: true,
-  });
-});
-
 await test("public visible image URLs exclude original source files", async () => {
   const source = "cloud://env/source.jpg";
   const display = "cloud://env/display.jpg";
@@ -325,8 +327,8 @@ await test("deleteCase reports missing cases", async () => {
 });
 
 await test("cleanupUnreferencedFiles deletes only files confirmed unused", async () => {
-  const referenced = "cloud://env/referenced-banner.jpg";
-  const unused = "cloud://env/unused-source.jpg";
+  const referenced = `cloud://env/wine-packaging/variants/v2/${"a".repeat(32)}/banner.jpg`;
+  const unused = `cloud://env/wine-packaging/variants/v2/${"b".repeat(32)}/display.jpg`;
   const { main, deletedFiles } = loadCaseAdminFunction({
     cases: [{
       _id: "case_doc_1",
@@ -343,84 +345,41 @@ await test("cleanupUnreferencedFiles deletes only files confirmed unused", async
   assert.deepEqual(deletedFiles, [unused]);
 });
 
-await test("deleteCase preserves an unreferenced legacy source image", async () => {
+await test("cleanupUnreferencedFiles rejects paths outside the case namespace", async () => {
+  const { main, deletedFiles } = loadCaseAdminFunction();
+  const result = await main({
+    action: "cleanupUnreferencedFiles",
+    fileIDs: ["cloud://env/another-product/private-file.jpg"],
+  });
+  assert.equal(result.code, "INVALID_CLEANUP_PATH");
+  assert.deepEqual(deletedFiles, []);
+});
+
+await test("deleteCase moves a case to trash without deleting any files", async () => {
   const { main, collections, deletedFiles } = loadCaseAdminFunction({
-    cases: [{ _id: "case_doc_1", coverImage: "cloud://env/case.jpg" }],
-  });
-
-  const result = await main({ action: "deleteCase", id: "case_doc_1" });
-
-  assert.equal(result.ok, true);
-  assert.equal(result.id, "case_doc_1");
-  assert.deepEqual(clone(result.deletedFileIds), []);
-  assert.deepEqual(clone(result.preservedSourceFileIds), ["cloud://env/case.jpg"]);
-  assert.deepEqual(deletedFiles, []);
-  assert.deepEqual(collections.wine_packaging, []);
-});
-
-await test("deleteCase keeps images referenced by another case", async () => {
-  const { main, collections, deletedFiles } = loadCaseAdminFunction({
-    cases: [
-      { _id: "case_doc_1", coverImage: "cloud://env/shared.jpg" },
-      { _id: "case_doc_2", coverImage: "cloud://env/shared.jpg" },
-    ],
-  });
-
-  const result = await main({ action: "deleteCase", id: "case_doc_1" });
-
-  assert.equal(result.ok, true);
-  assert.deepEqual(clone(result.deletedFileIds), []);
-  assert.deepEqual(deletedFiles, []);
-  assert.deepEqual(collections.wine_packaging.map((item) => item._id), ["case_doc_2"]);
-});
-
-await test("deleteCase keeps images referenced by a visible banner", async () => {
-  const { main, deletedFiles } = loadCaseAdminFunction({
-    cases: [{ _id: "case_doc_1", coverImage: "cloud://env/banner.jpg" }],
-    banners: [{ _id: "banner_1", image: "cloud://env/banner.jpg" }],
-  });
-
-  const result = await main({ action: "deleteCase", id: "case_doc_1" });
-
-  assert.equal(result.ok, true);
-  assert.deepEqual(clone(result.deletedFileIds), []);
-  assert.deepEqual(deletedFiles, []);
-});
-
-await test("deleteCase keeps gallery images referenced by another case", async () => {
-  const { main, deletedFiles } = loadCaseAdminFunction({
-    cases: [
-      { _id: "case_doc_1", coverImage: "cloud://env/cover.jpg", galleryImages: ["cloud://env/cover.jpg", "cloud://env/shared-detail.jpg"] },
-      { _id: "case_doc_2", coverImage: "cloud://env/other.jpg", galleryImages: ["cloud://env/other.jpg", "cloud://env/shared-detail.jpg"] },
-    ],
-  });
-
-  const result = await main({ action: "deleteCase", id: "case_doc_1" });
-
-  assert.equal(result.ok, true);
-  assert.equal(deletedFiles.includes("cloud://env/shared-detail.jpg"), false);
-  assert.equal(deletedFiles.includes("cloud://env/cover.jpg"), false);
-});
-
-await test("deleteCase removes unreferenced variants but keeps explicit sources", async () => {
-  const { main, deletedFiles } = loadCaseAdminFunction({
     cases: [{
       _id: "case_doc_1",
-      sourceGalleryImages: ["cloud://env/source.jpg"],
-      galleryImages: ["cloud://env/display.jpg"],
-      galleryThumbnails: ["cloud://env/thumb.jpg"],
-      coverImage: "cloud://env/display.jpg",
-      coverThumbnail: "cloud://env/thumb.jpg",
+      coverImage: "cloud://env/case.jpg",
+      isVisible: true,
+      isPinned: true,
+      homeSections: { values: ["banner"] },
+      version: 3,
     }],
   });
 
   const result = await main({ action: "deleteCase", id: "case_doc_1" });
 
   assert.equal(result.ok, true);
-  assert.deepEqual(clone(result.preservedSourceFileIds), ["cloud://env/source.jpg"]);
-  assert.equal(deletedFiles.includes("cloud://env/source.jpg"), false);
-  assert.equal(deletedFiles.includes("cloud://env/display.jpg"), true);
-  assert.equal(deletedFiles.includes("cloud://env/thumb.jpg"), true);
+  assert.equal(result.id, "case_doc_1");
+  assert.deepEqual(deletedFiles, []);
+  assert.equal(collections.wine_packaging.length, 1);
+  assert.equal(collections.wine_packaging[0].deletedAt, "server-date");
+  assert.equal(collections.wine_packaging[0].isVisible, false);
+  assert.equal(collections.wine_packaging[0].isPinned, false);
+  assert.deepEqual(collections.wine_packaging[0].homeSections, { values: [] });
+  assert.equal(collections.wine_packaging[0].version, 4);
+  const legacyList = await main({ action: "listCases", page: 1, pageSize: 20 });
+  assert.deepEqual(clone(legacyList.items), []);
 });
 
 await test("createCase rejects the twenty-first configured pinned case", async () => {
@@ -507,6 +466,10 @@ await test("restoring a hidden case reports when its homepage slot is full", asy
     {
       _id: "hidden_cat",
       caseId: "case_099",
+      title: "隐藏小猫",
+      coverImage: "cloud://env/hidden-cat.jpg",
+      galleryImages: ["cloud://env/hidden-cat.jpg"],
+      packageTypes: { values: ["礼盒"] },
       isVisible: false,
       homeSections: { values: ["popular"] },
     },
@@ -566,74 +529,638 @@ await test("recent case endpoint only returns visible cases created in the last 
   assert.equal(forbidden.code, "FORBIDDEN");
 });
 
-await test("catalog revision increments monotonically for consecutive mutations", async () => {
-  const { main, collections } = loadCaseAdminFunction();
-  const draft = {
-    title: "新案例",
-    galleryImages: ["cloud://env/display.jpg"],
-    packageTypes: ["礼盒"],
-    isVisible: false,
+await test("CloudBase UID access uses the official server SDK and honors the web write switch", async () => {
+  const options = {
+    wxContext: {},
+    userInfo: { uid: "web-admin-1", openId: "", isAnonymous: false },
+    adminUids: "web-admin-1",
   };
-  assert.equal((await main({ action: "createCase", case: draft })).ok, true);
-  assert.equal((await main({
-    action: "createCase",
-    case: { ...draft, title: "新案例二" },
-  })).ok, true);
-  assert.equal(collections.catalog_meta[0].revision, 9);
+  const readonly = loadCaseAdminFunction(options);
+  const access = await readonly.main({ action: "checkAccess" });
+  const list = await readonly.main({ action: "listCasesV2", page: 1, pageSize: 20 });
+  const config = await readonly.main({ action: "getAdminConfig" });
+  const write = await readonly.main({
+    action: "moveCasesToTrash",
+    ids: ["case_1"],
+    expectedVersions: { case_1: 1 },
+  });
+  assert.equal(access.ok, true);
+  assert.equal(access.actor.type, "cloudbase_uid");
+  assert.equal(list.ok, true);
+  assert.equal(config.config.options.wineTypes.includes("白酒"), true);
+  assert.equal(config.config.limits.gallery, 9);
+  assert.equal(config.config.limits.homepage.latest, 6);
+  assert.equal(config.config.writeEnabled, false);
+  assert.deepEqual(clone(config.config.homeSectionOrders), {
+    banner: [],
+    popular: [],
+    latest: [],
+  });
+  assert.equal(write.code, "WEB_WRITE_DISABLED");
+
+  const forbidden = loadCaseAdminFunction({
+    ...options,
+    adminUids: "another-admin",
+  });
+  assert.equal((await forbidden.main({ action: "listCasesV2" })).code, "FORBIDDEN");
 });
 
-await test("a missing revision document is initialized without resetting to one", async () => {
-  const { main, collections } = loadCaseAdminFunction({ catalogMeta: [] });
+await test("identity service failures are not reported as permission denials", async () => {
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: {},
+    userInfoError: new Error("identity backend unavailable"),
+    adminUids: "web-admin-1",
+  });
+  const result = await loaded.main({ action: "listCasesV2" });
+  assert.equal(result.code, "SERVER_ERROR");
+  assert.notEqual(result.code, "FORBIDDEN");
+});
+
+await test("database failures are caught while admin config keeps the write gate observable", async () => {
+  const uid = "web-admin-1";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    queryGetError: {
+      collectionName: "wine_packaging",
+      message: "wine_packaging unavailable",
+    },
+  });
+
+  const config = await loaded.main({ action: "getAdminConfig" });
+  assert.equal(config.ok, true);
+  assert.equal(config.config.writeEnabled, true);
+  assert.deepEqual(clone(config.config.homeSectionOrders), {
+    banner: [],
+    popular: [],
+    latest: [],
+  });
+
+  const list = await loaded.main({ action: "listCasesV2" });
+  assert.equal(list.ok, false);
+  assert.equal(list.code, "SERVER_ERROR");
+  assert.equal(list.message, "wine_packaging unavailable");
+});
+
+await test("web cleanup cannot target another administrator upload directory", async () => {
+  const uid = "web-admin-1";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+  });
+  const result = await loaded.main({
+    action: "cleanupUnreferencedFiles",
+    fileIDs: [
+      "cloud://env/wine-packaging/admin-web/other-admin/batch-1/source.jpg",
+    ],
+  });
+  assert.equal(result.code, "INVALID_CLEANUP_PATH");
+  assert.deepEqual(loaded.deletedFiles, []);
+});
+
+await test("listCasesV2 returns an exact filtered total beyond 300 records", async () => {
+  const cases = Array.from({ length: 350 }, (_, index) => ({
+    _id: `case_${index}`,
+    caseId: `case_${String(index + 1).padStart(3, "0")}`,
+    title: index % 2 ? "青花礼盒" : "商务瓶标",
+    packageTypes: { values: [index % 2 ? "礼盒" : "瓶标"] },
+    isVisible: true,
+    sortOrder: 1,
+  }));
+  const { main } = loadCaseAdminFunction({ cases });
   const result = await main({
+    action: "listCasesV2",
+    page: 2,
+    pageSize: 50,
+    filters: { packageTypes: ["礼盒"], trash: false },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.total, 175);
+  assert.equal(result.items.length, 50);
+  assert.equal(result.hasMore, true);
+  assert.equal(
+    result.items[0].caseId.localeCompare(result.items.at(-1).caseId) <= 0,
+    true
+  );
+});
+
+await test("web create is hidden-incomplete capable, transactionally numbered and idempotent", async () => {
+  const uid = "web-admin-1";
+  const source = `cloud://env/wine-packaging/admin-web/${uid}/batch-1/source.jpg`;
+  const options = {
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    cases: [{ _id: "old", caseId: "case_098", sortOrder: 98 }],
+  };
+  const loaded = loadCaseAdminFunction(options);
+  const event = {
     action: "createCase",
+    clientMutationId: "upload-task-1",
     case: {
-      title: "初始化版本案例",
-      galleryImages: ["cloud://env/display.jpg"],
-      packageTypes: ["礼盒"],
+      title: "待补标签案例",
+      packageTypes: [],
+      ...buildVariantSet(source),
+      isVisible: false,
+    },
+  };
+  const created = await loaded.main(event);
+  const replay = await loaded.main(event);
+  assert.equal(created.ok, true);
+  assert.equal(created.caseId, "case_099");
+  assert.equal(created.version, 1);
+  assert.equal(replay.ok, true);
+  assert.equal(replay.id, created.id);
+  assert.equal(replay.duplicate, true);
+  assert.equal(
+    loaded.collections.wine_packaging.filter((item) => item.clientMutationId === "upload-task-1").length,
+    1
+  );
+  assert.equal(loaded.collections.catalog_meta[0].nextCaseNumber, 100);
+});
+
+await test("web create bumps catalog revision once per upload batch while numbering every case", async () => {
+  const uid = "web-admin-1";
+  const source = `cloud://env/wine-packaging/admin-web/${uid}/batch-1/source.jpg`;
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    catalogMeta: [{ _id: "current", revision: 8, nextCaseNumber: 21 }],
+  });
+  const create = (clientMutationId, uploadBatchId) => loaded.main({
+    action: "createCase",
+    clientMutationId,
+    uploadBatchId,
+    case: {
+      title: `案例 ${clientMutationId}`,
+      packageTypes: [],
+      ...buildVariantSet(source),
       isVisible: false,
     },
   });
-  assert.equal(result.ok, true);
-  assert.equal(collections.catalog_meta.length, 1);
-  assert.equal(collections.catalog_meta[0]._id, "current");
-  assert.equal(collections.catalog_meta[0].revision > 1, true);
+
+  const first = await create("mutation-1", "upload-batch-1");
+  const second = await create("mutation-2", "upload-batch-1");
+  const replay = await create("mutation-2", "upload-batch-1");
+  const third = await create("mutation-3", "upload-batch-2");
+
+  assert.equal(first.caseId, "case_021");
+  assert.equal(second.caseId, "case_022");
+  assert.equal(third.caseId, "case_023");
+  assert.equal(replay.duplicate, true);
+  assert.equal(loaded.collections.catalog_meta.find((item) => item._id === "current").revision, 10);
+  assert.equal(loaded.collections.catalog_meta.find((item) => item._id === "current").nextCaseNumber, 24);
+  assert.equal(
+    loaded.collections.catalog_meta.filter((item) => item._id.startsWith("upload_batch_")).length,
+    2
+  );
 });
 
-await test("delete bumps revision before recoverable image cleanup", async () => {
-  const { main, calls, collections } = loadCaseAdminFunction({
+await test("web create transaction failure leaves no upload batch claim", async () => {
+  const uid = "web-admin-1";
+  const source = `cloud://env/wine-packaging/admin-web/${uid}/batch-1/source.jpg`;
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    catalogMeta: [{ _id: "current", revision: 8, nextCaseNumber: 21 }],
+    transactionFailureAt: 1,
+  });
+  const result = await loaded.main({
+    action: "createCase",
+    clientMutationId: "mutation-failed",
+    uploadBatchId: "upload-batch-failed",
+    case: {
+      title: "失败案例",
+      packageTypes: [],
+      ...buildVariantSet(source),
+      isVisible: false,
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(loaded.collections.wine_packaging.length, 0);
+  assert.equal(
+    loaded.collections.catalog_meta.filter((item) => item._id.startsWith("upload_batch_")).length,
+    0
+  );
+});
+
+await test("web create validates an explicit upload batch id", async () => {
+  const uid = "web-admin-1";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+  });
+  const result = await loaded.main({
+    action: "createCase",
+    clientMutationId: "mutation-valid",
+    uploadBatchId: "invalid/batch",
+    case: { title: "不会创建", packageTypes: [], isVisible: false },
+  });
+
+  assert.equal(result.code, "INVALID_UPLOAD_BATCH_ID");
+  assert.equal(loaded.collections.wine_packaging.length, 0);
+});
+
+await test("web create rejects arbitrary cloud files that are not source-bound variants", async () => {
+  const uid = "web-admin-1";
+  const source =
+    `cloud://env/wine-packaging/admin-web/${uid}/batch-1/source.jpg`;
+  const variants = buildVariantSet(source);
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+  });
+  const result = await loaded.main({
+    action: "createCase",
+    clientMutationId: "forged-cloud-file",
+    case: {
+      title: "伪造图片案例",
+      packageTypes: [],
+      ...variants,
+      galleryImages: ["cloud://env/private/another-business-file.jpg"],
+      coverImage: "cloud://env/private/another-business-file.jpg",
+      isVisible: false,
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "INVALID_IMAGE_VARIANTS");
+  assert.equal(loaded.collections.wine_packaging.length, 0);
+});
+
+await test("web create fails closed without a task id or transaction support", async () => {
+  const uid = "web-admin-1";
+  const base = {
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+  };
+  const noTask = loadCaseAdminFunction(base);
+  const missing = await noTask.main({
+    action: "createCase",
+    case: { title: "案例", packageTypes: [], isVisible: false },
+  });
+  assert.equal(missing.code, "MUTATION_ID_REQUIRED");
+
+  const noTransaction = loadCaseAdminFunction({ ...base, transactions: false });
+  const source =
+    `cloud://env/wine-packaging/admin-web/${uid}/batch-1/source.jpg`;
+  const failed = await noTransaction.main({
+    action: "createCase",
+    clientMutationId: "task-no-transaction",
+    case: {
+      title: "案例",
+      packageTypes: [],
+      ...buildVariantSet(source),
+      isVisible: false,
+    },
+  });
+  assert.equal(failed.code, "CASE_NUMBER_RESERVATION_FAILED");
+  assert.equal(noTransaction.collections.wine_packaging.length, 0);
+});
+
+await test("web update preserves unchanged legacy sources and rejects newly added foreign paths", async () => {
+  const uid = "web-admin-1";
+  const legacySource = "cloud://env/wine-packaging/mobile/legacy/source.jpg";
+  const baseCase = {
+    _id: "legacy",
+    title: "历史案例",
+    caseId: "case_001",
+    coverImage: "cloud://env/display.jpg",
+    galleryImages: ["cloud://env/display.jpg"],
+    sourceGalleryImages: [legacySource],
+    packageTypes: { values: ["礼盒"] },
+    isVisible: false,
+    version: 2,
+  };
+  const options = {
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    cases: [baseCase],
+  };
+  const preserved = loadCaseAdminFunction(options);
+  const saved = await preserved.main({
+    action: "updateCase",
+    id: "legacy",
+    expectedVersion: 2,
+    case: { title: "历史案例已编辑", sourceGalleryImages: [legacySource] },
+  });
+  assert.equal(saved.ok, true);
+
+  const rejected = loadCaseAdminFunction(options);
+  const bad = await rejected.main({
+    action: "updateCase",
+    id: "legacy",
+    expectedVersion: 2,
+    case: {
+      sourceGalleryImages: [
+        legacySource,
+        "cloud://env/wine-packaging/admin-web/another-admin/batch/source.jpg",
+      ],
+    },
+  });
+  assert.equal(bad.code, "INVALID_UPLOAD_PATH");
+});
+
+await test("trash cases cannot be edited or published outside restoreCases", async () => {
+  const item = {
+    _id: "trashed",
+    title: "回收案例",
+    coverImage: "cloud://env/case.jpg",
+    galleryImages: ["cloud://env/case.jpg"],
+    packageTypes: { values: ["礼盒"] },
+    deletedAt: "2026-07-30",
+    version: 2,
+  };
+  const { main } = loadCaseAdminFunction({ cases: [item] });
+  assert.equal((await main({
+    action: "updateCase",
+    id: "trashed",
+    case: { title: "不应保存" },
+  })).code, "CASE_IN_TRASH");
+  assert.equal((await main({
+    action: "setCaseVisibility",
+    id: "trashed",
+    isVisible: true,
+  })).code, "CASE_IN_TRASH");
+});
+
+await test("setCaseVisibility checks expectedVersion inside its transaction", async () => {
+  const uid = "web-admin-1";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
     cases: [{
-      _id: "case_doc_1",
-      sourceGalleryImages: ["cloud://env/source.jpg"],
-      galleryImages: ["cloud://env/display.jpg"],
-      galleryThumbnails: ["cloud://env/thumb.jpg"],
+      _id: "case_1",
+      title: "可上架案例",
       coverImage: "cloud://env/display.jpg",
-      coverThumbnail: "cloud://env/thumb.jpg",
+      galleryImages: ["cloud://env/display.jpg"],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
     }],
   });
-  const result = await main({ action: "deleteCase", id: "case_doc_1" });
+  const event = {
+    action: "setCaseVisibility",
+    id: "case_1",
+    isVisible: true,
+    expectedVersion: 1,
+  };
+  assert.equal((await loaded.main(event)).ok, true);
+  assert.equal((await loaded.main(event)).code, "VERSION_CONFLICT");
+  assert.equal(loaded.collections.wine_packaging[0].version, 2);
+});
+
+await test("homepage ordering allows one case in multiple sections and validates versions", async () => {
+  const uid = "web-admin-1";
+  const item = {
+    _id: "shared",
+    title: "共享首页案例",
+    caseId: "case_001",
+    coverImage: "cloud://env/display.jpg",
+    galleryImages: ["cloud://env/display.jpg"],
+    packageTypes: { values: ["礼盒"] },
+    isVisible: true,
+    version: 5,
+  };
+  const hiddenReserved = {
+    _id: "hidden_reserved",
+    title: "隐藏预留案例",
+    caseId: "case_002",
+    homeSections: { values: ["latest"] },
+    homeSectionOrder: { latest: 1 },
+    isVisible: false,
+    version: 7,
+  };
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    cases: [item, hiddenReserved],
+  });
+  const result = await loaded.main({
+    action: "setHomeSectionOrder",
+    orders: { banner: ["shared"], popular: ["shared"], latest: [] },
+    expectedVersions: { shared: 5, hidden_reserved: 7 },
+  });
   assert.equal(result.ok, true);
-  assert.equal(collections.catalog_meta[0].revision, 8);
-  const revisionIndex = calls.findIndex(
+  assert.deepEqual(loaded.collections.wine_packaging[0].homeSections, {
+    values: ["banner", "popular"],
+  });
+  assert.deepEqual(loaded.collections.wine_packaging[0].homeSectionOrder, {
+    banner: 1,
+    popular: 1,
+  });
+  assert.deepEqual(loaded.collections.wine_packaging[1].homeSections, { values: [] });
+  assert.deepEqual(loaded.collections.wine_packaging[1].homeSectionOrder, {});
+
+  const missingVersion = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    cases: [item, hiddenReserved],
+  });
+  assert.equal((await missingVersion.main({
+    action: "setHomeSectionOrder",
+    orders: { banner: ["shared"], popular: [], latest: [] },
+  })).code, "EXPECTED_VERSION_REQUIRED");
+});
+
+await test("homepage ordering rolls back an earlier chunk when more than fifty legacy memberships are cleared", async () => {
+  const uid = "web-admin-1";
+  const cases = Array.from({ length: 60 }, (_, index) => ({
+    _id: `home_${index}`,
+    caseId: `case_${String(index + 1).padStart(3, "0")}`,
+    title: `历史首页案例 ${index + 1}`,
+    coverImage: `cloud://env/display-${index}.jpg`,
+    galleryImages: [`cloud://env/display-${index}.jpg`],
+    packageTypes: { values: ["礼盒"] },
+    homeSections: { values: ["popular"] },
+    homeSectionOrder: index < 4 ? { popular: index + 1 } : {},
+    isVisible: true,
+    version: 1,
+  }));
+  const originalMemberships = Object.fromEntries(
+    cases.map((item) => [
+      item._id,
+      {
+        homeSections: item.homeSections,
+        homeSectionOrder: item.homeSectionOrder,
+      },
+    ])
+  );
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    cases,
+    catalogMeta: [{ _id: "current", revision: 8, nextCaseNumber: 61 }],
+    transactionFailureAt: 2,
+  });
+  const result = await loaded.main({
+    action: "setHomeSectionOrder",
+    orders: { banner: [], popular: [], latest: [] },
+    expectedVersions: Object.fromEntries(cases.map((item) => [item._id, 1])),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "TRANSACTION_FAILED");
+  assert.deepEqual(
+    Object.fromEntries(
+      loaded.collections.wine_packaging.map((item) => [
+        item._id,
+        {
+          homeSections: item.homeSections,
+          homeSectionOrder: item.homeSectionOrder,
+        },
+      ])
+    ),
+    originalMemberships
+  );
+  assert.equal(
+    loaded.calls.filter((call) => call.type === "transaction").length,
+    3
+  );
+  assert.equal(
+    loaded.calls.filter(
+      (call) => call.collectionName === "catalog_meta" && call.type === "update"
+    ).length,
+    0
+  );
+});
+
+await test("versioned desktop batch writes fail closed without transaction support", async () => {
+  const uid = "web-admin-1";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    transactions: false,
+    cases: [{
+      _id: "doc_1",
+      caseId: "case_001",
+      title: "事务保护",
+      coverImage: "cloud://env/wine-packaging/case-1.jpg",
+      packageTypes: { values: ["礼盒"] },
+      version: 1,
+      isVisible: false,
+    }],
+  });
+  const result = await loaded.main({
+    action: "batchPatchCases",
+    ids: ["doc_1"],
+    patch: { isPinned: true },
+    expectedVersions: { doc_1: 1 },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "TRANSACTION_UNAVAILABLE");
+  assert.equal(loaded.collections.wine_packaging[0].isPinned, undefined);
+});
+
+await test("reorderCases chunks 350 versioned updates and bumps revision only once", async () => {
+  const uid = "web-admin-1";
+  const cases = Array.from({ length: 350 }, (_, index) => ({
+    _id: `doc_${index}`,
+    caseId: `case_${String(index + 1).padStart(3, "0")}`,
+    sortOrder: 1,
+    version: 1,
+  }));
+  const orderedIds = cases.map((item) => item._id).reverse();
+  const expectedVersions = Object.fromEntries(cases.map((item) => [item._id, 1]));
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    cases,
+    catalogMeta: [{ _id: "current", revision: 8, nextCaseNumber: 351 }],
+  });
+  const result = await loaded.main({
+    action: "reorderCases",
+    orderedIds,
+    expectedVersions,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.updated, 350);
+  assert.deepEqual(
+    loaded.collections.wine_packaging
+      .slice()
+      .sort((left, right) => left.sortOrder - right.sortOrder)
+      .map((item) => item.sortOrder),
+    Array.from({ length: 350 }, (_, index) => index + 1)
+  );
+  const transactionCalls = loaded.calls.filter((call) => call.type === "transaction");
+  assert.equal(transactionCalls.length, 7);
+  const revisionUpdates = loaded.calls.filter(
     (call) => call.collectionName === "catalog_meta" && call.type === "update"
   );
-  const fileDeleteIndex = calls.findIndex((call) => call.type === "deleteFile");
-  assert.equal(revisionIndex >= 0, true);
-  assert.equal(fileDeleteIndex > revisionIndex, true);
+  assert.equal(revisionUpdates.length, 1);
 });
 
-await test("cleanup read failure does not turn a committed deletion into failure", async () => {
-  const { main, collections, deletedFiles } = loadCaseAdminFunction({
-    failReferenceReads: true,
-    cases: [{
-      _id: "case_doc_1",
-      sourceGalleryImages: ["cloud://env/source.jpg"],
-      galleryImages: ["cloud://env/display.jpg"],
-      coverImage: "cloud://env/display.jpg",
-    }],
+await test("reorderCases rolls back committed chunks after an unclassified transaction failure", async () => {
+  const uid = "web-admin-1";
+  const cases = Array.from({ length: 60 }, (_, index) => ({
+    _id: `doc_${index}`,
+    caseId: `case_${String(index + 1).padStart(3, "0")}`,
+    sortOrder: index + 1,
+    version: 1,
+  }));
+  const originalSortOrders = Object.fromEntries(
+    cases.map((item) => [item._id, item.sortOrder])
+  );
+  const orderedIds = cases.map((item) => item._id).reverse();
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    cases,
+    catalogMeta: [{ _id: "current", revision: 8, nextCaseNumber: 61 }],
+    transactionFailureAt: 2,
   });
-  const result = await main({ action: "deleteCase", id: "case_doc_1" });
-  assert.equal(result.ok, true);
-  assert.equal(collections.wine_packaging.length, 0);
-  assert.equal(collections.catalog_meta[0].revision, 8);
-  assert.deepEqual(deletedFiles, []);
+  const result = await loaded.main({
+    action: "reorderCases",
+    orderedIds,
+    expectedVersions: Object.fromEntries(cases.map((item) => [item._id, 1])),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "TRANSACTION_FAILED");
+  assert.deepEqual(
+    Object.fromEntries(
+      loaded.collections.wine_packaging.map((item) => [item._id, item.sortOrder])
+    ),
+    originalSortOrders
+  );
+  assert.equal(
+    loaded.calls.filter((call) => call.type === "transaction").length,
+    3
+  );
+  assert.equal(
+    loaded.calls.filter(
+      (call) => call.collectionName === "catalog_meta" && call.type === "update"
+    ).length,
+    0
+  );
 });

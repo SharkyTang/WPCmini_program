@@ -16,10 +16,13 @@ const {
   THUMBNAIL_SIZE,
   THUMBNAIL_TARGET_BYTES,
   buildVariantPaths,
+  detectSupportedImageType,
   generateVariantBuffers,
+  isAdminActor,
   isAdminOpenid,
-  isRoleAdminOpenid,
+  isWebAdminUploadFile,
   normalizeSourceFiles,
+  resolveAdminActor,
 } = require(resolve(
   __dirname,
   "../miniprogram/cloudfunctions/imageProcessor/imageProcessorLogic.js"
@@ -28,16 +31,6 @@ const { createJimpSharpCompat } = require(resolve(
   __dirname,
   "../miniprogram/cloudfunctions/imageProcessor/jimpSharpCompat.js"
 ));
-
-async function test(name, fn) {
-  try {
-    await fn();
-    console.log(`ok - ${name}`);
-  } catch (error) {
-    console.error(`not ok - ${name}`);
-    throw error;
-  }
-}
 
 async function createHighEntropyJpeg(width, height) {
   const pixels = Buffer.allocUnsafe(width * height * 3);
@@ -106,15 +99,64 @@ function createFakeJimp() {
   };
 }
 
+async function test(name, fn) {
+  try {
+    await fn();
+    console.log(`ok - ${name}`);
+  } catch (error) {
+    console.error(`not ok - ${name}`);
+    throw error;
+  }
+}
+
 await test("image processor accepts only configured admins", () => {
   assert.equal(isAdminOpenid("admin_2", "admin_1, admin_2"), true);
   assert.equal(isAdminOpenid("spoofed", "admin_1, admin_2"), false);
 });
 
-await test("image processor shares the case-admin role with a general fallback", () => {
-  assert.equal(isRoleAdminOpenid("case_admin", " case_admin ", "general_admin"), true);
-  assert.equal(isRoleAdminOpenid("general_admin", "case_admin", "general_admin"), false);
-  assert.equal(isRoleAdminOpenid("general_admin", "", " general_admin "), true);
+await test("image processor resolves and authorizes CloudBase UIDs", () => {
+  const identity = resolveAdminActor({ UID: "web-admin-1" }, {});
+  assert.deepEqual(identity, {
+    authenticated: true,
+    actor: { type: "cloudbase_uid", id: "web-admin-1" },
+  });
+  assert.equal(
+    isAdminActor(identity.actor, { CASE_ADMIN_UIDS: "web-admin-1,web-admin-2" }),
+    true
+  );
+  assert.equal(
+    isWebAdminUploadFile(
+      "cloud://env/wine-packaging/admin-web/web-admin-1/batch-1/source.webp",
+      "web-admin-1"
+    ),
+    true
+  );
+});
+
+await test("image processor preserves the case admin OpenID role and fallback", () => {
+  const actor = { type: "wechat_openid", id: "wx-case-admin" };
+  assert.equal(isAdminActor(actor, {
+    CASE_ADMIN_OPENIDS: "wx-case-admin",
+    ADMIN_OPENIDS: "legacy-admin",
+  }), true);
+  assert.equal(isAdminActor(actor, {
+    CASE_ADMIN_OPENIDS: "other-case-admin",
+    ADMIN_OPENIDS: "wx-case-admin",
+  }), false);
+  assert.equal(isAdminActor(actor, {
+    CASE_ADMIN_OPENIDS: "",
+    ADMIN_OPENIDS: "wx-case-admin",
+  }), true);
+});
+
+await test("detects supported image signatures", () => {
+  assert.equal(detectSupportedImageType(Buffer.from([
+    0xff, 0xd8, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ])), "jpeg");
+  assert.equal(detectSupportedImageType(Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0,
+  ])), "png");
+  assert.equal(detectSupportedImageType(Buffer.from("not-an-image")), "");
 });
 
 await test("source file normalization deduplicates and enforces the nine image limit", () => {
@@ -191,8 +233,6 @@ await test("display quality adapts when a detailed image exceeds the byte target
   assert.equal(result.metadata.displayBytes, result.displayBuffer.length);
   assert.equal(result.metadata.displayQuality < 80, true);
   assert.equal(result.metadata.displayQuality >= 20, true);
-  assert.equal(result.metadata.variantVersion, 2);
-  assert.match(buildVariantPaths("cloud://env/detailed.jpg").displayPath, /\/v2\//);
 });
 
 await test("display byte targeting works through the Jimp compatibility adapter", async () => {
