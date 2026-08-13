@@ -124,23 +124,56 @@ function firstImage(value) {
   return "";
 }
 
+const CASE_GALLERY_MAX = 9;
+
+function normalizeGalleryImages(value, fallbackImage = "") {
+  const seen = new Set();
+  const values = Array.isArray(value) ? value : value ? [value] : [];
+  return [...values, fallbackImage]
+    .map(firstImage)
+    .filter(Boolean)
+    .filter((fileID) => {
+      if (seen.has(fileID)) return false;
+      seen.add(fileID);
+      return true;
+    })
+    .slice(0, CASE_GALLERY_MAX);
+}
+
 function toNumber(value, fallback = 9999) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : fallback;
 }
 
 function normalizeCaseRecord(record = {}) {
+  const legacyCoverImage = firstImage(record.coverImage || record.image || record.images);
+  const galleryImages = normalizeGalleryImages(record.galleryImages, legacyCoverImage);
+  const normalizedSourceImages = normalizeGalleryImages(record.sourceGalleryImages);
+  const sourceGalleryImages = normalizedSourceImages.length
+    ? normalizedSourceImages
+    : galleryImages.slice();
+  const galleryThumbnails = normalizeGalleryImages(record.galleryThumbnails);
+  const galleryBanners = normalizeGalleryImages(record.galleryBanners);
   const normalized = {
     ...record,
     id: record._id || record.caseId || "",
     caseId: record.caseId || record._id || "",
     title: record.title || record.name || "未命名案例",
-    coverImage: firstImage(record.coverImage || record.image || record.images),
+    // 旧案例没有图库时以原封面作为唯一图片，保持完全兼容。
+    galleryImages,
+    sourceGalleryImages,
+    galleryThumbnails,
+    galleryBanners,
+    coverImage: galleryImages[0] || legacyCoverImage,
     coverThumbnail: firstImage(record.coverThumbnail),
+    coverBanner:
+      firstImage(record.coverBanner) || galleryBanners[0] || galleryImages[0] || legacyCoverImage,
+    imageVariantVersion: Number(record.imageVariantVersion) || 0,
     wineType: record.wineType || "白酒",
     priceLevel: normalizeDisplayValue("priceLevel", record.priceLevel || ""),
     notes: record.notes || record.description || "",
     isVisible: record.isVisible !== false,
+    isPinned: record.isPinned === true,
     sortOrder: toNumber(record.sortOrder ?? record.priority),
     crafts: [],
   };
@@ -182,7 +215,7 @@ function hasAnyValue(caseItem, field, selectedValues) {
   return selectedValues.includes(caseValue);
 }
 
-function filterCases(cases, { query = "", selectedFilters = {} } = {}) {
+function filterCases(cases, { query = "", selectedFilters = {}, pinnedFirst = false } = {}) {
   const keyword = query.trim().toLowerCase();
   return cases
     .filter((caseItem) => caseItem.isVisible)
@@ -192,7 +225,13 @@ function filterCases(cases, { query = "", selectedFilters = {} } = {}) {
         hasAnyValue(caseItem, field, selectedFilters[field])
       )
     )
-    .sort((a, b) => a.sortOrder - b.sortOrder);
+    .sort((a, b) => {
+      if (pinnedFirst && Boolean(a.isPinned) !== Boolean(b.isPinned)) {
+        return a.isPinned ? -1 : 1;
+      }
+      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+      return String(a.caseId || a.id).localeCompare(String(b.caseId || b.id));
+    });
 }
 
 function selectedFilterCount(selectedFilters = {}) {
@@ -206,7 +245,9 @@ function normalizeBannerRecord(record = {}) {
   return {
     id: record._id || record.caseId || record.title || "",
     title: record.title || "",
-    image: firstImage(record.image || record.coverImage),
+    image: firstImage(record.optimizedImage || record.image || record.coverImage),
+    optimizedImage: firstImage(record.optimizedImage),
+    imageVariantVersion: Number(record.imageVariantVersion) || 0,
     caseId: record.caseId || "",
     sortOrder: toNumber(record.sortOrder),
   };
@@ -219,12 +260,12 @@ function buildFallbackBanners(banners = [], cases = []) {
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
   const caseBanners = cases
-    .filter((caseItem) => caseItem.coverImage)
+    .filter((caseItem) => caseItem.coverBanner || caseItem.coverImage)
     .filter((caseItem) => (caseItem.homeSections || []).includes(HOME_SECTION_VALUES.BANNER))
     .map((caseItem) => ({
       id: caseItem.id,
       title: caseItem.title,
-      image: caseItem.coverImage,
+      image: caseItem.coverBanner || caseItem.coverImage,
       caseId: caseItem.caseId || caseItem.id,
       sortOrder: caseItem.sortOrder,
     }));
@@ -255,6 +296,7 @@ module.exports = {
   normalizeDisplayValue,
   normalizeDisplayValues,
   firstImage,
+  normalizeGalleryImages,
   normalizeCaseRecord,
   normalizeBannerRecord,
   filterCases,

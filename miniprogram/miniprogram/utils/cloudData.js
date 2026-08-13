@@ -113,10 +113,6 @@ function resolveImageUrl(fileID, tempUrlMap = {}) {
   return tempUrlMap[fileID] || (isCloudFileId(fileID) ? "" : fileID);
 }
 
-function isStableCaseId(id) {
-  return typeof id === "string" && id.indexOf("case_") === 0;
-}
-
 async function getTempUrlMap(fileIds, options = {}) {
   const uniqueFileIds = Array.from(new Set(fileIds.filter(isCloudFileId)));
   if (!uniqueFileIds.length) return {};
@@ -170,7 +166,17 @@ async function getTempUrlMap(fileIds, options = {}) {
 }
 
 function getCaseDisplayImage(item, options = {}) {
+  if (options.preferBanner === true) {
+    return item.coverBanner || item.coverThumbnail || item.coverImage;
+  }
   return options.preferThumbnail !== false ? item.coverThumbnail || item.coverImage : item.coverImage;
+}
+
+function getCaseGalleryImages(item = {}) {
+  const images = Array.isArray(item.galleryImages) && item.galleryImages.length
+    ? item.galleryImages
+    : [item.coverImage];
+  return Array.from(new Set(images.filter(Boolean)));
 }
 
 async function attachCaseImageUrls(cases, options = {}) {
@@ -183,6 +189,40 @@ async function attachCaseImageUrls(cases, options = {}) {
     imageLoadState: "ready",
     imageRetryCount: 0,
   }));
+}
+
+async function attachCaseDetailImageUrls(cases) {
+  const imageFileIds = cases.flatMap((item) => [
+    ...getCaseGalleryImages(item),
+    ...(item.galleryThumbnails || []),
+    item.coverThumbnail,
+  ].filter(Boolean));
+  const tempUrlMap = await getTempUrlMap(imageFileIds);
+  return cases.map((item) => {
+    const galleryImages = getCaseGalleryImages(item);
+    const galleryThumbnails =
+      Array.isArray(item.galleryThumbnails) ? item.galleryThumbnails : [];
+    const gallery = galleryImages.map((fileID, index) => {
+      const thumbnailFileID =
+        galleryThumbnails[index] || item.coverThumbnail || fileID;
+      const url = resolveImageUrl(fileID, tempUrlMap);
+      return {
+        fileID,
+        url,
+        thumbnailUrl: resolveImageUrl(thumbnailFileID, tempUrlMap) || url,
+        downloadUrl: url,
+      };
+    });
+    return {
+      ...item,
+      galleryImages,
+      sourceGalleryImages: item.sourceGalleryImages || galleryImages,
+      galleryThumbnails,
+      gallery,
+      coverImage: galleryImages[0] || item.coverImage,
+      coverImageUrl: gallery[0] ? gallery[0].url : "",
+    };
+  });
 }
 
 async function refreshImageUrl(fileID) {
@@ -235,41 +275,36 @@ function createCaseNotFoundError(id) {
 
 async function fetchCaseById(id) {
   const db = getDb();
-  if (isStableCaseId(id)) {
-    const response = await db
-      .collection(CASE_COLLECTION)
-      .where({ caseId: id })
-      .limit(1)
-      .get();
-    const record = (response.data || [])[0];
-    if (!record) {
-      throw createCaseNotFoundError(id);
-    }
-    const cases = await attachCaseImageUrls([normalizeCaseRecord(record)], { preferThumbnail: false });
-    return cases[0];
-  }
+  let record = null;
 
   try {
     const response = await db.collection(CASE_COLLECTION).doc(id).get();
-    const cases = await attachCaseImageUrls([normalizeCaseRecord(response.data)], { preferThumbnail: false });
-    return cases[0];
+    if (response && response.data && response.data.isVisible === true) {
+      record = response.data;
+    }
   } catch (error) {
+    // 兼容历史 caseId：doc 查询不存在时继续走索引查询。
+  }
+
+  if (!record) {
     const response = await db
       .collection(CASE_COLLECTION)
-      .where({ caseId: id })
+      .where({ caseId: id, isVisible: true })
       .limit(1)
       .get();
-    const record = (response.data || [])[0];
-    if (!record) throw createCaseNotFoundError(id);
-    const cases = await attachCaseImageUrls([normalizeCaseRecord(record)], { preferThumbnail: false });
-    return cases[0];
+    record = (response.data || []).find((item) => item && item.isVisible === true) || null;
   }
+
+  if (!record) throw createCaseNotFoundError(id);
+  const cases = await attachCaseDetailImageUrls([normalizeCaseRecord(record)]);
+  return cases[0];
 }
 
 module.exports = {
   CASE_COLLECTION,
   BANNER_COLLECTION,
   attachCaseImageUrls,
+  attachCaseDetailImageUrls,
   fetchVisibleCases,
   fetchVisibleBanners,
   fetchCaseById,

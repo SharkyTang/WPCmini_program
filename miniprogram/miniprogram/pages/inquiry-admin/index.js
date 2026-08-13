@@ -1,11 +1,11 @@
 const {
   INQUIRY_FILTER_OPTIONS,
-} = require("../../utils/inquiryAdminData");
+} = require("./utils/inquiryAdminData");
 const {
   DEFAULT_PAGE_SIZE,
   checkInquiryAdminAccess,
   fetchInquiryList,
-} = require("../../utils/inquiryAdminService");
+} = require("./utils/inquiryAdminService");
 
 Page({
   data: {

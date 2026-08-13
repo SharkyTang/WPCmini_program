@@ -25,17 +25,23 @@ const caseDataPath = resolve(__dirname, "../miniprogram/miniprogram/utils/caseDa
 const caseData = loadCommonJsModule(caseDataPath);
 const caseAdminDataPath = resolve(
   __dirname,
-  "../miniprogram/miniprogram/utils/caseAdminData.js"
+  "../miniprogram/miniprogram/pages/case-admin/utils/caseAdminData.js"
 );
 const caseAdminEditWxmlPath = resolve(
   __dirname,
   "../miniprogram/miniprogram/pages/case-admin/edit.wxml"
 );
+const caseAdminEditJsonPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/case-admin/edit.json"
+);
+const appJsonPath = resolve(__dirname, "../miniprogram/miniprogram/app.json");
 const caseAdminData = loadCommonJsModule(caseAdminDataPath, {
-  "./caseData": caseData,
+  "../../../utils/caseData": caseData,
 });
 
 const {
+  CASE_ADMIN_GALLERY_MAX,
   CASE_ADMIN_FORM_OPTIONS,
   buildCaseAdminPayload,
   buildCaseAdminOptionViews,
@@ -70,6 +76,8 @@ test("creates hidden empty case form defaults", () => {
   assert.deepEqual(plain(form.packageTypes), []);
   assert.deepEqual(plain(form.statuses), []);
   assert.deepEqual(plain(form.homeSections), []);
+  assert.deepEqual(plain(form.galleryImages), []);
+  assert.equal(form.isPinned, false);
 });
 
 test("exposes case admin form options by field key", () => {
@@ -96,14 +104,24 @@ test("exposes case admin form options by field key", () => {
 
 test("case admin edit form shows home section controls after visibility switch", () => {
   const wxml = readFileSync(caseAdminEditWxmlPath, "utf8");
+  const pageJson = JSON.parse(readFileSync(caseAdminEditJsonPath, "utf8"));
+  const appJson = JSON.parse(readFileSync(appJsonPath, "utf8"));
   const visibleIndex = wxml.indexOf("前台显示");
   const homeSectionIndex = wxml.indexOf("首页展示位置");
 
+  assert.equal(appJson.useExtendedLib.weui, true);
+  assert.equal(pageJson.usingComponents["mp-toptips"], "weui-miniprogram/toptips/toptips");
+  assert.equal(wxml.includes("<mp-toptips"), true);
+  assert.equal(wxml.includes("基础信息"), true);
+  assert.equal(wxml.includes("分类标签"), true);
+  assert.equal(wxml.includes("展示设置"), true);
   assert.notEqual(homeSectionIndex, -1);
   assert.equal(wxml.includes("首页轮播显示"), false);
   assert.ok(homeSectionIndex > visibleIndex);
   assert.equal(wxml.includes("optionViews.homeSections"), true);
   assert.equal(wxml.includes("不勾选仍可在分类页显示"), true);
+  assert.equal(wxml.includes("最多 {{galleryMax}} 张"), true);
+  assert.equal(wxml.includes("轮播最多 5 张、热门最多 4 个、最新最多 6 个"), true);
 });
 
 test("builds selected option view models for case admin form chips", () => {
@@ -180,6 +198,7 @@ test("normalizes case admin form and builds keywords", () => {
     title: "  青花礼盒  ",
     caseId: " case_new ",
     coverImage: "cloud://cloud1/file.jpg",
+    galleryImages: ["cloud://cloud1/file.jpg", "cloud://cloud1/detail.jpg"],
     wineType: "",
     packageTypes: ["礼盒", "礼盒", ""],
     styles: ["国风"],
@@ -190,6 +209,7 @@ test("normalizes case admin form and builds keywords", () => {
     sortOrder: "8",
     notes: "  备注  ",
     isVisible: true,
+    isPinned: true,
   });
   const keywords = buildCaseKeywords(form);
 
@@ -197,6 +217,9 @@ test("normalizes case admin form and builds keywords", () => {
   assert.equal(form.wineType, "白酒");
   assert.deepEqual(plain(form.packageTypes), ["礼盒"]);
   assert.equal(form.sortOrder, 8);
+  assert.deepEqual(plain(form.galleryImages), ["cloud://cloud1/file.jpg", "cloud://cloud1/detail.jpg"]);
+  assert.equal(form.coverImage, "cloud://cloud1/file.jpg");
+  assert.equal(form.isPinned, true);
   assert.deepEqual(plain(keywords.values), [
     "青花礼盒",
     "case_new",
@@ -207,6 +230,30 @@ test("normalizes case admin form and builds keywords", () => {
     "送礼",
     "最新产品",
   ]);
+});
+
+test("accepts nine case images and rejects the tenth", () => {
+  const galleryImages = Array.from(
+    { length: CASE_ADMIN_GALLERY_MAX },
+    (_, index) => `cloud://cloud1/${index}.jpg`
+  );
+  const accepted = validateCaseAdminForm({
+    title: "多图案例",
+    galleryImages,
+    packageTypes: ["礼盒"],
+    sortOrder: "",
+  }, { isCreate: true });
+  const rejected = validateCaseAdminForm({
+    title: "图片过多案例",
+    galleryImages: [...galleryImages, "cloud://cloud1/9.jpg"],
+    packageTypes: ["礼盒"],
+    sortOrder: "",
+  }, { isCreate: true });
+
+  assert.equal(CASE_ADMIN_GALLERY_MAX, 9);
+  assert.equal(accepted.valid, true);
+  assert.equal(rejected.valid, false);
+  assert.equal(rejected.message, "最多上传 9 张图片");
 });
 
 test("builds database payload with json value fields and leaves blank sort order for cloud default", () => {

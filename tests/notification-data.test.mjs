@@ -7,7 +7,7 @@ import vm from "node:vm";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const modulePath = resolve(
   __dirname,
-  "../miniprogram/miniprogram/utils/notificationData.js"
+  "../miniprogram/miniprogram/pages/notifications/utils/notificationData.js"
 );
 const source = readFileSync(modulePath, "utf8");
 const sandbox = {
@@ -20,10 +20,9 @@ vm.runInNewContext(source, sandbox, { filename: modulePath });
 
 const {
   getNotificationTypeLabel,
+  normalizeNotification,
   normalizeNotifications,
-  normalizeDisabledTypes,
-  isNotificationTypeDisabled,
-  toggleDisabledType,
+  normalizeSubscriptionState,
 } = sandbox.module.exports;
 
 function test(name, fn) {
@@ -43,7 +42,7 @@ function plain(value) {
 test("maps notification type labels", () => {
   assert.equal(getNotificationTypeLabel("version_update"), "版本更新");
   assert.equal(getNotificationTypeLabel("product_new"), "产品上新");
-  assert.equal(getNotificationTypeLabel("customer_reply"), "客服回复");
+  assert.equal(getNotificationTypeLabel("customer_reply"), "通知");
   assert.equal(getNotificationTypeLabel("unknown"), "通知");
 });
 
@@ -71,25 +70,66 @@ test("sorts notifications by created time descending", () => {
   ]);
 });
 
-test("normalizes disabled types and ignores invalid values", () => {
-  const disabled = normalizeDisabledTypes([
-    "product_new",
-    "",
-    "unknown",
-    "product_new",
-    "customer_reply",
-  ]);
+test("only linked product announcements expose a case entry", () => {
+  const versionItem = normalizeNotification({
+    _id: "version_1",
+    type: "version_update",
+    caseDocId: "legacy_case",
+    targetPage: "/pages/detail/index?id=legacy_case",
+  });
+  const productItem = normalizeNotification({
+    _id: "product_1",
+    type: "product_new",
+    caseDocId: "case_doc_1",
+    targetPage: "/pages/detail/index?id=case_doc_1",
+  });
 
-  assert.deepEqual(plain(disabled), ["product_new", "customer_reply"]);
+  assert.equal(versionItem.hasCaseLink, false);
+  assert.equal(productItem.hasCaseLink, true);
+  assert.equal(
+    productItem.targetPage,
+    "/pages/notification-cases/index?announcementId=product_1"
+  );
 });
 
-test("detects and toggles disabled notification types", () => {
-  assert.equal(isNotificationTypeDisabled(["product_new"], "product_new"), true);
-  assert.equal(isNotificationTypeDisabled(["product_new"], "version_update"), false);
+test("normalizes legacy delimited case ids into an ordered unique list", () => {
+  const productItem = normalizeNotification({
+    _id: "product_many",
+    type: "product_new",
+    caseDocId: "case_1，case_2; case_1 case_3",
+  });
+  assert.deepEqual(plain(productItem.caseDocIds), ["case_1", "case_2", "case_3"]);
+  assert.equal(productItem.caseDocId, "case_1");
+});
 
-  assert.deepEqual(plain(toggleDisabledType(["product_new"], "product_new")), []);
-  assert.deepEqual(plain(toggleDisabledType(["product_new"], "customer_reply")), [
-    "product_new",
-    "customer_reply",
-  ]);
+test("normalizes one-time subscription states for public notification types", () => {
+  const state = normalizeSubscriptionState({
+    product_new: {
+      templateId: "product_template",
+      status: "granted",
+    },
+    version_update: {
+      templateId: "version_template",
+      status: "unknown",
+    },
+    customer_reply: {
+      templateId: "legacy",
+      status: "granted",
+    },
+  });
+
+  assert.deepEqual(plain(state), {
+    version_update: {
+      type: "version_update",
+      templateId: "version_template",
+      status: "idle",
+      granted: false,
+    },
+    product_new: {
+      type: "product_new",
+      templateId: "product_template",
+      status: "granted",
+      granted: true,
+    },
+  });
 });

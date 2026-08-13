@@ -5,6 +5,8 @@ const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 50;
 const SEARCH_FETCH_LIMIT = 300;
 const IMAGE_URL_BATCH_SIZE = 50;
+const CASE_GALLERY_MAX = 9;
+const PINNED_CASE_LIMIT = 20;
 const CASE_ID_PREFIX = "case_";
 const CASE_ID_PAD_LENGTH = 3;
 const CASE_ID_SEQUENCE_MAX = 999999;
@@ -22,6 +24,7 @@ const HOME_DISPLAY_LABELS = {
 const VALID_CASE_ADMIN_ACTIONS = [
   "checkAccess",
   "listCases",
+  "listRecentCases",
   "getCase",
   "getCaseImageUrls",
   "getVisibleImageUrls",
@@ -30,6 +33,7 @@ const VALID_CASE_ADMIN_ACTIONS = [
   "updateCase",
   "setCaseVisibility",
   "deleteCase",
+  "cleanupUnreferencedFiles",
 ];
 
 const ALLOWED_CASE_FIELDS = [
@@ -37,6 +41,12 @@ const ALLOWED_CASE_FIELDS = [
   "caseId",
   "coverImage",
   "coverThumbnail",
+  "coverBanner",
+  "galleryImages",
+  "sourceGalleryImages",
+  "galleryThumbnails",
+  "galleryBanners",
+  "imageVariantVersion",
   "wineType",
   "packageTypes",
   "styles",
@@ -47,6 +57,7 @@ const ALLOWED_CASE_FIELDS = [
   "sortOrder",
   "notes",
   "isVisible",
+  "isPinned",
 ];
 
 function trimText(value) {
@@ -60,8 +71,16 @@ function getAdminOpenidsFromEnv(value) {
     .filter(Boolean);
 }
 
+function resolveAdminOpenidsEnv(roleValue, fallbackValue) {
+  return trimText(roleValue) || trimText(fallbackValue);
+}
+
 function isAdminOpenid(openid, envValue) {
   return Boolean(openid && getAdminOpenidsFromEnv(envValue).includes(openid));
+}
+
+function isRoleAdminOpenid(openid, roleValue, fallbackValue) {
+  return isAdminOpenid(openid, resolveAdminOpenidsEnv(roleValue, fallbackValue));
 }
 
 function normalizeValues(value) {
@@ -108,6 +127,21 @@ function normalizeCloudFileIds(value = [], limit = IMAGE_URL_BATCH_SIZE) {
     .slice(0, limit);
 }
 
+function normalizeGalleryImages(value) {
+  const rawImages = normalizeValues(value).map(trimText).filter(Boolean);
+  if (rawImages.length > CASE_GALLERY_MAX) {
+    return {
+      valid: false,
+      code: "TOO_MANY_IMAGES",
+      message: `一个案例最多上传 ${CASE_GALLERY_MAX} 张图片`,
+    };
+  }
+  if (rawImages.some((fileID) => !isCloudFileId(fileID))) {
+    return { valid: false, code: "INVALID_GALLERY_IMAGE", message: "封面图片需要先上传到云存储" };
+  }
+  return { valid: true, images: uniqueValues(rawImages) };
+}
+
 function normalizeSortOrder(value) {
   if (value === "" || value === null || value === undefined) return CASE_ADMIN_DEFAULT_SORT_ORDER;
   const numberValue = Number(value);
@@ -131,7 +165,7 @@ function normalizePageSize(value) {
 }
 
 function normalizeVisibilityFilter(value) {
-  return ["visible", "hidden"].includes(value) ? value : "all";
+  return ["visible", "hidden", "pinned"].includes(value) ? value : "all";
 }
 
 function normalizeHomepageDisplaySlot(value) {
@@ -140,6 +174,18 @@ function normalizeHomepageDisplaySlot(value) {
 
 function getHomepageDisplayLimit(slot) {
   return HOME_DISPLAY_LIMITS[normalizeHomepageDisplaySlot(slot)] || 0;
+}
+
+function getActiveHomepageSlots(item = {}) {
+  if (!item || item.isVisible !== true) return [];
+  return uniqueValues(normalizeValues(item.homeSections))
+    .map(normalizeHomepageDisplaySlot)
+    .filter(Boolean);
+}
+
+function getActivatedHomepageSlots(existing, nextItem = {}) {
+  const previousSlots = new Set(getActiveHomepageSlots(existing));
+  return getActiveHomepageSlots(nextItem).filter((slot) => !previousSlots.has(slot));
 }
 
 function generateCaseId(now = Date.now()) {
@@ -216,18 +262,84 @@ function sanitizeCasePayload(input = {}, options = {}) {
     if (!data.title) return { valid: false, code: "INVALID_TITLE", message: "请填写案例标题" };
   }
 
-  if (isCreate || Object.prototype.hasOwnProperty.call(picked, "coverImage")) {
-    data.coverImage = trimText(picked.coverImage);
-    if (!data.coverImage) return { valid: false, code: "INVALID_IMAGE", message: "请上传封面图片" };
-    if (!isCloudFileId(data.coverImage)) {
-      return { valid: false, code: "INVALID_IMAGE", message: "封面图片需要先上传到云存储" };
+  const hasGalleryInput = Object.prototype.hasOwnProperty.call(picked, "galleryImages");
+  const hasCoverInput = Object.prototype.hasOwnProperty.call(picked, "coverImage");
+  if (isCreate || hasGalleryInput || hasCoverInput) {
+    const galleryResult = normalizeGalleryImages(
+      hasGalleryInput ? picked.galleryImages : [picked.coverImage]
+    );
+    if (!galleryResult.valid) return galleryResult;
+    if (!galleryResult.images.length) {
+      return { valid: false, code: "INVALID_IMAGE", message: "请上传封面图片" };
     }
+    data.galleryImages = galleryResult.images;
+    // 服务端以首图为准，避免客户端传入的封面与图库顺序不一致。
+    data.coverImage = galleryResult.images[0];
   }
   if (Object.prototype.hasOwnProperty.call(picked, "coverThumbnail")) {
     data.coverThumbnail = trimText(picked.coverThumbnail);
     if (data.coverThumbnail && !isCloudFileId(data.coverThumbnail)) {
       return { valid: false, code: "INVALID_THUMBNAIL", message: "缩略图需要先上传到云存储" };
     }
+  }
+  if (Object.prototype.hasOwnProperty.call(picked, "coverBanner")) {
+    data.coverBanner = trimText(picked.coverBanner);
+    if (data.coverBanner && !isCloudFileId(data.coverBanner)) {
+      return { valid: false, code: "INVALID_BANNER", message: "Banner 图片需要先上传到云存储" };
+    }
+  }
+  for (const field of ["sourceGalleryImages", "galleryThumbnails", "galleryBanners"]) {
+    if (Object.prototype.hasOwnProperty.call(picked, field)) {
+      const normalizedImages = normalizeGalleryImages(picked[field]);
+      if (!normalizedImages.valid) return normalizedImages;
+      data[field] = normalizedImages.images;
+    }
+  }
+  if (data.galleryImages && data.sourceGalleryImages && data.sourceGalleryImages.length) {
+    if (data.sourceGalleryImages.length !== data.galleryImages.length) {
+      return {
+        valid: false,
+        code: "INCOMPLETE_IMAGE_VARIANTS",
+        message: "原图与展示图数量不一致，请重新处理图片",
+      };
+    }
+  }
+  if (data.galleryImages && data.galleryThumbnails && data.galleryThumbnails.length) {
+    if (data.galleryThumbnails.length !== data.galleryImages.length) {
+      return {
+        valid: false,
+        code: "INCOMPLETE_IMAGE_VARIANTS",
+        message: "缩略图与展示图数量不一致，请重新处理图片",
+      };
+    }
+    const aliasedThumbnail = data.galleryThumbnails.some((fileID, index) => {
+      return (
+        fileID === data.galleryImages[index] ||
+        (data.sourceGalleryImages && fileID === data.sourceGalleryImages[index])
+      );
+    });
+    if (aliasedThumbnail) {
+      return {
+        valid: false,
+        code: "INVALID_IMAGE_VARIANTS",
+        message: "原图不能作为缩略图，请重新处理图片",
+      };
+    }
+    data.coverThumbnail = data.galleryThumbnails[0];
+  }
+  if (data.galleryImages && data.galleryBanners && data.galleryBanners.length) {
+    if (data.galleryBanners.length !== data.galleryImages.length) {
+      return {
+        valid: false,
+        code: "INCOMPLETE_IMAGE_VARIANTS",
+        message: "Banner 与展示图数量不一致，请重新处理图片",
+      };
+    }
+    data.coverBanner = data.galleryBanners[0];
+  }
+  if (Object.prototype.hasOwnProperty.call(picked, "imageVariantVersion")) {
+    const version = Number(picked.imageVariantVersion);
+    data.imageVariantVersion = Number.isInteger(version) && version >= 0 ? version : 0;
   }
 
   if (isCreate || Object.prototype.hasOwnProperty.call(picked, "packageTypes")) {
@@ -286,6 +398,9 @@ function sanitizeCasePayload(input = {}, options = {}) {
   if (Object.prototype.hasOwnProperty.call(picked, "isVisible") || isCreate) {
     data.isVisible = picked.isVisible === true;
   }
+  if (Object.prototype.hasOwnProperty.call(picked, "isPinned") || isCreate) {
+    data.isPinned = picked.isPinned === true;
+  }
 
   data.keywords = buildCaseKeywords(data);
   return { valid: true, data };
@@ -315,6 +430,7 @@ function filterCaseItems(items = [], options = {}) {
   return items.filter((item) => {
     if (visibility === "visible" && item.isVisible === false) return false;
     if (visibility === "hidden" && item.isVisible !== false) return false;
+    if (visibility === "pinned" && item.isPinned !== true) return false;
     return !keyword || buildCaseSearchText(item).includes(keyword);
   });
 }
@@ -330,7 +446,10 @@ function sortBySortOrder(items = [], direction = "asc") {
 function buildHomepageDisplayItem(item = {}, options = {}) {
   const slot = normalizeHomepageDisplaySlot(options.slot);
   const source = options.source === "banner" ? "banner" : "case";
-  const image = source === "banner" ? trimText(item.image) : trimText(item.coverImage);
+  const image =
+    source === "banner"
+      ? trimText(item.optimizedImage || item.image)
+      : trimText(item.coverBanner || item.coverImage);
   return {
     id: item._id || item.caseId || image,
     caseId: trimText(item.caseId),
@@ -403,7 +522,8 @@ function buildHomepageDisplayItems(cases = [], banners = [], options = {}) {
     );
   }
 
-  const displayedItems = items.slice(0, limit).map((item, index) => {
+  const limitedItems = options.applyLimit === false ? items : items.slice(0, limit);
+  const displayedItems = limitedItems.map((item, index) => {
     const displayOrder = index + 1;
     return {
       ...item,
@@ -414,16 +534,59 @@ function buildHomepageDisplayItems(cases = [], banners = [], options = {}) {
   return filterHomepageDisplayItems(displayedItems, options.keyword);
 }
 
+function validateHomepageDisplayCapacity(cases = [], banners = [], candidate = {}, options = {}) {
+  const excludedId = trimText(options.excludedId);
+  const candidateId = trimText(candidate._id || candidate.id);
+  const slots = uniqueValues(
+    options.slots === undefined ? getActiveHomepageSlots(candidate) : normalizeValues(options.slots)
+  )
+    .map(normalizeHomepageDisplaySlot)
+    .filter(Boolean);
+  if (!slots.length) return { valid: true };
+
+  const nextCases = cases
+    .filter((item) => {
+      const itemId = trimText(item && (item._id || item.id));
+      return !excludedId || itemId !== excludedId;
+    })
+    .concat(candidate && candidate.isVisible === true
+      ? [{ ...candidate, _id: candidateId || excludedId || candidate._id }]
+      : []);
+
+  for (const slot of slots) {
+    const limit = getHomepageDisplayLimit(slot);
+    const items = buildHomepageDisplayItems(nextCases, banners, {
+      slot,
+      applyLimit: false,
+    });
+    if (items.length > limit) {
+      const label = HOME_DISPLAY_LABELS[slot];
+      const unit = slot === "banner" ? "张" : "个";
+      return {
+        valid: false,
+        code: "HOME_DISPLAY_LIMIT_REACHED",
+        slot,
+        limit,
+        message: `${label}最多展示 ${limit} ${unit}，请先取消其他案例${slot === "banner" ? "或轮播图" : ""}的${label}显示`,
+      };
+    }
+  }
+
+  return { valid: true };
+}
+
 module.exports = {
   ALLOWED_CASE_FIELDS,
   BANNER_COLLECTION,
   CASE_ADMIN_DEFAULT_SORT_ORDER,
   CASE_COLLECTION,
+  CASE_GALLERY_MAX,
   IMAGE_URL_BATCH_SIZE,
   HOME_DISPLAY_LABELS,
   HOME_DISPLAY_LIMITS,
   PAGE_SIZE_DEFAULT,
   PAGE_SIZE_MAX,
+  PINNED_CASE_LIMIT,
   SEARCH_FETCH_LIMIT,
   VALID_CASE_ADMIN_ACTIONS,
   buildCaseKeywords,
@@ -434,16 +597,22 @@ module.exports = {
   filterHomepageDisplayItems,
   generateCaseId,
   generateSequentialCaseId,
+  getActivatedHomepageSlots,
+  getActiveHomepageSlots,
   getAdminOpenidsFromEnv,
   getCaseIdNumber,
   isAdminOpenid,
+  isRoleAdminOpenid,
   isCloudFileId,
   normalizeCloudFileIds,
+  normalizeGalleryImages,
   normalizePage,
   normalizePageSize,
   normalizeHomepageDisplaySlot,
   normalizeVisibilityFilter,
   pickAllowedCaseFields,
   sanitizeCasePayload,
+  resolveAdminOpenidsEnv,
   trimText,
+  validateHomepageDisplayCapacity,
 };

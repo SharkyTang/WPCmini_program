@@ -5,7 +5,7 @@
       <view class="page-subtitle">这里保存你最近看过的酒包装案例</view>
     </view>
     <view
-      wx:if="{{historyCards.length}}"
+      wx:if="{{accessState === 'ready' && historyCards.length}}"
       class="manage-button"
       bindtap="toggleManageMode"
     >
@@ -13,24 +13,20 @@
     </view>
   </view>
 
-  <view wx:if="{{profileBlocked}}" class="state-card">
-    <view class="state-title">完善个人资料后可查看浏览记录</view>
-    <view class="state-copy">资料会用于保存你的浏览记录，并在换设备后继续查看。</view>
-    <view class="state-button" bindtap="ensureProfileAndLoad">去完善资料</view>
+  <view wx:if="{{accessState === 'profile_required'}}" class="state-shell">
+    <mp-msg type="info" title="完善个人资料" desc="完善资料后可安全保存并跨设备查看浏览记录" />
+    <view class="state-button" bindtap="requestProfileAccess">去完善资料</view>
   </view>
 
-  <view wx:elif="{{loading}}" class="state-card">
-    <view class="state-title">正在读取浏览记录...</view>
+  <block wx:elif="{{accessState === 'checking' || loading}}"></block>
+
+  <view wx:elif="{{accessState === 'error'}}" class="state-shell state-error">
+    <mp-msg type="warn" title="浏览记录读取失败" desc="{{errorMessage}}" />
+    <view class="state-button" bindtap="ensureProfileAndLoad">重新验证</view>
   </view>
 
-  <view wx:elif="{{errorMessage}}" class="state-card state-error">
-    <view class="state-title">{{errorMessage}}</view>
-    <view class="state-button" bindtap="loadHistory">重新读取</view>
-  </view>
-
-  <view wx:elif="{{!historyCards.length}}" class="state-card">
-    <view class="state-title">还没有浏览记录</view>
-    <view class="state-copy">进入案例详情页后，浏览过的案例会出现在这里。</view>
+  <view wx:elif="{{accessState === 'ready' && !loading && !historyCards.length}}" class="state-shell">
+    <mp-msg type="info" title="还没有浏览记录" desc="进入案例详情页后，浏览过的案例会出现在这里" />
     <view class="state-button" bindtap="goToCategory">去看案例</view>
   </view>
 
@@ -79,4 +75,15 @@
       </view>
     </view>
   </view>
+
+  <mp-dialog
+    ext-class="brand-dialog"
+    show="{{confirmDialog.show}}"
+    title="{{confirmDialog.title}}"
+    buttons="{{confirmDialog.buttons}}"
+    bindbuttontap="handleConfirmDialogTap"
+    bindclose="closeConfirmDialog"
+  >
+    <view class="dialog-content">{{confirmDialog.content}}</view>
+  </mp-dialog>
 </view>

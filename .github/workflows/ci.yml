@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies from lockfile
+        run: npm ci
+
+      - name: Check changed-file whitespace
+        run: git diff --check HEAD^ HEAD
+
+      - name: Check JavaScript syntax
+        run: >-
+          find miniprogram/miniprogram miniprogram/cloudfunctions scripts tests
+          -type f \( -name '*.js' -o -name '*.mjs' \)
+          -not -path '*/node_modules/*' -print0
+          | xargs -0 -n 1 node --check
+
+      - name: Run full regression suite
+        run: npm test
+
+      - name: Verify package-size and release configuration budgets
+        run: node tests/performance-config.test.mjs

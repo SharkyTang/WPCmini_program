@@ -1,0 +1,129 @@
+<view class="page">
+  <view class="hero">
+    <view class="hero-copy">
+      <view class="page-title">联系我们</view>
+      <view class="page-subtitle">欢迎到店沟通酒包装设计与定制需求</view>
+    </view>
+    <button
+      wx:if="{{isAdmin}}"
+      class="admin-edit-button"
+      bindtap="openContactAdmin"
+    >
+      编辑联系信息
+    </button>
+  </view>
+
+  <view class="section store-section">
+    <view class="section-heading">
+      <view>
+        <view class="section-title">门店实景</view>
+        <view class="section-subtitle">左右滑动查看更多，点击图片可放大</view>
+      </view>
+      <view wx:if="{{storeImages.length}}" class="image-count">
+        {{activeStoreImageIndex + 1}} / {{storeImages.length}}
+      </view>
+    </view>
+
+    <swiper
+      wx:if="{{storeImages.length}}"
+      class="store-swiper"
+      current="{{activeStoreImageIndex}}"
+      circular="{{storeImages.length > 1}}"
+      indicator-dots="{{storeImages.length > 1}}"
+      indicator-color="rgba(255,255,255,0.55)"
+      indicator-active-color="#ffffff"
+      bindchange="onStoreImageChange"
+    >
+      <swiper-item wx:for="{{storeImages}}" wx:key="*this">
+        <image
+          class="store-image"
+          src="{{item}}"
+          mode="aspectFill"
+          lazy-load="{{index > 0}}"
+          fade-in="{{true}}"
+          data-index="{{index}}"
+          bindtap="previewStoreImage"
+        />
+      </swiper-item>
+    </swiper>
+    <view wx:elif="{{storeImagesLoading}}" class="store-image-state">
+      门店图片加载中…
+    </view>
+    <view wx:elif="{{storeImagesError}}" class="store-image-state store-image-state-error">
+      门店图片暂时无法加载，请稍后重试
+    </view>
+    <view wx:else class="store-image-state">
+      门店图片暂未配置
+    </view>
+  </view>
+
+  <view class="section address-section">
+    <view class="section-title">门店地址</view>
+    <view class="address-row">
+      <view class="location-mark">
+        <view class="location-dot"></view>
+      </view>
+      <view class="address-copy">
+        <view class="store-name">{{storeName}}</view>
+        <view class="store-address">{{address}}</view>
+      </view>
+    </view>
+    <view class="map-button" bindtap="openStoreLocation">
+      <view class="map-button-label">打开地图导航</view>
+    </view>
+  </view>
+
+  <view class="section phone-section">
+    <view class="section-title">联系电话</view>
+    <view wx:if="{{phoneNumbers.length}}" class="phone-list">
+      <view
+        wx:for="{{phoneNumbers}}"
+        wx:key="dialNumber"
+        class="phone-row"
+      >
+        <view class="phone-copy">
+          <view class="phone-label">联系电话 {{index + 1}}</view>
+          <view class="phone-number">{{item.displayNumber}}</view>
+        </view>
+        <button
+          class="phone-call-button"
+          data-index="{{index}}"
+          bindtap="callPhone"
+        >
+          一键拨打
+        </button>
+      </view>
+    </view>
+    <view wx:else class="phone-empty">联系电话暂未配置</view>
+  </view>
+
+  <view class="section qr-section">
+    <view class="section-title">添加微信咨询</view>
+    <view class="section-subtitle qr-tip">点击放大，或长按识别二维码</view>
+    <view wx:if="{{wechatQrImages.length}}" class="qr-image-list">
+      <view
+        wx:for="{{wechatQrImages}}"
+        wx:key="*this"
+        class="qr-image-shell"
+      >
+        <!-- 原生 loading 需等待图片事件；此处不能开启懒加载，避免首屏外二维码无法完成。 -->
+        <image
+          class="qr-image {{wechatQrLoading ? 'qr-image-loading' : ''}}"
+          src="{{item}}"
+          mode="widthFix"
+          fade-in="{{true}}"
+          show-menu-by-longpress="{{true}}"
+          data-index="{{index}}"
+          data-request-id="{{wechatQrRequestId}}"
+          bindload="onWechatQrImageLoad"
+          binderror="onWechatQrImageError"
+          bindtap="previewWechatQr"
+        />
+      </view>
+    </view>
+    <view wx:elif="{{wechatQrError}}" class="qr-image-state qr-image-state-error">
+      微信二维码暂时无法加载，请稍后重试
+    </view>
+    <view wx:elif="{{!wechatQrLoading}}" class="qr-image-state">微信二维码暂未配置</view>
+  </view>
+</view>

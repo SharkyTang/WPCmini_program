@@ -3,7 +3,13 @@ const {
   fetchHistoryCases,
   removeHistoryRecords,
 } = require("../../utils/historyService");
-const { ensureProfileIdentity, getCachedOpenId } = require("../../utils/userService");
+const {
+  checkLibraryAccess,
+  reportLibraryEvent,
+  requestLibraryAccess,
+  resumePendingLibraryAction,
+} = require("../../utils/libraryAccessService");
+const { resumePendingProfileAction } = require("../../utils/userService");
 
 function buildHistoryCards(items, selectedIds = []) {
   const selectedMap = selectedIds.reduce((map, id) => {
@@ -28,72 +34,181 @@ function getAllHistoryIds(cards) {
   return (cards || []).map((card) => card.historyId).filter(Boolean);
 }
 
+function beginNativeLoading(page) {
+  const epoch = page._nativeLoadingEpoch || 0;
+  page._nativeLoadingCount = (page._nativeLoadingCount || 0) + 1;
+  if (page._nativeLoadingCount === 1) {
+    page._nativeLoadingVisible = true;
+    wx.showLoading({
+      title: "加载中",
+      mask: true,
+    });
+  }
+  return epoch;
+}
+
+function endNativeLoading(page, epoch) {
+  if (epoch !== (page._nativeLoadingEpoch || 0)) return;
+  page._nativeLoadingCount = Math.max((page._nativeLoadingCount || 0) - 1, 0);
+  if (page._nativeLoadingCount || !page._nativeLoadingVisible) return;
+  page._nativeLoadingVisible = false;
+  wx.hideLoading();
+}
+
+function resetNativeLoading(page) {
+  page._nativeLoadingEpoch = (page._nativeLoadingEpoch || 0) + 1;
+  page._nativeLoadingCount = 0;
+  if (!page._nativeLoadingVisible) return;
+  page._nativeLoadingVisible = false;
+  wx.hideLoading();
+}
+
 Page({
   data: {
     loading: false,
     errorMessage: "",
-    profileBlocked: false,
+    accessState: "checking",
     manageMode: false,
     selectedCount: 0,
     selectedHistoryIds: [],
     historyCards: [],
+    confirmDialog: {
+      show: false,
+      title: "",
+      content: "",
+      action: "",
+      ids: [],
+      buttons: [{ text: "取消" }, { text: "确认" }],
+    },
   },
 
-  onShow() {
-    this.ensureProfileAndLoad();
+  async onShow() {
+    const loadingEpoch = beginNativeLoading(this);
+    try {
+      const resumed = await resumePendingLibraryAction("profile_history");
+      if (resumed === true || (resumed && resumed.resumed)) return;
+      const legacyResumed = await resumePendingProfileAction();
+      if (legacyResumed === true || (legacyResumed && legacyResumed.resumed)) return;
+      return await this.ensureProfileAndLoad();
+    } finally {
+      endNativeLoading(this, loadingEpoch);
+    }
+  },
+
+  onUnload() {
+    resetNativeLoading(this);
   },
 
   async ensureProfileAndLoad() {
-    this.setData({
-      loading: true,
-      errorMessage: "",
-      profileBlocked: false,
-    });
-    const identity = await ensureProfileIdentity();
-    if (!identity.ready) {
+    const loadingEpoch = beginNativeLoading(this);
+    try {
       this.setData({
-        loading: false,
-        profileBlocked: !identity.error,
-        manageMode: false,
-        selectedCount: 0,
-        selectedHistoryIds: [],
-        historyCards: [],
+        loading: true,
+        errorMessage: "",
+        accessState: "checking",
       });
-      return;
+
+      const access = await checkLibraryAccess("history");
+      if (access.status === "error") {
+        this.setData({
+          loading: false,
+          accessState: "error",
+          errorMessage: "暂时无法验证资料，请检查网络后重试。",
+          manageMode: false,
+          selectedCount: 0,
+          selectedHistoryIds: [],
+        });
+        return false;
+      }
+
+      if (access.status === "profile_required") {
+        this.setData({
+          loading: false,
+          accessState: "profile_required",
+          manageMode: false,
+          selectedCount: 0,
+          selectedHistoryIds: [],
+          historyCards: [],
+        });
+        return false;
+      }
+
+      return await this.loadHistory();
+    } finally {
+      endNativeLoading(this, loadingEpoch);
     }
-    this.loadHistory();
   },
 
   async loadHistory() {
-    if (!getCachedOpenId()) {
-      this.setData({
-        loading: false,
-        profileBlocked: true,
-        historyCards: [],
-      });
-      return;
-    }
-
+    const loadingEpoch = beginNativeLoading(this);
+    const startedAt = Date.now();
     this.setData({
       loading: true,
       errorMessage: "",
-      profileBlocked: false,
+      accessState: "ready",
     });
 
     try {
       const items = await fetchHistoryCases();
       this.setData({
         loading: false,
+        accessState: "ready",
         manageMode: false,
         selectedCount: 0,
         selectedHistoryIds: [],
         historyCards: buildHistoryCards(items),
       });
+      reportLibraryEvent("library_load_result", {
+        kind: "history",
+        source: "profile_history",
+        result: "success",
+        durationMs: Date.now() - startedAt,
+      });
+      return true;
     } catch (error) {
       console.error("浏览记录读取失败", error);
       this.setData({
         loading: false,
+        accessState: "error",
         errorMessage: "暂时读取不到浏览记录，请稍后重试。",
+      });
+      reportLibraryEvent("library_load_result", {
+        kind: "history",
+        source: "profile_history",
+        result: "error",
+        durationMs: Date.now() - startedAt,
+      });
+      return false;
+    } finally {
+      endNativeLoading(this, loadingEpoch);
+    }
+  },
+
+  async requestProfileAccess() {
+    if (this.profileAccessPending) return;
+    this.profileAccessPending = true;
+    let result;
+    try {
+      result = await requestLibraryAccess({
+        kind: "history",
+        source: "profile_history",
+        resume: () => this.ensureProfileAndLoad(),
+      });
+    } catch (error) {
+      console.error("历史资料访问请求失败", error);
+      result = { status: "error", stage: "access_check" };
+    } finally {
+      this.profileAccessPending = false;
+    }
+    if (result && result.status === "ready") {
+      return this.loadHistory();
+    }
+    if (result && result.status === "error") {
+      wx.showToast({
+        title: result.stage === "navigation"
+          ? "暂时无法打开资料页，请重试"
+          : "暂时无法验证资料，请重试",
+        icon: "none",
       });
     }
   },
@@ -162,7 +277,7 @@ Page({
     this.updateSelectedHistoryIds(shouldClear ? [] : allIds);
   },
 
-  async deleteSelectedHistory() {
+  deleteSelectedHistory() {
     const ids = this.data.selectedHistoryIds;
     if (!ids.length) {
       wx.showToast({
@@ -172,55 +287,86 @@ Page({
       return;
     }
 
-    wx.showModal({
+    this.openConfirmDialog({
       title: "删除浏览记录",
       content: `删除选中的 ${ids.length} 条浏览记录？`,
       confirmText: "删除",
-      confirmColor: "#241d16",
-      success: async (response) => {
-        if (!response.confirm) return;
-        await this.removeHistoryIds(ids);
+      action: "selected",
+      ids,
+    });
+  },
+
+  clearAllHistory() {
+    if (!this.data.historyCards.length) return;
+
+    this.openConfirmDialog({
+      title: "清空浏览记录",
+      content: "清空全部浏览记录？清空后的浏览记录将不会恢复。",
+      confirmText: "清空",
+      action: "all",
+    });
+  },
+
+  openConfirmDialog(options = {}) {
+    this.setData({
+      confirmDialog: {
+        show: true,
+        title: options.title || "",
+        content: options.content || "",
+        action: options.action || "",
+        ids: (options.ids || []).slice(),
+        buttons: [
+          { text: "取消" },
+          { text: options.confirmText || "确认", extClass: "dialog-button-danger" },
+        ],
       },
     });
   },
 
-  async clearAllHistory() {
-    if (!this.data.historyCards.length) return;
-
-    wx.showModal({
-      title: "清空浏览记录",
-      content: "清空全部浏览记录？清空后的浏览记录将不会恢复。",
-      confirmText: "清空",
-      confirmColor: "#241d16",
-      success: async (response) => {
-        if (!response.confirm) return;
-
-        wx.showLoading({
-          title: "正在清空",
-        });
-        try {
-          await clearHistory();
-          wx.hideLoading();
-          wx.showToast({
-            title: "已清空",
-            icon: "success",
-          });
-          this.setData({
-            manageMode: false,
-            selectedCount: 0,
-            selectedHistoryIds: [],
-            historyCards: [],
-          });
-        } catch (error) {
-          console.error("清空浏览记录失败", error);
-          wx.hideLoading();
-          wx.showToast({
-            title: "清空失败，请稍后重试",
-            icon: "none",
-          });
-        }
-      },
+  closeConfirmDialog() {
+    this.setData({
+      "confirmDialog.show": false,
     });
+  },
+
+  async handleConfirmDialogTap(event) {
+    const index = event.detail && event.detail.index;
+    const dialog = this.data.confirmDialog;
+    this.closeConfirmDialog();
+    if (index !== 1) return;
+
+    if (dialog.action === "all") {
+      await this.performClearAllHistory();
+      return;
+    }
+    if (dialog.action === "selected") {
+      await this.removeHistoryIds(dialog.ids);
+    }
+  },
+
+  async performClearAllHistory() {
+    wx.showLoading({
+      title: "正在清空",
+    });
+    try {
+      await clearHistory();
+      wx.hideLoading();
+      const refreshed = await this.loadHistory();
+      if (!refreshed || this.data.historyCards.length) {
+        throw new Error("浏览记录仍存在，清空结果未生效");
+      }
+      wx.showToast({
+        title: "已清空",
+        icon: "success",
+      });
+    } catch (error) {
+      console.error("清空浏览记录失败", error);
+      wx.hideLoading();
+      wx.showToast({
+        title: "清空失败，请稍后重试",
+        icon: "none",
+      });
+    }
   },
 
   async removeHistoryIds(ids) {
@@ -230,11 +376,18 @@ Page({
     try {
       await removeHistoryRecords(ids);
       wx.hideLoading();
+      const refreshed = await this.loadHistory();
+      const requestedIds = new Set((ids || []).filter(Boolean));
+      const hasRemainingHistory = this.data.historyCards.some((card) => (
+        requestedIds.has(card.historyId)
+      ));
+      if (!refreshed || hasRemainingHistory) {
+        throw new Error("浏览记录仍存在，删除结果未生效");
+      }
       wx.showToast({
         title: "已删除",
         icon: "success",
       });
-      this.loadHistory();
     } catch (error) {
       console.error("删除浏览记录失败", error);
       wx.hideLoading();

@@ -2,12 +2,18 @@ const {
   CONTENT_MAX_LENGTH,
   FEEDBACK_TYPES,
   validateFeedbackDraft,
-} = require("../../utils/feedbackData");
-const { submitFeedback } = require("../../utils/feedbackService");
+} = require("./utils/feedbackData");
+const { submitFeedback } = require("./utils/feedbackService");
 
 const SOURCE_PAGE_MAP = {
   profile: "pages/profile/index",
 };
+
+const CONTACT_TYPE_OPTIONS = [
+  { value: "wechat", label: "微信号", placeholder: "请输入微信号" },
+  { value: "phone", label: "手机号", placeholder: "请输入手机号" },
+  { value: "email", label: "邮箱", placeholder: "请输入邮箱" },
+];
 
 Page({
   data: {
@@ -15,9 +21,19 @@ Page({
     selectedType: "",
     content: "",
     contact: "",
+    contactType: CONTACT_TYPE_OPTIONS[0].value,
+    contactTypes: CONTACT_TYPE_OPTIONS.map((item) => item.label),
+    selectedContactTypeIndex: 0,
+    selectedContactType: CONTACT_TYPE_OPTIONS[0].label,
+    contactPlaceholder: CONTACT_TYPE_OPTIONS[0].placeholder,
     contentMaxLength: CONTENT_MAX_LENGTH,
     submitting: false,
     sourcePage: "",
+    topTips: {
+      show: false,
+      message: "",
+      type: "error",
+    },
   },
 
   onLoad(options = {}) {
@@ -47,6 +63,41 @@ Page({
     });
   },
 
+  changeContactType(event) {
+    const index = Number(event.detail.value);
+    const selectedOption = CONTACT_TYPE_OPTIONS[index];
+    if (!selectedOption) return;
+
+    this.setData({
+      selectedContactTypeIndex: index,
+      selectedContactType: selectedOption.label,
+      contactPlaceholder: selectedOption.placeholder,
+      contactType: selectedOption.value,
+    });
+  },
+
+  showTopTips(message, type = "error") {
+    this.setData({
+      topTips: {
+        show: true,
+        message,
+        type,
+      },
+    });
+  },
+
+  hideTopTips() {
+    this.setData({
+      "topTips.show": false,
+    });
+  },
+
+  openPrivacyNotice() {
+    wx.navigateTo({
+      url: "/pages/privacy/index",
+    });
+  },
+
   async submitForm() {
     if (this.data.submitting) return;
 
@@ -54,13 +105,11 @@ Page({
       type: this.data.selectedType,
       content: this.data.content,
       contact: this.data.contact,
+      contactType: this.data.contactType,
     };
     const validation = validateFeedbackDraft(draft);
     if (!validation.valid) {
-      wx.showToast({
-        title: validation.message,
-        icon: "none",
-      });
+      this.showTopTips(validation.message);
       return;
     }
 
@@ -89,10 +138,7 @@ Page({
       }, 700);
     } catch (error) {
       console.error("意见反馈提交失败", error);
-      wx.showToast({
-        title: "提交失败，请稍后重试",
-        icon: "none",
-      });
+      this.showTopTips("提交失败，请稍后重试");
     } finally {
       this.setData({
         submitting: false,

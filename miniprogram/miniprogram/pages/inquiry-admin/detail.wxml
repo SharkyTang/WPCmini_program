@@ -1,4 +1,11 @@
 <view class="page">
+  <mp-toptips
+    msg="{{topTips.message}}"
+    type="{{topTips.type}}"
+    show="{{topTips.show}}"
+    bindhide="hideTopTips"
+  />
+
   <view wx:if="{{loading}}" class="state-card">正在加载需求详情...</view>
 
   <view wx:elif="{{errorMessage}}" class="state-card">
@@ -13,9 +20,12 @@
       <view class="page-subtitle">{{item.createdAtText}}</view>
     </view>
 
-    <view class="section">
+    <view class="section status-section">
       <view class="section-head">
-        <view class="status-badge status-{{item.status}}">{{item.statusLabel}}</view>
+        <view>
+          <view class="section-kicker">CURRENT STATUS</view>
+          <view class="status-badge status-{{item.status}}">{{item.statusLabel}}</view>
+        </view>
         <picker
           range="{{statusOptions}}"
           range-key="label"
@@ -27,14 +37,16 @@
         </picker>
       </view>
 
-      <view class="info-row">
-        <view class="info-label">联系方式</view>
-        <view class="info-value">{{item.contact || '未填写'}}</view>
+      <view class="contact-card">
+        <view class="contact-label">客户联系方式 · {{item.contactTypeLabel}}</view>
+        <view class="contact-value">{{item.contact || '未填写'}}</view>
+        <view class="contact-meta">来源：{{item.sourceLabel}}</view>
       </view>
-      <view class="copy-button" bindtap="copyContact">复制联系方式</view>
+      <view class="copy-button" bindtap="copyContact">{{item.contactCopyLabel}}</view>
     </view>
 
     <view class="section">
+      <view class="section-kicker">REQUEST</view>
       <view class="section-title">需求信息</view>
       <view class="info-row">
         <view class="info-label">来源</view>
@@ -64,6 +76,7 @@
     </view>
 
     <view wx:if="{{item.caseDocId || item.caseId || item.caseTitle}}" class="section">
+      <view class="section-kicker">REFERENCE</view>
       <view class="section-title">参考案例</view>
       <view class="info-row">
         <view class="info-label">案例编号</view>
@@ -77,6 +90,7 @@
     </view>
 
     <view class="section">
+      <view class="section-kicker">ADMIN NOTE</view>
       <view class="section-title">管理员备注</view>
       <textarea
         class="note-input"
@@ -85,9 +99,21 @@
         placeholder="记录沟通进度、跟进结果或注意事项"
         bindinput="onAdminNoteInput"
       />
+      <view class="note-count">{{adminNote.length}} / 500</view>
       <view class="save-button {{savingNote ? 'save-button-disabled' : ''}}" bindtap="saveAdminNote">
         {{savingNote ? '保存中...' : '保存备注'}}
       </view>
     </view>
   </block>
+
+  <mp-dialog
+    ext-class="brand-dialog"
+    show="{{confirmDialog.show}}"
+    title="{{confirmDialog.title}}"
+    buttons="{{confirmDialog.buttons}}"
+    bindbuttontap="handleConfirmDialogTap"
+    bindclose="closeConfirmDialog"
+  >
+    <view class="dialog-content">{{confirmDialog.content}}</view>
+  </mp-dialog>
 </view>

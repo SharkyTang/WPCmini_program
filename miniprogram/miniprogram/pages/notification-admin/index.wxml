@@ -1,0 +1,48 @@
+<view class="page">
+  <view class="hero">
+    <view>
+      <view class="page-title">通知管理</view>
+      <view class="page-subtitle">发布版本更新和产品上新公告</view>
+    </view>
+    <button class="create-button" bindtap="createAnnouncement">新建通知</button>
+  </view>
+
+  <view wx:if="{{isCheckingAccess || loading}}" class="state-card">正在读取通知...</view>
+  <view wx:elif="{{!isAdmin}}" class="state-card">当前账号没有通知管理权限</view>
+  <view wx:elif="{{errorMessage}}" class="state-card" bindtap="loadAnnouncements">{{errorMessage}}，点击重试</view>
+  <view wx:elif="{{!items.length}}" class="state-card">还没有通知，点击右上角新建</view>
+
+  <view wx:else class="announcement-list">
+    <view wx:for="{{items}}" wx:key="id" class="announcement-card">
+      <view class="card-head">
+        <view class="type-badge type-{{item.type}}">{{item.typeLabel}}</view>
+        <view class="status-badge status-{{item.publishStatus}}">{{item.publishStatusLabel}}</view>
+      </view>
+      <view class="card-title">{{item.title}}</view>
+      <view class="card-content">{{item.content}}</view>
+      <view class="card-meta">{{item.timeText}}{{item.version ? ' · ' + item.version : ''}}</view>
+      <view class="card-actions {{item.publishStatus === 'draft' ? 'card-actions-draft' : ''}}">
+        <button wx:if="{{item.canEdit}}" class="action-button" data-id="{{item.id}}" bindtap="editAnnouncement">编辑</button>
+        <button wx:if="{{item.canPublish}}" class="action-button action-primary" data-id="{{item.id}}" bindtap="requestPublish">发布</button>
+        <button
+          wx:if="{{item.canToggleVisibility}}"
+          class="action-button"
+          data-id="{{item.id}}"
+          data-visible="{{!item.isVisible}}"
+          bindtap="requestVisibility"
+        >{{item.isVisible ? '隐藏' : '显示'}}</button>
+        <button wx:if="{{item.canShowDeliverySummary}}" class="action-button" data-id="{{item.id}}" bindtap="showDeliverySummary">推送统计</button>
+        <button class="action-button action-delete" data-id="{{item.id}}" bindtap="requestDelete">删除</button>
+      </view>
+    </view>
+    <view wx:if="{{loadingMore}}" class="load-more">正在加载...</view>
+  </view>
+
+  <mp-dialog
+    show="{{confirmDialog.show}}"
+    title="{{confirmDialog.title}}"
+    content="{{confirmDialog.content}}"
+    buttons="{{confirmDialog.buttons}}"
+    bindbuttontap="handleConfirmDialogTap"
+  />
+</view>

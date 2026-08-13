@@ -1,14 +1,17 @@
 const cloud = require("wx-server-sdk");
 const {
   BANNER_COLLECTION,
+  CASE_GALLERY_MAX,
   CASE_COLLECTION,
   IMAGE_URL_BATCH_SIZE,
   SEARCH_FETCH_LIMIT,
+  PINNED_CASE_LIMIT,
   buildHomepageDisplayItems,
   filterCaseItems,
   generateSequentialCaseId,
+  getActivatedHomepageSlots,
   getCaseIdNumber,
-  isAdminOpenid,
+  isRoleAdminOpenid,
   normalizeCloudFileIds,
   normalizeHomepageDisplaySlot,
   normalizePage,
@@ -16,6 +19,7 @@ const {
   normalizeVisibilityFilter,
   sanitizeCasePayload,
   trimText,
+  validateHomepageDisplayCapacity,
 } = require("./caseAdminLogic");
 
 cloud.init({
@@ -24,6 +28,9 @@ cloud.init({
 
 const db = cloud.database();
 const _ = db.command;
+const RECENT_CASE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const CATALOG_META_COLLECTION = "catalog_meta";
+const CATALOG_META_DOCUMENT_ID = "current";
 
 function ok(data = {}) {
   return {
@@ -38,6 +45,98 @@ function fail(code, message) {
     code,
     message,
   };
+}
+
+function isDocumentNotFound(error) {
+  const code = error && (error.errCode || error.code);
+  const message = error && (error.errMsg || error.message);
+  return (
+    code === -502005
+    || code === "DATABASE_DOCUMENT_NOT_EXIST"
+    || /document.*not found|does not exist/i.test(message || "")
+  );
+}
+
+function getRevisionIncrement() {
+  return _ && typeof _.inc === "function" ? _.inc(1) : 1;
+}
+
+async function initializeCatalogRevision() {
+  const initialRevision = Date.now();
+  if (typeof db.runTransaction !== "function") {
+    await db.collection(CATALOG_META_COLLECTION).doc(CATALOG_META_DOCUMENT_ID).set({
+      data: {
+        revision: initialRevision,
+        updatedAt: db.serverDate(),
+      },
+    });
+    return;
+  }
+  await db.runTransaction(async (transaction) => {
+    const document = transaction
+      .collection(CATALOG_META_COLLECTION)
+      .doc(CATALOG_META_DOCUMENT_ID);
+    let exists = false;
+    try {
+      const response = await document.get();
+      exists = Boolean(response && response.data);
+    } catch (error) {
+      if (!isDocumentNotFound(error)) throw error;
+    }
+    if (exists) {
+      await document.update({
+        data: {
+          revision: getRevisionIncrement(),
+          updatedAt: db.serverDate(),
+        },
+      });
+      return;
+    }
+    await document.set({
+      data: {
+        revision: initialRevision,
+        updatedAt: db.serverDate(),
+      },
+    });
+  });
+}
+
+async function bumpCatalogRevision() {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await db.collection(CATALOG_META_COLLECTION).doc(CATALOG_META_DOCUMENT_ID).update({
+        data: {
+          revision: getRevisionIncrement(),
+          updatedAt: db.serverDate(),
+        },
+      });
+      return true;
+    } catch (error) {
+      lastError = error;
+      if (isDocumentNotFound(error)) {
+        try {
+          await initializeCatalogRevision();
+          return true;
+        } catch (initializeError) {
+          lastError = initializeError;
+        }
+      }
+    }
+  }
+  console.error("catalog revision update failed", lastError);
+  throw lastError || new Error("案例目录版本更新失败");
+}
+
+async function cleanupCaseFilesAfterMutation(fileIDs) {
+  try {
+    return await deleteUnreferencedCaseFiles(fileIDs);
+  } catch (error) {
+    // File cleanup is recoverable and must not turn a committed database
+    // mutation into a client-visible failure or delay cache invalidation.
+    console.warn("case image cleanup deferred", error);
+    return [];
+  }
 }
 
 async function listCases(event) {
@@ -76,6 +175,29 @@ async function listCases(event) {
     page,
     pageSize,
     hasMore: (response.data || []).length === pageSize,
+  });
+}
+
+async function listRecentCases(event) {
+  const page = normalizePage(event.page);
+  const pageSize = normalizePageSize(event.pageSize);
+  const since = new Date(Date.now() - RECENT_CASE_WINDOW_MS);
+  const response = await db
+    .collection(CASE_COLLECTION)
+    .where({
+      isVisible: true,
+      createdAt: _.gte(since),
+    })
+    .orderBy("createdAt", "desc")
+    .skip((page - 1) * pageSize)
+    .limit(pageSize)
+    .get();
+  return ok({
+    items: response.data || [],
+    page,
+    pageSize,
+    hasMore: (response.data || []).length === pageSize,
+    since: since.toISOString(),
   });
 }
 
@@ -135,42 +257,100 @@ async function getCreateCaseDefaults() {
   };
 }
 
+async function validateHomepageCapacity(nextCase, slots, excludedId = "") {
+  if (!slots.length) return null;
+  const [caseResponse, bannerResponse] = await Promise.all([
+    db
+      .collection(CASE_COLLECTION)
+      .where({ isVisible: true })
+      .field({ _id: true, caseId: true, homeSections: true, sortOrder: true, isVisible: true })
+      .limit(SEARCH_FETCH_LIMIT)
+      .get(),
+    db
+      .collection(BANNER_COLLECTION)
+      .where({ isVisible: true })
+      .field({ _id: true, caseId: true, image: true, sortOrder: true, isVisible: true })
+      .limit(SEARCH_FETCH_LIMIT)
+      .get(),
+  ]);
+  const validation = validateHomepageDisplayCapacity(
+    caseResponse.data || [],
+    bannerResponse.data || [],
+    nextCase,
+    { slots, excludedId }
+  );
+  return validation.valid ? null : fail(validation.code, validation.message);
+}
+
 function buildFileIdSet(records = [], field) {
   return new Set(
     records
-      .map((item) => trimText(item && item[field]))
+      .flatMap((item) => {
+        const value = item && item[field];
+        return Array.isArray(value) ? value : [value];
+      })
+      .map(trimText)
       .filter((fileID) => fileID.indexOf("cloud://") === 0)
   );
 }
 
-async function fetchCaseCoverFileIdSet(fileIDs = [], where = {}) {
+async function fetchCaseImageFileIdSet(fileIDs = [], where = {}, options = {}) {
   const normalizedFileIDs = normalizeCloudFileIds(fileIDs);
   if (!normalizedFileIDs.length) return new Set();
-  const [coverResponse, thumbnailResponse] = await Promise.all([
+  const [
+    coverResponse,
+    thumbnailResponse,
+    galleryResponse,
+    sourceGalleryResponse,
+    galleryThumbnailResponse,
+    coverBannerResponse,
+    galleryBannerResponse,
+  ] = await Promise.all([
     db.collection(CASE_COLLECTION).where({ ...where, coverImage: _.in(normalizedFileIDs) })
       .field({ coverImage: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
     db.collection(CASE_COLLECTION).where({ ...where, coverThumbnail: _.in(normalizedFileIDs) })
       .field({ coverThumbnail: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
+    db.collection(CASE_COLLECTION).where({ ...where, galleryImages: _.in(normalizedFileIDs) })
+      .field({ galleryImages: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
+    options.includeSources === false
+      ? Promise.resolve({ data: [] })
+      : db.collection(CASE_COLLECTION).where({ ...where, sourceGalleryImages: _.in(normalizedFileIDs) })
+        .field({ sourceGalleryImages: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
+    db.collection(CASE_COLLECTION).where({ ...where, galleryThumbnails: _.in(normalizedFileIDs) })
+      .field({ galleryThumbnails: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
+    db.collection(CASE_COLLECTION).where({ ...where, coverBanner: _.in(normalizedFileIDs) })
+      .field({ coverBanner: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
+    db.collection(CASE_COLLECTION).where({ ...where, galleryBanners: _.in(normalizedFileIDs) })
+      .field({ galleryBanners: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
   ]);
   return new Set([
     ...buildFileIdSet(coverResponse.data || [], "coverImage"),
     ...buildFileIdSet(thumbnailResponse.data || [], "coverThumbnail"),
+    ...buildFileIdSet(galleryResponse.data || [], "galleryImages"),
+    ...buildFileIdSet(sourceGalleryResponse.data || [], "sourceGalleryImages"),
+    ...buildFileIdSet(galleryThumbnailResponse.data || [], "galleryThumbnails"),
+    ...buildFileIdSet(coverBannerResponse.data || [], "coverBanner"),
+    ...buildFileIdSet(galleryBannerResponse.data || [], "galleryBanners"),
   ]);
 }
 
 async function fetchVisibleBannerFileIdSet(fileIDs = []) {
   const normalizedFileIDs = normalizeCloudFileIds(fileIDs);
   if (!normalizedFileIDs.length) return new Set();
-  const response = await db
-    .collection(BANNER_COLLECTION)
-    .where({
+  const [imageResponse, optimizedResponse] = await Promise.all([
+    db.collection(BANNER_COLLECTION).where({
       isVisible: true,
       image: _.in(normalizedFileIDs),
-    })
-    .field({ image: true })
-    .limit(IMAGE_URL_BATCH_SIZE)
-    .get();
-  return buildFileIdSet(response.data || [], "image");
+    }).field({ image: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
+    db.collection(BANNER_COLLECTION).where({
+      isVisible: true,
+      optimizedImage: _.in(normalizedFileIDs),
+    }).field({ optimizedImage: true }).limit(IMAGE_URL_BATCH_SIZE).get(),
+  ]);
+  return new Set([
+    ...buildFileIdSet(imageResponse.data || [], "image"),
+    ...buildFileIdSet(optimizedResponse.data || [], "optimizedImage"),
+  ]);
 }
 
 async function getTempUrlMap(fileIDs = []) {
@@ -191,7 +371,7 @@ async function getVisibleImageUrls(event) {
   if (!fileIDs.length) return ok({ urls: {} });
 
   const [caseFileIds, bannerFileIds] = await Promise.all([
-    fetchCaseCoverFileIdSet(fileIDs, { isVisible: true }),
+    fetchCaseImageFileIdSet(fileIDs, { isVisible: true }, { includeSources: false }),
     fetchVisibleBannerFileIdSet(fileIDs),
   ]);
   const allowedFileIds = new Set([...caseFileIds, ...bannerFileIds]);
@@ -204,7 +384,7 @@ async function getCaseImageUrls(event) {
   const fileIDs = normalizeCloudFileIds(event.fileIDs || event.fileIds);
   if (!fileIDs.length) return ok({ urls: {} });
 
-  const caseFileIds = await fetchCaseCoverFileIdSet(fileIDs);
+  const caseFileIds = await fetchCaseImageFileIdSet(fileIDs);
   const allowedRequestedFileIds = fileIDs.filter((fileID) => caseFileIds.has(fileID));
   const urls = await getTempUrlMap(allowedRequestedFileIds);
   return ok({ urls });
@@ -219,6 +399,13 @@ async function createCase(event, openid) {
     ...defaults,
   });
   if (!result.valid) return fail(result.code, result.message);
+  const pinnedError = await validatePinnedCapacity(result.data.isPinned);
+  if (pinnedError) return pinnedError;
+  const homepageError = await validateHomepageCapacity(
+    result.data,
+    getActivatedHomepageSlots(null, result.data)
+  );
+  if (homepageError) return homepageError;
 
   const response = await db.collection(CASE_COLLECTION).add({
     data: {
@@ -229,6 +416,7 @@ async function createCase(event, openid) {
       updatedByOpenid: openid,
     },
   });
+  await bumpCatalogRevision();
 
   return ok({
     id: response._id,
@@ -240,9 +428,27 @@ async function updateCase(event, openid) {
   const id = trimText(event.id);
   if (!id) return fail("INVALID_ID", "缺少案例 ID");
 
+  const existing = await getCaseById(id);
+  if (!existing) return fail("CASE_NOT_FOUND", "案例不存在或已删除");
   const input = event.case || event.data || {};
   const result = sanitizeCasePayload(input, { isCreate: false });
   if (!result.valid) return fail(result.code, result.message);
+  const nextPinned = Object.prototype.hasOwnProperty.call(result.data, "isPinned")
+    ? result.data.isPinned
+    : existing.isPinned === true;
+  const pinnedError = await validatePinnedCapacity(nextPinned, id);
+  if (pinnedError) return pinnedError;
+  const nextCase = {
+    ...existing,
+    ...result.data,
+    _id: id,
+  };
+  const homepageError = await validateHomepageCapacity(
+    nextCase,
+    getActivatedHomepageSlots(existing, nextCase),
+    id
+  );
+  if (homepageError) return homepageError;
 
   await db.collection(CASE_COLLECTION).doc(id).update({
     data: {
@@ -251,6 +457,13 @@ async function updateCase(event, openid) {
       updatedByOpenid: openid,
     },
   });
+  const nextFileIds = new Set(getCaseImageFileIds({ ...existing, ...result.data }));
+  const sourceFileIds = new Set(getCaseSourceFileIds(existing));
+  const removedFileIds = getCaseImageFileIds(existing).filter(
+    (fileID) => !nextFileIds.has(fileID) && !sourceFileIds.has(fileID)
+  );
+  await bumpCatalogRevision();
+  await cleanupCaseFilesAfterMutation(removedFileIds);
 
   return ok({ id });
 }
@@ -258,6 +471,19 @@ async function updateCase(event, openid) {
 async function setCaseVisibility(event, openid) {
   const id = trimText(event.id);
   if (!id) return fail("INVALID_ID", "缺少案例 ID");
+  const existing = await getCaseById(id);
+  if (!existing) return fail("CASE_NOT_FOUND", "案例不存在或已删除");
+  const nextCase = {
+    ...existing,
+    _id: id,
+    isVisible: event.isVisible === true,
+  };
+  const homepageError = await validateHomepageCapacity(
+    nextCase,
+    getActivatedHomepageSlots(existing, nextCase),
+    id
+  );
+  if (homepageError) return homepageError;
 
   await db.collection(CASE_COLLECTION).doc(id).update({
     data: {
@@ -266,6 +492,7 @@ async function setCaseVisibility(event, openid) {
       updatedByOpenid: openid,
     },
   });
+  await bumpCatalogRevision();
 
   return ok({
     id,
@@ -273,10 +500,44 @@ async function setCaseVisibility(event, openid) {
   });
 }
 
-async function isCaseCoverImageReferenced(fileID) {
+function getCaseImageFileIds(item = {}) {
+  return Array.from(new Set([
+    trimText(item.coverImage),
+    trimText(item.coverThumbnail),
+    trimText(item.coverBanner),
+    ...normalizeCloudFileIds(item.galleryImages || [], CASE_GALLERY_MAX),
+    ...normalizeCloudFileIds(item.sourceGalleryImages || [], CASE_GALLERY_MAX),
+    ...normalizeCloudFileIds(item.galleryThumbnails || [], CASE_GALLERY_MAX),
+    ...normalizeCloudFileIds(item.galleryBanners || [], CASE_GALLERY_MAX),
+  ].filter((fileID) => fileID.indexOf("cloud://") === 0)));
+}
+
+function getCaseSourceFileIds(item = {}) {
+  const explicitSources = normalizeCloudFileIds(
+    item.sourceGalleryImages || [],
+    CASE_GALLERY_MAX
+  );
+  if (explicitSources.length) return explicitSources;
+  return Array.from(new Set([
+    trimText(item.coverImage),
+    ...normalizeCloudFileIds(item.galleryImages || [], CASE_GALLERY_MAX),
+  ].filter((fileID) => fileID.indexOf("cloud://") === 0)));
+}
+
+async function isCaseImageReferenced(fileID) {
   if (!fileID || fileID.indexOf("cloud://") !== 0) return false;
 
-  const [coverResponse, thumbnailResponse, bannerResponse] = await Promise.all([
+  const [
+    coverResponse,
+    thumbnailResponse,
+    galleryResponse,
+    sourceGalleryResponse,
+    galleryThumbnailResponse,
+    coverBannerResponse,
+    galleryBannerResponse,
+    bannerResponse,
+    optimizedBannerResponse,
+  ] = await Promise.all([
     db
       .collection(CASE_COLLECTION)
       .where({ coverImage: fileID })
@@ -290,18 +551,94 @@ async function isCaseCoverImageReferenced(fileID) {
       .limit(1)
       .get(),
     db
+      .collection(CASE_COLLECTION)
+      .where({ galleryImages: _.in([fileID]) })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
+      .collection(CASE_COLLECTION)
+      .where({ sourceGalleryImages: _.in([fileID]) })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
+      .collection(CASE_COLLECTION)
+      .where({ galleryThumbnails: _.in([fileID]) })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
+      .collection(CASE_COLLECTION)
+      .where({ coverBanner: fileID })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
+      .collection(CASE_COLLECTION)
+      .where({ galleryBanners: _.in([fileID]) })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
       .collection(BANNER_COLLECTION)
       .where({ image: fileID })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
+      .collection(BANNER_COLLECTION)
+      .where({ optimizedImage: fileID })
       .field({ _id: true })
       .limit(1)
       .get(),
   ]);
 
   return Boolean(
-    (coverResponse.data || []).length ||
+      (coverResponse.data || []).length ||
       (thumbnailResponse.data || []).length ||
-      (bannerResponse.data || []).length
+      (galleryResponse.data || []).length ||
+      (sourceGalleryResponse.data || []).length ||
+      (galleryThumbnailResponse.data || []).length ||
+      (coverBannerResponse.data || []).length ||
+      (galleryBannerResponse.data || []).length ||
+      (bannerResponse.data || []).length ||
+      (optimizedBannerResponse.data || []).length
   );
+}
+
+async function deleteUnreferencedCaseFiles(fileIDs = []) {
+  const deletedFileIds = [];
+  for (const fileID of Array.from(new Set(fileIDs.filter((value) => value.indexOf("cloud://") === 0)))) {
+    if (await isCaseImageReferenced(fileID)) continue;
+    try {
+      await cloud.deleteFile({ fileList: [fileID] });
+      deletedFileIds.push(fileID);
+    } catch (error) {
+      console.warn("case image file delete failed", error);
+    }
+  }
+  return deletedFileIds;
+}
+
+async function cleanupUnreferencedFiles(event) {
+  const fileIDs = normalizeCloudFileIds(event.fileIDs || event.fileIds);
+  if (!fileIDs.length) return ok({ deletedFileIds: [] });
+  const deletedFileIds = await deleteUnreferencedCaseFiles(fileIDs);
+  return ok({ deletedFileIds });
+}
+
+async function validatePinnedCapacity(isPinned, excludedId = "") {
+  if (!isPinned) return null;
+  const response = await db.collection(CASE_COLLECTION)
+    .where({ isPinned: true })
+    .field({ _id: true })
+    .limit(PINNED_CASE_LIMIT + 1)
+    .get();
+  const count = (response.data || []).filter((item) => item._id !== excludedId).length;
+  return count >= PINNED_CASE_LIMIT
+    ? fail("PINNED_LIMIT_REACHED", `置顶案例最多 ${PINNED_CASE_LIMIT} 个，请先取消其他案例的置顶`)
+    : null;
 }
 
 async function deleteCase(event) {
@@ -311,35 +648,29 @@ async function deleteCase(event) {
   const item = await getCaseById(id);
   if (!item) return fail("CASE_NOT_FOUND", "案例不存在或已删除");
 
-  const coverImage = trimText(item.coverImage);
-  const coverThumbnail = trimText(item.coverThumbnail);
+  const sourceFileIds = new Set(getCaseSourceFileIds(item));
+  const imageFileIds = getCaseImageFileIds(item).filter(
+    (fileID) => !sourceFileIds.has(fileID)
+  );
   await db.collection(CASE_COLLECTION).doc(id).remove();
-
-  const deletedFileIds = [];
-  for (const fileID of [coverImage, coverThumbnail].filter((value, index, items) => value.indexOf("cloud://") === 0 && items.indexOf(value) === index)) {
-    const isReferenced = await isCaseCoverImageReferenced(fileID);
-    if (!isReferenced) {
-      try {
-        await cloud.deleteFile({
-          fileList: [fileID],
-        });
-        deletedFileIds.push(fileID);
-      } catch (error) {
-        console.warn("case cover file delete failed", error);
-      }
-    }
-  }
+  await bumpCatalogRevision();
+  const deletedFileIds = await cleanupCaseFilesAfterMutation(imageFileIds);
 
   return ok({
     id,
     deletedFileIds,
+    preservedSourceFileIds: Array.from(sourceFileIds),
   });
 }
 
 exports.main = async (event = {}) => {
   const { OPENID } = cloud.getWXContext();
   const action = trimText(event.action);
-  const admin = isAdminOpenid(OPENID, process.env.ADMIN_OPENIDS);
+  const admin = isRoleAdminOpenid(
+    OPENID,
+    process.env.CASE_ADMIN_OPENIDS,
+    process.env.ADMIN_OPENIDS
+  );
 
   if (action === "checkAccess") {
     return ok({ isAdmin: admin });
@@ -355,6 +686,7 @@ exports.main = async (event = {}) => {
 
   try {
     if (action === "listCases") return listCases(event);
+    if (action === "listRecentCases") return listRecentCases(event);
     if (action === "listHomepageDisplay") return listHomepageDisplay(event);
     if (action === "getCase") return getCase(event);
     if (action === "getCaseImageUrls") return getCaseImageUrls(event);
@@ -362,9 +694,12 @@ exports.main = async (event = {}) => {
     if (action === "updateCase") return updateCase(event, OPENID);
     if (action === "setCaseVisibility") return setCaseVisibility(event, OPENID);
     if (action === "deleteCase") return deleteCase(event);
+    if (action === "cleanupUnreferencedFiles") return cleanupUnreferencedFiles(event);
     return fail("UNKNOWN_ACTION", "未知案例管理操作");
   } catch (error) {
     console.error("caseAdmin error", error);
     return fail("SERVER_ERROR", error.message || "案例管理服务异常");
   }
 };
+
+module.exports.bumpCatalogRevision = bumpCatalogRevision;

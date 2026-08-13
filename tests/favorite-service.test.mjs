@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { loadOpenIdLibraryAccessService } from "./library-openid-test-helper.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const modulePath = resolve(
@@ -36,10 +37,34 @@ function loadFavoriteService(recordsByCondition = {}, options = {}) {
           normalizeSelectedFavoriteIds: (ids) => ids.filter(Boolean),
         };
       }
-      if (path === "./userService") {
+      if (path === "./caseCatalogService") {
         return {
-          ensureProfileIdentity: async () => ({ ready: true, openid: "openid_1" }),
-          getCachedOpenId: () => "openid_1",
+          fetchUserLibrary:
+            options.fetchUserLibrary ||
+            (async () => {
+              throw new Error("catalog unavailable");
+            }),
+        };
+      }
+      if (path === "./userLibraryService") {
+        if (options.userLibraryService) return options.userLibraryService;
+        return {
+          async callUserLibrary() {
+            const error = new Error("function not found");
+            error.code = "FUNCTION_NOT_FOUND";
+            throw error;
+          },
+          isUserLibraryUnavailableError(error) {
+            return error && error.code === "FUNCTION_NOT_FOUND";
+          },
+        };
+      }
+      if (path === "./libraryAccessService") {
+        if (options.libraryAccessService) return options.libraryAccessService;
+        return {
+          checkLibraryAccess:
+            options.checkLibraryAccess ||
+            (async () => ({ status: "ready", openid: "openid_1" })),
         };
       }
       throw new Error(`Unexpected require: ${path}`);
@@ -61,6 +86,9 @@ function loadFavoriteService(recordsByCondition = {}, options = {}) {
                 where(condition) {
                   whereCalls.push(condition);
                   return {
+                    async count() {
+                      return { total: options.favoriteCount || 0 };
+                    },
                     orderBy() {
                       return this;
                     },
@@ -163,4 +191,94 @@ await test("fetchFavoriteCases removes records whose cases no longer exist", asy
 
   assert.deepEqual(plain(removedIds), ["fav_missing"]);
   assert.deepEqual(plain(cases), [{ _id: "doc_live", caseId: "case_001" }]);
+});
+
+await test("openid build flag supports favorite query, add, and delete without a profile", async () => {
+  const access = loadOpenIdLibraryAccessService("favorites");
+  const { service, removedIds } = loadFavoriteService({
+    [JSON.stringify({ _openid: "openid_1", caseDocId: "doc_001" })]: [
+      { _id: "fav_1", caseDocId: "doc_001", caseId: "case_001" },
+    ],
+  }, {
+    libraryAccessService: access.service,
+  });
+
+  const favorite = await service.fetchFavoriteForCase({
+    id: "doc_001",
+    caseId: "case_001",
+  });
+  const added = await service.addFavorite({
+    id: "doc_002",
+    caseId: "case_002",
+  });
+  const removed = await service.removeFavorite("fav_1");
+
+  assert.equal(favorite._id, "fav_1");
+  assert.equal(added._id, "fav_new");
+  assert.equal(removed, true);
+  assert.deepEqual(plain(removedIds), ["fav_1"]);
+  assert.equal(access.profileChecks, 0);
+  assert.equal(access.openidChecks > 0, true);
+});
+
+await test("favorite mutations prefer the atomic cloud service when available", async () => {
+  const calls = [];
+  const { service, whereCalls } = loadFavoriteService({}, {
+    userLibraryService: {
+      async callUserLibrary(action, payload = {}) {
+        calls.push({ action, payload });
+        if (action === "addFavorite") {
+          return {
+            favorite: {
+              _id: "fav_atomic",
+              caseDocId: payload.favorite.caseDocId,
+              caseId: payload.favorite.caseId,
+            },
+          };
+        }
+        return { removedCount: 1 };
+      },
+      isUserLibraryUnavailableError() {
+        return false;
+      },
+    },
+  });
+
+  const added = await service.addFavorite({ id: "doc_atomic", caseId: "case_atomic" });
+  const removed = await service.removeFavorite("fav_atomic");
+
+  assert.equal(added._id, "fav_atomic");
+  assert.equal(removed, true);
+  assert.deepEqual(plain(calls), [
+    {
+      action: "addFavorite",
+      payload: { favorite: { caseDocId: "doc_atomic", caseId: "case_atomic" } },
+    },
+    {
+      action: "removeFavorites",
+      payload: { ids: ["fav_atomic"] },
+    },
+  ]);
+  assert.equal(whereCalls.length, 0);
+});
+
+await test("toggleFavorite keeps the favorite state when cloud deletion removes nothing", async () => {
+  const { service } = loadFavoriteService({}, {
+    userLibraryService: {
+      async callUserLibrary() {
+        return { removedCount: 0 };
+      },
+      isUserLibraryUnavailableError() {
+        return false;
+      },
+    },
+  });
+
+  await assert.rejects(
+    service.toggleFavorite(
+      { id: "doc_atomic", caseId: "case_atomic" },
+      { _id: "fav_atomic" }
+    ),
+    (error) => error && error.code === "FAVORITE_REMOVE_NOT_APPLIED"
+  );
 });

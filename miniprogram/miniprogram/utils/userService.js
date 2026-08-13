@@ -1,13 +1,13 @@
 const {
-  fetchProfileRecord,
+  fetchSessionSummary,
   hasCompletedProfile,
 } = require("./profileService");
 
 let profileVerificationPromise = null;
 let profileSetupNavigationInProgress = false;
-let skipNextProfileSetupRedirect = false;
 let pendingProfileAction = null;
 let verifiedProfileIdentity = null;
+let openIdPromise = null;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -30,19 +30,27 @@ function cacheOpenId(openid) {
   app.globalData.openid = openid;
 }
 
-async function fetchOpenId() {
-  const response = await wx.cloud.callFunction({
-    name: "quickstartFunctions",
-    data: {
-      type: "getOpenId",
-    },
-  });
-  const openid = response && response.result && response.result.openid;
-  if (!openid) {
-    throw new Error("未获取到微信身份");
-  }
-  cacheOpenId(openid);
-  return openid;
+function fetchOpenId() {
+  if (openIdPromise) return openIdPromise;
+  openIdPromise = Promise.resolve()
+    .then(() => wx.cloud.callFunction({
+      name: "quickstartFunctions",
+      data: {
+        type: "getOpenId",
+      },
+    }))
+    .then((response) => {
+      const openid = response && response.result && response.result.openid;
+      if (!openid) {
+        throw new Error("未获取到微信身份");
+      }
+      cacheOpenId(openid);
+      return openid;
+    })
+    .finally(() => {
+      openIdPromise = null;
+    });
+  return openIdPromise;
 }
 
 async function ensureWxIdentity() {
@@ -57,26 +65,36 @@ function setPendingProfileAction(action) {
   pendingProfileAction = typeof action === "function" ? action : null;
 }
 
-function clearPendingProfileAction(options = {}) {
+function clearPendingProfileAction() {
   pendingProfileAction = null;
   profileSetupNavigationInProgress = false;
-  if (options.dismissed) skipNextProfileSetupRedirect = true;
 }
 
 function resumePendingProfileAction() {
   const action = pendingProfileAction;
   pendingProfileAction = null;
   profileSetupNavigationInProgress = false;
-  skipNextProfileSetupRedirect = false;
-  if (!action) return Promise.resolve();
+  if (!action) return Promise.resolve(false);
 
   try {
-    return Promise.resolve(action()).catch((error) => {
-      console.error("恢复个人资料后的操作失败", error);
-    });
+    return Promise.resolve(action())
+      .then((result) => ({
+        resumed: true,
+        success: result !== false,
+      }))
+      .catch((error) => {
+        console.error("恢复个人资料后的操作失败", error);
+        return {
+          resumed: true,
+          success: false,
+        };
+      });
   } catch (error) {
     console.error("恢复个人资料后的操作失败", error);
-    return Promise.resolve();
+    return Promise.resolve({
+      resumed: true,
+      success: false,
+    });
   }
 }
 
@@ -88,14 +106,16 @@ async function verifyProfileIdentity() {
 
   if (!profileVerificationPromise) {
     profileVerificationPromise = (async () => {
-      const openid = getCachedOpenId() || await fetchOpenId();
-      let profile;
+      let summary;
       try {
-        profile = await fetchProfileRecord();
+        summary = await fetchSessionSummary();
       } catch (firstError) {
         await wait(250);
-        profile = await fetchProfileRecord();
+        summary = await fetchSessionSummary({ forceRefresh: true });
       }
+      const openid = summary.openid || getCachedOpenId() || await fetchOpenId();
+      const profile = summary.profile || null;
+      cacheOpenId(openid);
       const identity = {
         openid,
         profile,
@@ -163,14 +183,6 @@ async function ensureProfileIdentity(options = {}) {
   if (identity.ready) return identity;
 
   if (!redirectToSetup) return identity;
-
-  if (skipNextProfileSetupRedirect) {
-    skipNextProfileSetupRedirect = false;
-    return {
-      ...identity,
-      dismissed: true,
-    };
-  }
 
   setPendingProfileAction(options.resume);
   navigateToProfileSetup();

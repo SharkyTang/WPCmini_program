@@ -1,3 +1,6 @@
 {
-  "navigationBarTitleText": "案例详情"
+  "navigationBarTitleText": "案例详情",
+  "usingComponents": {
+    "mp-msg": "weui-miniprogram/msg/msg"
+  }
 }

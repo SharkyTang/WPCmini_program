@@ -6,13 +6,31 @@ const {
   getInquiryOptionGroups,
   normalizeInquiryDraft,
   validateInquiryDraft,
-} = require("../../utils/inquiryData");
-const { submitInquiry } = require("../../utils/inquiryService");
+} = require("./utils/inquiryData");
+const { submitInquiry } = require("./utils/inquiryService");
 
 const SOURCE_PAGE_MAP = {
   profile: "pages/profile/index",
   detail: "pages/detail/index",
 };
+
+const CONTACT_TYPE_OPTIONS = [
+  {
+    value: "wechat",
+    label: "微信号",
+    placeholder: "请输入微信号",
+  },
+  {
+    value: "phone",
+    label: "手机号",
+    placeholder: "请输入手机号",
+  },
+  {
+    value: "email",
+    label: "邮箱",
+    placeholder: "请输入邮箱",
+  },
+];
 
 function getSource(value) {
   return value === "detail" ? "detail" : "profile";
@@ -49,14 +67,25 @@ Page({
     draft: normalizeInquiryDraft({
       source: "profile",
       wineType: "白酒",
+      contactType: CONTACT_TYPE_OPTIONS[0].value,
     }),
     optionGroups: buildOptionGroups({
       source: "profile",
       wineType: "白酒",
+      contactType: CONTACT_TYPE_OPTIONS[0].value,
     }),
     contentMaxLength: CONTENT_MAX_LENGTH,
     contactMaxLength: CONTACT_MAX_LENGTH,
+    contactTypes: CONTACT_TYPE_OPTIONS.map((option) => option.label),
+    contactTypeIndex: 0,
+    selectedContactType: CONTACT_TYPE_OPTIONS[0].label,
+    contactPlaceholder: CONTACT_TYPE_OPTIONS[0].placeholder,
     submitting: false,
+    topTips: {
+      show: false,
+      message: "",
+      type: "error",
+    },
   },
 
   onLoad(options = {}) {
@@ -95,6 +124,7 @@ Page({
         source: "detail",
         content: this.data.draft.content,
         contact: this.data.draft.contact,
+        contactType: this.data.draft.contactType,
       });
     } catch (error) {
       console.warn("需求页案例读取失败", error);
@@ -147,15 +177,54 @@ Page({
     });
   },
 
+  changeContactType(event) {
+    const nextIndex = Number(event.detail.value);
+    const validIndex = Number.isInteger(nextIndex)
+      && nextIndex >= 0
+      && nextIndex < CONTACT_TYPE_OPTIONS.length
+      ? nextIndex
+      : 0;
+
+    const selectedOption = CONTACT_TYPE_OPTIONS[validIndex];
+    this.setData({
+      contactTypeIndex: validIndex,
+      selectedContactType: selectedOption.label,
+      contactPlaceholder: selectedOption.placeholder,
+    });
+    this.updateDraft({
+      ...this.data.draft,
+      contactType: selectedOption.value,
+    });
+  },
+
+  showTopTips(message, type = "error") {
+    this.setData({
+      topTips: {
+        show: true,
+        message,
+        type,
+      },
+    });
+  },
+
+  hideTopTips() {
+    this.setData({
+      "topTips.show": false,
+    });
+  },
+
+  openPrivacyNotice() {
+    wx.navigateTo({
+      url: "/pages/privacy/index",
+    });
+  },
+
   async submitForm() {
     if (this.data.submitting) return;
 
     const validation = validateInquiryDraft(this.data.draft);
     if (!validation.valid) {
-      wx.showToast({
-        title: validation.message,
-        icon: "none",
-      });
+      this.showTopTips(validation.message);
       return;
     }
 
@@ -185,10 +254,7 @@ Page({
       }, 800);
     } catch (error) {
       console.error("需求提交失败", error);
-      wx.showToast({
-        title: error.code === "INVALID_INQUIRY" ? error.message : "提交失败，请稍后重试",
-        icon: "none",
-      });
+      this.showTopTips(error.code === "INVALID_INQUIRY" ? error.message : "提交失败，请稍后重试");
     } finally {
       this.setData({
         submitting: false,

@@ -1,15 +1,18 @@
 <view class="page">
-  <view class="profile-header"></view>
+  <mp-toptips
+    msg="{{topTips.message}}"
+    type="{{topTips.type}}"
+    show="{{topTips.show}}"
+    bindhide="hideTopTips"
+  />
 
-  <view wx:if="{{isLoading}}" class="state-card">正在读取资料…</view>
-
-  <view wx:elif="{{loadError}}" class="state-card state-card-error">
-    <view class="state-title">读取失败</view>
-    <view class="state-copy">请检查网络后重试</view>
-    <view class="retry-button" bindtap="loadProfile">重新读取</view>
+  <view class="profile-header">
+    <view class="header-eyebrow">PROFILE</view>
+    <view class="header-title">{{pageTitle}}</view>
+    <view class="header-subtitle">{{pageSubtitle}}</view>
   </view>
 
-  <view wx:else class="profile-card-shell">
+  <view class="profile-card-shell">
     <view class="avatar-floating">
       <button
         class="avatar-button"
@@ -17,7 +20,14 @@
         bindchooseavatar="onChooseWechatAvatar"
         disabled="{{isSaving}}"
       >
-        <image wx:if="{{profileDraft.avatarUrl}}" class="avatar-image" src="{{profileDraft.avatarUrl}}" mode="aspectFill" />
+        <image
+          wx:if="{{profileDraft.avatarUrl}}"
+          class="avatar-image"
+          src="{{profileDraft.avatarUrl}}"
+          data-url="{{profileDraft.avatarUrl}}"
+          mode="aspectFill"
+          binderror="onAvatarImageError"
+        />
         <view wx:else class="avatar-placeholder">
           <view class="avatar-head"></view>
           <view class="avatar-body"></view>
@@ -30,21 +40,36 @@
       <view class="avatar-space"></view>
       <view class="profile-row profile-row-nickname">
         <view class="profile-label">昵称</view>
-        <input
-          class="nickname-input"
-          type="nickname"
-          maxlength="14"
-          value="{{profileDraft.nickname}}"
-          placeholder="请输入或使用微信昵称"
-        placeholder-class="nickname-placeholder"
-        disabled="{{isSaving}}"
-        bindinput="onNicknameInput"
-      />
+        <view class="nickname-field">
+          <input
+            class="nickname-input"
+            type="nickname"
+            maxlength="14"
+            value="{{profileDraft.nickname}}"
+            placeholder="请输入或使用微信昵称"
+            placeholder-class="nickname-placeholder"
+            disabled="{{isSaving}}"
+            bindinput="onNicknameInput"
+          />
+          <view class="nickname-count">{{profileDraft.nickname.length}} / 14</view>
+        </view>
+      </view>
+      <view class="profile-tip">头像和昵称只用于收藏、浏览记录及需求识别。</view>
+      <view wx:if="{{syncState === 'refreshing'}}" class="sync-banner">
+        <view class="sync-status-dot"></view>
+        <view>正在同步云端资料，当前内容可继续编辑</view>
+      </view>
+      <view wx:elif="{{syncState === 'error'}}" class="sync-banner sync-banner-error">
+        <view class="sync-copy">{{syncErrorMessage}}</view>
+        <view class="sync-retry" bindtap="retryProfileSync">重新同步</view>
       </view>
     </view>
   </view>
 
-  <view wx:if="{{!isLoading && !loadError}}" class="save-button {{isSaving ? 'save-button-disabled' : ''}}" bindtap="saveProfileDraft">
-    {{isSaving ? '正在保存…' : (mode === 'setup' ? '完成资料' : '保存资料')}}
+  <view
+    class="save-button {{isSaving || syncState !== 'ready' || (mode === 'edit' && !identityGate && !hasUnsavedChanges) ? 'save-button-disabled' : ''}}"
+    bindtap="saveProfileDraft"
+  >
+    {{isSaving ? '正在保存…' : syncState === 'refreshing' ? '同步中…' : syncState === 'error' ? '请先重新同步' : mode === 'edit' && !identityGate && !hasUnsavedChanges ? '暂无修改' : saveButtonText}}
   </view>
 </view>

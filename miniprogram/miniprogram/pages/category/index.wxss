@@ -1,6 +1,6 @@
 page {
   min-height: 100%;
-  background: #f7f3ec;
+  background: #f5efe4;
   color: #241d16;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
 }
@@ -14,15 +14,17 @@ page {
 
 .topbar {
   padding: 36rpx 38rpx 26rpx;
-  background: #fffdf9;
+  background:
+    linear-gradient(180deg, #fff8ef 0%, #fffdf8 100%);
   flex: 0 0 auto;
 }
 
 .search-box {
   height: 70rpx;
-  border: 2rpx solid #dfcfb7;
+  border: 2rpx solid #e0cfb8;
   border-radius: 35rpx;
   background: #fff;
+  box-shadow: 0 8rpx 20rpx rgba(72, 49, 25, 0.06);
   display: flex;
   align-items: center;
   padding: 0 24rpx;
@@ -57,7 +59,7 @@ page {
   width: 150rpx;
   flex: 0 0 150rpx;
   padding: 28rpx 18rpx 48rpx;
-  background: #efebe3;
+  background: #eee5d9;
   box-sizing: border-box;
   overflow-y: auto;
 }
@@ -65,9 +67,9 @@ page {
 .nav-item {
   min-height: 64rpx;
   margin-bottom: 18rpx;
-  border: 2rpx solid #eadcca;
+  border: 2rpx solid #e2cfb4;
   border-radius: 32rpx;
-  background: #fffdf9;
+  background: #fffaf2;
   color: #241d16;
   display: flex;
   align-items: center;
@@ -81,9 +83,21 @@ page {
 }
 
 .nav-item-active {
-  border-color: #241d16;
-  background: #241d16;
-  color: #fff;
+  border-color: rgba(183, 122, 45, 0.48);
+  background: #fff8ef;
+  color: #241d16;
+  box-shadow: 0 8rpx 18rpx rgba(72, 49, 25, 0.08);
+}
+
+.nav-item-active::before {
+  content: "";
+  position: absolute;
+  left: -12rpx;
+  top: 16rpx;
+  bottom: 16rpx;
+  width: 7rpx;
+  border-radius: 4rpx;
+  background: #b77a2d;
 }
 
 .nav-title {
@@ -118,8 +132,10 @@ page {
 }
 
 .sub-nav-item {
-  min-height: 44rpx;
-  padding: 8rpx 4rpx;
+  min-height: 48rpx;
+  margin-bottom: 6rpx;
+  padding: 8rpx 6rpx;
+  border-radius: 8rpx;
   color: #7c8292;
   display: flex;
   align-items: center;
@@ -131,15 +147,15 @@ page {
 }
 
 .sub-nav-item-active {
-  color: #241d16;
+  background: #2a2119;
+  color: #fff;
   font-weight: 800;
-  background: linear-gradient(to bottom, transparent 52%, #f3df4a 52%, #f3df4a 78%, transparent 78%);
 }
 
 .content {
   flex: 1;
   height: auto;
-  background: #fffdf9;
+  background: #fffdf8;
 }
 
 .content-inner {
@@ -176,9 +192,10 @@ page {
 .selected-panel {
   margin-top: 18rpx;
   padding: 18rpx;
-  border: 2rpx solid #dfcfb7;
+  border: 2rpx solid rgba(223, 207, 183, 0.86);
   border-radius: 8rpx;
-  background: #fff;
+  background: #fffaf2;
+  box-shadow: 0 10rpx 24rpx rgba(72, 49, 25, 0.07);
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -206,10 +223,27 @@ page {
 }
 
 .selected-pill {
-  padding: 11rpx 18rpx;
-  background: #241d16;
-  color: #fff;
+  padding: 10rpx 12rpx 10rpx 18rpx;
+  background: #fff;
+  border: 2rpx solid rgba(183, 122, 45, 0.58);
+  color: #80531f;
   font-size: 22rpx;
+  display: inline-flex;
+  align-items: center;
+  gap: 8rpx;
+}
+
+.selected-pill-remove {
+  width: 30rpx;
+  height: 30rpx;
+  border-radius: 50%;
+  background: #2a2119;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20rpx;
+  line-height: 1;
 }
 
 .clear-action {
@@ -225,16 +259,17 @@ page {
 
 .option-pill {
   padding: 14rpx 24rpx;
-  border: 2rpx solid #dfcfb7;
+  border: 2rpx solid #e0cfb8;
   background: #fff;
   color: #6d6257;
   font-size: 24rpx;
 }
 
 .option-pill-active {
-  border-color: #241d16;
-  background: #241d16;
-  color: #fff;
+  border-color: #b77a2d;
+  background: #fff2dc;
+  color: #80531f;
+  box-shadow: inset 0 0 0 2rpx rgba(183, 122, 45, 0.16);
 }
 
 .result-count {
@@ -253,6 +288,10 @@ page {
 
 .case-card {
   min-width: 0;
+  padding: 10rpx;
+  border-radius: 8rpx;
+  background: #fffdf8;
+  box-shadow: 0 10rpx 22rpx rgba(72, 49, 25, 0.07);
 }
 
 .case-image,
@@ -260,7 +299,7 @@ page {
   width: 100%;
   height: 190rpx;
   border-radius: 8rpx;
-  background: #f5e2ae;
+  background: linear-gradient(135deg, #f5e2ae 0%, #ead1a1 100%);
 }
 
 .case-placeholder {
@@ -294,6 +333,14 @@ page {
   text-overflow: ellipsis;
 }
 
+.load-more-status {
+  padding: 34rpx 0 8rpx;
+  color: #766b60;
+  font-size: 24rpx;
+  line-height: 1.5;
+  text-align: center;
+}
+
 .state-box {
   margin-top: 24rpx;
   padding: 44rpx 22rpx;
@@ -308,4 +355,21 @@ page {
   color: #9d2b22;
   background: #fff5f2;
   border-color: #efc3ba;
+}
+
+.state-retry-button {
+  margin: 24rpx auto 0;
+  width: 220rpx;
+  height: 68rpx;
+  border: 0;
+  border-radius: 8rpx;
+  background: var(--brand-green);
+  color: #fff;
+  font-size: 24rpx;
+  font-weight: 700;
+  line-height: 68rpx;
+}
+
+.state-retry-button::after {
+  border: 0;
 }

@@ -19,7 +19,7 @@ function loadCommonJsModule(modulePath) {
 
 const inquiryAdminDataPath = resolve(
   __dirname,
-  "../miniprogram/miniprogram/utils/inquiryAdminData.js"
+  "../miniprogram/miniprogram/pages/inquiry-admin/utils/inquiryAdminData.js"
 );
 const inquiryAdminData = loadCommonJsModule(inquiryAdminDataPath);
 
@@ -27,6 +27,8 @@ const {
   ADMIN_NOTE_MAX_LENGTH,
   DEFAULT_INQUIRY_STATUS,
   getInquiryStatusLabel,
+  getContactCopyLabel,
+  getContactTypeLabel,
   normalizeAdminNote,
   normalizeInquiryAdminItem,
   normalizeInquiryKeyword,
@@ -51,6 +53,7 @@ test("normalizes missing inquiry status to new", () => {
   const item = normalizeInquiryAdminItem({
     _id: "inq_1",
     contact: " wx-test ",
+    contactType: " wechat ",
     content: " 想做一套包装 ",
     packageTypes: ["礼盒", "整套包装"],
     createdAt: "2026-07-05",
@@ -60,6 +63,9 @@ test("normalizes missing inquiry status to new", () => {
   assert.equal(item.status, DEFAULT_INQUIRY_STATUS);
   assert.equal(item.statusLabel, "新需求");
   assert.equal(item.contact, "wx-test");
+  assert.equal(item.contactType, "wechat");
+  assert.equal(item.contactTypeLabel, "微信号");
+  assert.equal(item.contactCopyLabel, "复制微信号");
   assert.equal(item.content, "想做一套包装");
   assert.deepEqual(plain(item.packageTypes), ["礼盒", "整套包装"]);
 });
@@ -78,6 +84,13 @@ test("normalizes inquiry admin keyword", () => {
   assert.equal(normalizeInquiryKeyword(null), "");
 });
 
+test("keeps legacy and invalid inquiry contact types safe", () => {
+  assert.equal(getContactTypeLabel("phone"), "手机号");
+  assert.equal(getContactTypeLabel("email"), "邮箱");
+  assert.equal(getContactTypeLabel("legacy"), "类型未标注");
+  assert.equal(getContactCopyLabel("legacy"), "复制联系方式");
+});
+
 test("validates admin note length", () => {
   assert.equal(normalizeAdminNote("  已联系客户  "), "已联系客户");
   assert.equal(validateAdminNote("a".repeat(ADMIN_NOTE_MAX_LENGTH)).valid, true);
@@ -90,6 +103,8 @@ test("normalizes incomplete inquiry records safely", () => {
   assert.equal(item.id, "");
   assert.equal(item.status, "new");
   assert.equal(item.contact, "");
+  assert.equal(item.contactType, "");
+  assert.equal(item.contactTypeLabel, "类型未标注");
   assert.deepEqual(plain(item.packageTypes), []);
   assert.deepEqual(plain(item.styles), []);
   assert.deepEqual(plain(item.scenes), []);

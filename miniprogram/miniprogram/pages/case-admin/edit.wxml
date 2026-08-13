@@ -1,4 +1,11 @@
 <view class="page">
+  <mp-toptips
+    msg="{{topTips.message}}"
+    type="{{topTips.type}}"
+    show="{{topTips.show}}"
+    bindhide="hideTopTips"
+  />
+
   <view class="hero">
     <view class="page-title">{{isEdit ? '编辑案例' : '新增案例'}}</view>
     <view class="page-subtitle">{{isEdit ? '修改标题、标签、封面和显示状态' : '先创建隐藏案例，确认后再打开显示'}}</view>
@@ -12,17 +19,38 @@
   </view>
 
   <view wx:else class="form-card">
+    <view class="form-section-title">基础信息</view>
     <view class="field">
-      <view class="field-label">封面图片 *</view>
-      <view class="cover-picker" bindtap="chooseCoverImage">
-        <image wx:if="{{coverImageUrl}}" class="cover-preview" src="{{coverImageUrl}}" mode="aspectFill" />
-        <view wx:else class="cover-empty">
-          <view class="cover-plus">+</view>
-          <view>上传封面</view>
+      <view class="field-label">案例图片 *</view>
+      <view class="gallery-upload-wrap">
+        <view class="gallery-grid">
+          <view wx:for="{{galleryPreviewUrls}}" wx:key="*this" class="gallery-item">
+            <image class="gallery-preview" src="{{item}}" mode="aspectFill" />
+            <view wx:if="{{index === 0}}" class="gallery-cover-badge">封面</view>
+            <view class="gallery-actions">
+              <view wx:if="{{index > 0}}" class="gallery-action" data-index="{{index}}" data-direction="left" bindtap="moveGalleryImage">←</view>
+              <view wx:if="{{index < galleryPreviewUrls.length - 1}}" class="gallery-action" data-index="{{index}}" data-direction="right" bindtap="moveGalleryImage">→</view>
+              <view class="gallery-action gallery-remove" data-index="{{index}}" bindtap="removeGalleryImage">×</view>
+            </view>
+          </view>
+          <view wx:if="{{galleryPreviewUrls.length < galleryMax}}" class="cover-picker" bindtap="chooseGalleryImages">
+            <view class="cover-plus">+</view>
+            <view>添加图片</view>
+            <view class="gallery-count">{{galleryPreviewUrls.length}} / {{galleryMax}}</view>
+          </view>
         </view>
         <view wx:if="{{uploading}}" class="upload-mask">上传中...</view>
       </view>
-      <view class="field-hint">图片会上传到云存储，不会放进小程序代码包。</view>
+      <button
+        wx:if="{{imageProcessingFailed}}"
+        class="image-retry-button"
+        loading="{{uploading}}"
+        disabled="{{uploading}}"
+        bindtap="retryImageProcessing"
+      >
+        重试处理
+      </button>
+      <view class="field-hint">最多 {{galleryMax}} 张；第一张为封面，可通过箭头调整顺序。图片会上传到云存储。</view>
     </view>
 
     <view class="field">
@@ -42,6 +70,7 @@
       </view>
     </view>
 
+    <view class="form-section-title">分类标签</view>
     <view class="field">
       <view class="field-label">包装内容 *</view>
       <view class="chip-grid">
@@ -122,6 +151,7 @@
       </view>
     </view>
 
+    <view class="form-section-title">排序与备注</view>
     <view class="field">
       <view class="field-label">排序</view>
       <input class="text-input" type="number" value="{{form.sortOrder}}" placeholder="数字越小越靠前，可不填" bindinput="onSortOrderInput" />
@@ -132,6 +162,7 @@
       <textarea class="textarea-input" value="{{form.notes}}" maxlength="800" placeholder="可写材质、适合场景、内部说明" bindinput="onNotesInput" />
     </view>
 
+    <view class="form-section-title">展示设置</view>
     <view class="visible-row">
       <view>
         <view class="field-label">前台显示</view>
@@ -140,9 +171,17 @@
       <switch checked="{{form.isVisible}}" bindchange="onVisibleChange" />
     </view>
 
+    <view class="visible-row">
+      <view>
+        <view class="field-label">置顶显示</view>
+        <view class="field-hint">仅在分类页默认排序优先展示，全部案例最多置顶 20 个。</view>
+      </view>
+      <switch checked="{{form.isPinned}}" bindchange="onPinnedChange" />
+    </view>
+
     <view class="field home-section-field">
       <view class="field-label">首页展示位置</view>
-      <view class="field-hint">打开前台显示后，勾选才会出现在首页对应位置；不勾选仍可在分类页显示。</view>
+      <view class="field-hint">不勾选仍可在分类页显示。轮播最多 5 张、热门最多 4 个、最新最多 6 个；名额已满时需先取消其他案例的对应展示。</view>
       <view class="chip-grid">
         <view
           wx:for="{{optionViews.homeSections}}"
@@ -157,10 +196,41 @@
       </view>
     </view>
 
+    <view wx:if="{{!isEdit}}" class="notification-publish-card">
+      <view class="visible-row notification-toggle-row">
+        <view>
+          <view class="field-label">同时发布产品上新通知</view>
+          <view class="field-hint">默认关闭。打开后，站内公告对所有用户可见，并提醒已授权订阅的用户。</view>
+        </view>
+        <switch checked="{{publishProductNotification}}" color="#285f42" bindchange="onPublishNotificationChange" />
+      </view>
+      <view wx:if="{{publishProductNotification}}" class="notification-draft">
+        <view class="field">
+          <view class="field-label">通知标题</view>
+          <input
+            class="text-input"
+            maxlength="80"
+            value="{{productNotificationDraft.title}}"
+            bindinput="onNotificationTitleInput"
+          />
+        </view>
+        <view class="field">
+          <view class="field-label">通知内容</view>
+          <textarea
+            class="textarea-input notification-textarea"
+            maxlength="500"
+            value="{{productNotificationDraft.content}}"
+            bindinput="onNotificationContentInput"
+          />
+        </view>
+        <view class="field-hint">案例会先保存；通知失败不会删除已保存的案例。</view>
+      </view>
+    </view>
+
     <button
       class="save-button"
       loading="{{saving}}"
-      disabled="{{saving || uploading}}"
+      disabled="{{saving || uploading || imageProcessingFailed}}"
       bindtap="saveCase"
     >
       {{isEdit ? '保存修改' : '创建案例'}}

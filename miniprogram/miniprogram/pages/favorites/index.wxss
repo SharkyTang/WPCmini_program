@@ -1,13 +1,13 @@
 page {
   min-height: 100%;
-  background: #f7f3ec;
-  color: #241d16;
+  background: var(--brand-bg);
+  color: var(--brand-ink);
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
 }
 
 .page {
   min-height: 100vh;
-  padding: 58rpx 40rpx 104rpx;
+  padding: 54rpx 36rpx 118rpx;
   box-sizing: border-box;
 }
 
@@ -50,39 +50,25 @@ page {
   box-sizing: border-box;
 }
 
-.state-card {
-  padding: 44rpx 34rpx;
-  border: 2rpx solid #dfcfb7;
+.state-shell {
+  padding: 16rpx 24rpx 38rpx;
   border-radius: 8rpx;
-  background: #fffdf9;
+  background: var(--brand-surface);
+  box-shadow: var(--brand-shadow);
   box-sizing: border-box;
+  text-align: center;
 }
 
 .state-error {
-  border-color: #efc3ba;
-  background: #fff5f2;
-}
-
-.state-title {
-  color: #241d16;
-  font-size: 30rpx;
-  line-height: 1.35;
-  font-weight: 800;
-}
-
-.state-copy {
-  margin-top: 12rpx;
-  color: #766b60;
-  font-size: 24rpx;
-  line-height: 1.55;
+  background: var(--brand-red-soft);
 }
 
 .state-button {
-  margin-top: 30rpx;
+  margin: 4rpx auto 0;
   width: 260rpx;
   height: 68rpx;
-  border-radius: 34rpx;
-  background: #241d16;
+  border-radius: 8rpx;
+  background: var(--brand-ink);
   color: #fff;
   display: flex;
   align-items: center;
@@ -140,18 +126,21 @@ page {
 .case-card {
   min-width: 0;
   position: relative;
-}
-
-.case-card-manage {
-  padding: 8rpx;
+  padding: 10rpx;
   border: 2rpx solid transparent;
-  border-radius: 10rpx;
+  border-radius: 8rpx;
+  background: var(--brand-surface);
+  box-shadow: var(--brand-shadow);
   box-sizing: border-box;
 }
 
+.case-card-manage {
+  box-shadow: none;
+}
+
 .case-card-selected {
-  border-color: #241d16;
-  background: rgba(36, 29, 22, 0.04);
+  border-color: var(--brand-gold);
+  background: var(--brand-gold-soft);
 }
 
 .select-mark {
@@ -178,14 +167,15 @@ page {
 }
 
 .case-card-selected .select-dot {
-  background: #241d16;
+  border-color: var(--brand-green);
+  background: var(--brand-green);
 }
 
 .case-image,
 .case-placeholder {
   width: 100%;
   aspect-ratio: 1.22;
-  border-radius: 8rpx;
+  border-radius: 6rpx;
   background: #f5e2ae;
 }
 
@@ -224,7 +214,7 @@ page {
   right: 0;
   bottom: 0;
   padding: 20rpx 40rpx calc(20rpx + env(safe-area-inset-bottom));
-  background: rgba(247, 243, 236, 0.96);
+  background: rgba(245, 239, 228, 0.97);
   border-top: 2rpx solid #eadcc8;
   box-sizing: border-box;
   z-index: 10;
@@ -232,8 +222,8 @@ page {
 
 .cancel-selected-button {
   height: 76rpx;
-  border-radius: 38rpx;
-  background: #241d16;
+  border-radius: 8rpx;
+  background: var(--brand-red);
   color: #fffdf9;
   display: flex;
   align-items: center;
@@ -245,4 +235,11 @@ page {
 .cancel-selected-button-disabled {
   background: #d7cbbd;
   color: #fffdf9;
+}
+
+.dialog-content {
+  padding: 8rpx 4rpx 18rpx;
+  color: var(--brand-muted);
+  font-size: 25rpx;
+  line-height: 1.55;
 }

@@ -1,13 +1,14 @@
 const cloud = require("wx-server-sdk");
 const {
-  CUSTOMER_NOTIFICATION_COLLECTION,
   FEEDBACK_COLLECTION,
   INQUIRY_COLLECTION,
-  NOTIFICATION_PREFERENCE_COLLECTION,
+  NOTIFICATION_SUBSCRIPTION_COLLECTION,
+  NOTIFICATION_TYPE_KEYS,
   buildFeedbackRecord,
   buildInquiryRecord,
-  normalizeDisabledTypes,
+  buildTemplateConfig,
   pickPreferenceRecord,
+  validateSubscriptionGrant,
   validateUserProfileDraft,
   validateFeedbackDraft,
   validateInquiryDraft,
@@ -38,6 +39,21 @@ function fail(code, message) {
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function parseOpenidSet(value) {
+  return new Set(
+    trimText(value)
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+  );
+}
+
+function resolveAdminRole(openid, roleEnvKey) {
+  const roleValue = trimText(process.env[roleEnvKey]);
+  const fallbackValue = trimText(process.env.ADMIN_OPENIDS);
+  return parseOpenidSet(roleValue || fallbackValue).has(openid);
 }
 
 function getRequestContext(event, openid) {
@@ -87,72 +103,176 @@ async function submitFeedback(event, openid) {
   });
 }
 
-async function fetchCustomerNotifications(openid) {
+function getSubscriptionTemplateIds() {
+  return {
+    version_update: trimText(process.env.VERSION_UPDATE_TEMPLATE_ID),
+    product_new: trimText(process.env.PRODUCT_NEW_TEMPLATE_ID),
+  };
+}
+
+function getWechatTemplateId(item = {}) {
+  return trimText(
+    item.priTmplId
+    || item.pri_tmpl_id
+    || item.templateId
+    || item.template_id
+  );
+}
+
+function getWechatTemplateItems(response = {}) {
+  const candidates = [
+    response.data,
+    response.priTmplList,
+    response.templateList,
+    response.list,
+  ];
+  return candidates.find(Array.isArray) || [];
+}
+
+async function verifySubscriptionTemplates(appid) {
+  const templateIds = getSubscriptionTemplateIds();
+  const templateConfigs = NOTIFICATION_TYPE_KEYS.reduce((result, type) => {
+    result[type] = buildTemplateConfig(type, templateIds[type]);
+    return result;
+  }, {});
+
+  if (
+    !cloud.openapi
+    || !cloud.openapi.subscribeMessage
+    || typeof cloud.openapi.subscribeMessage.getTemplateList !== "function"
+  ) {
+    return ok({
+      appid,
+      verificationAvailable: false,
+      verificationCode: "OPENAPI_UNAVAILABLE",
+      verificationMessage: "当前 userData 云函数 SDK 不支持查询订阅模板列表，请重新部署云函数依赖",
+      templates: templateConfigs,
+    });
+  }
+
+  try {
+    const response = await cloud.openapi.subscribeMessage.getTemplateList({});
+    const templateItems = getWechatTemplateItems(response);
+    const templateMap = templateItems.reduce((result, item) => {
+      const id = getWechatTemplateId(item);
+      if (id) result[id] = item;
+      return result;
+    }, {});
+    const templates = NOTIFICATION_TYPE_KEYS.reduce((result, type) => {
+      const config = templateConfigs[type];
+      const item = templateMap[config.templateId] || null;
+      result[type] = {
+        ...config,
+        existsInCurrentApp: Boolean(item),
+        usable: config.valid && Boolean(item),
+        title: item ? trimText(item.title) : "",
+        templateType: item ? item.type : "",
+        code: !config.valid
+          ? config.code
+          : item
+            ? ""
+            : "TEMPLATE_NOT_IN_CURRENT_APP",
+        message: !config.valid
+          ? config.message
+          : item
+            ? ""
+            : `${config.envKey} 对应模板不在当前 AppID 的“我的模板”列表中`,
+      };
+      return result;
+    }, {});
+    return ok({
+      appid,
+      verificationAvailable: true,
+      templateCount: templateItems.length,
+      templates,
+    });
+  } catch (error) {
+    console.error("subscription template verification error", {
+      appid,
+      code: error.errCode || error.code || "",
+      message: error.errMsg || error.message || "",
+    });
+    return ok({
+      appid,
+      verificationAvailable: false,
+      verificationCode: error.errCode || error.code || "OPENAPI_ERROR",
+      verificationMessage: error.errMsg || error.message || "微信模板列表查询失败",
+      templates: templateConfigs,
+    });
+  }
+}
+
+async function findSubscription(openid, type) {
   const response = await db
-    .collection(CUSTOMER_NOTIFICATION_COLLECTION)
-    .where({
-      targetOpenId: openid,
-      isVisible: true,
-    })
-    .orderBy("createdAt", "desc")
-    .limit(100)
+    .collection(NOTIFICATION_SUBSCRIPTION_COLLECTION)
+    .where({ openid, type })
+    .limit(1)
     .get();
-
-  return ok({
-    items: response.data || [],
-  });
+  return pickPreferenceRecord(response.data);
 }
 
-async function findNotificationPreference(openid) {
-  const byOpenid = await db
-    .collection(NOTIFICATION_PREFERENCE_COLLECTION)
+async function fetchSubscriptionStatus(openid) {
+  const templateIds = getSubscriptionTemplateIds();
+  const templateConfigs = NOTIFICATION_TYPE_KEYS.reduce((result, type) => {
+    result[type] = buildTemplateConfig(type, templateIds[type]);
+    return result;
+  }, {});
+  const response = await db
+    .collection(NOTIFICATION_SUBSCRIPTION_COLLECTION)
     .where({ openid })
-    .limit(1)
+    .limit(NOTIFICATION_TYPE_KEYS.length)
     .get();
-  const openidRecord = pickPreferenceRecord(byOpenid.data);
-  if (openidRecord) return openidRecord;
-
-  const byOwner = await db
-    .collection(NOTIFICATION_PREFERENCE_COLLECTION)
-    .where({ _openid: openid })
-    .limit(1)
-    .get();
-  return pickPreferenceRecord(byOwner.data);
-}
-
-async function fetchNotificationPreferences(openid) {
-  const preference = await findNotificationPreference(openid);
+  const subscriptions = (response.data || []).reduce((result, item) => {
+    const currentTemplateId = templateIds[item.type] || "";
+    const matchesCurrentTemplate = (
+      templateConfigs[item.type]
+      && templateConfigs[item.type].valid
+      && item.templateId === currentTemplateId
+    );
+    result[item.type] = {
+      templateId: matchesCurrentTemplate ? item.templateId || "" : currentTemplateId,
+      status: matchesCurrentTemplate ? item.status || "idle" : "idle",
+    };
+    return result;
+  }, {});
   return ok({
-    preferenceId: preference ? preference._id || preference.id || "" : "",
-    disabledTypes: normalizeDisabledTypes(preference ? preference.disabledTypes : []),
+    subscriptions,
+    templateIds,
+    templateConfigs,
   });
 }
 
-async function saveNotificationPreferences(event, openid) {
-  const preference = await findNotificationPreference(openid);
+async function saveSubscriptionGrant(event, openid) {
+  const templateIds = getSubscriptionTemplateIds();
+  const validation = validateSubscriptionGrant(event, templateIds);
+  if (!validation.valid) return fail(validation.code, validation.message);
+
+  const { type, templateId, status } = validation.data;
+  const subscription = await findSubscription(openid, type);
   const data = {
     openid,
-    disabledTypes: normalizeDisabledTypes(event.disabledTypes || []),
+    type,
+    templateId,
+    status,
+    grantedAt: status === "granted" ? db.serverDate() : null,
+    consumedAt: null,
     updatedAt: db.serverDate(),
   };
 
-  if (preference && (preference._id || preference.id)) {
-    const preferenceId = preference._id || preference.id;
-    await db.collection(NOTIFICATION_PREFERENCE_COLLECTION).doc(preferenceId).update({
+  if (subscription && (subscription._id || subscription.id)) {
+    const subscriptionId = subscription._id || subscription.id;
+    await db.collection(NOTIFICATION_SUBSCRIPTION_COLLECTION).doc(subscriptionId).update({
       data,
     });
-    return ok({ preferenceId });
+  } else {
+    await db.collection(NOTIFICATION_SUBSCRIPTION_COLLECTION).add({
+      data: {
+        ...data,
+        createdAt: db.serverDate(),
+      },
+    });
   }
-
-  const response = await db.collection(NOTIFICATION_PREFERENCE_COLLECTION).add({
-    data: {
-      ...data,
-      createdAt: db.serverDate(),
-    },
-  });
-  return ok({
-    preferenceId: response._id || "",
-  });
+  return fetchSubscriptionStatus(openid);
 }
 
 function toProfileResponse(profile) {
@@ -176,6 +296,40 @@ async function getUserProfile(openid) {
   const profile = await findUserProfile(openid);
   return ok({
     profile: toProfileResponse(profile),
+  });
+}
+
+async function getAvatarUrl(avatarFileId) {
+  if (!avatarFileId || avatarFileId.indexOf("cloud://") !== 0) return "";
+  try {
+    const response = await cloud.getTempFileURL({
+      fileList: [avatarFileId],
+    });
+    const item = response && response.fileList && response.fileList[0];
+    return (item && item.tempFileURL) || "";
+  } catch (error) {
+    console.warn("profile avatar url resolve failed", error);
+    return "";
+  }
+}
+
+async function getSessionSummary(openid) {
+  const profileRecord = await findUserProfile(openid);
+  const profile = toProfileResponse(profileRecord);
+  const avatarUrl = profile ? await getAvatarUrl(profile.avatarFileId) : "";
+  return ok({
+    openid,
+    profile: profile
+      ? {
+        ...profile,
+        avatarUrl,
+      }
+      : null,
+    roles: {
+      inquiryAdmin: resolveAdminRole(openid, "INQUIRY_ADMIN_OPENIDS"),
+      caseAdmin: resolveAdminRole(openid, "CASE_ADMIN_OPENIDS"),
+      notificationAdmin: resolveAdminRole(openid, "NOTIFICATION_ADMIN_OPENIDS"),
+    },
   });
 }
 
@@ -209,7 +363,7 @@ async function saveUserProfile(event, openid) {
 }
 
 exports.main = async (event = {}) => {
-  const { OPENID } = cloud.getWXContext();
+  const { OPENID, APPID } = cloud.getWXContext();
   const action = trimText(event.action);
 
   if (!OPENID) {
@@ -219,12 +373,13 @@ exports.main = async (event = {}) => {
   try {
     if (action === "submitInquiry") return submitInquiry(event, OPENID);
     if (action === "submitFeedback") return submitFeedback(event, OPENID);
-    if (action === "fetchCustomerNotifications") return fetchCustomerNotifications(OPENID);
-    if (action === "fetchNotificationPreferences") return fetchNotificationPreferences(OPENID);
-    if (action === "saveNotificationPreferences") {
-      return saveNotificationPreferences(event, OPENID);
+    if (action === "fetchSubscriptionStatus") return fetchSubscriptionStatus(OPENID);
+    if (action === "verifySubscriptionTemplates") {
+      return verifySubscriptionTemplates(APPID || "");
     }
+    if (action === "saveSubscriptionGrant") return saveSubscriptionGrant(event, OPENID);
     if (action === "getProfile") return getUserProfile(OPENID);
+    if (action === "getSessionSummary") return getSessionSummary(OPENID);
     if (action === "saveProfile") return saveUserProfile(event, OPENID);
     return fail("UNKNOWN_ACTION", "未知用户数据操作");
   } catch (error) {

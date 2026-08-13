@@ -5,7 +5,12 @@ const {
   mergeFavoritesWithCases,
   normalizeSelectedFavoriteIds,
 } = require("./favoriteData");
-const { ensureProfileIdentity } = require("./userService");
+const { checkLibraryAccess } = require("./libraryAccessService");
+const { fetchUserLibrary } = require("./caseCatalogService");
+const {
+  callUserLibrary,
+  isUserLibraryUnavailableError,
+} = require("./userLibraryService");
 
 const FAVORITE_COLLECTION = "favorites";
 const FAVORITE_LIMIT = 100;
@@ -44,11 +49,8 @@ function isCaseNotFoundError(error) {
 
 async function ensureIdentityForRead(options = {}) {
   try {
-    const identity = await ensureProfileIdentity({
-      redirectToSetup: false,
-      showError: false,
-    });
-    return identity.ready ? identity.openid : "";
+    const access = await checkLibraryAccess("favorites", options);
+    return access.status === "ready" ? access.openid : "";
   } catch (error) {
     console.warn("静默读取微信身份失败", error);
     return "";
@@ -68,14 +70,7 @@ async function fetchFavoriteForCase(caseItem, options = {}) {
   return null;
 }
 
-async function addFavorite(caseItem) {
-  const identity = await ensureProfileIdentity({
-    redirectToSetup: false,
-    showError: false,
-  });
-  const openid = identity.ready ? identity.openid : "";
-  if (!openid) return null;
-
+async function addFavoriteLegacy(caseItem, openid) {
   const existing = await fetchFavoriteForCase(caseItem);
   if (existing) return existing;
 
@@ -101,11 +96,25 @@ async function addFavorite(caseItem) {
   };
 }
 
-async function removeFavorite(favoriteId) {
-  if (!favoriteId) return false;
-  const openid = await ensureIdentityForRead({ silentIdentity: true });
-  if (!openid) return false;
+async function addFavorite(caseItem) {
+  const access = await checkLibraryAccess("favorites");
+  const openid = access.status === "ready" ? access.openid : "";
+  if (!openid) return null;
 
+  try {
+    const result = await callUserLibrary("addFavorite", {
+      favorite: buildFavoriteRecord(caseItem),
+    });
+    if (result.limitReached) return { limitReached: true };
+    return result.favorite || null;
+  } catch (error) {
+    if (!isUserLibraryUnavailableError(error)) throw error;
+    console.warn("用户收藏云函数尚未部署，使用兼容写入");
+    return addFavoriteLegacy(caseItem, openid);
+  }
+}
+
+async function removeFavoriteLegacy(favoriteId, openid) {
   const response = await getFavoritesCollection()
     .where({ _id: favoriteId, _openid: openid })
     .limit(1)
@@ -117,16 +126,39 @@ async function removeFavorite(favoriteId) {
   return true;
 }
 
-async function removeFavoriteRecords(favoriteIds) {
+async function removeFavorite(favoriteId) {
+  if (!favoriteId) return false;
+  const removedCount = await removeFavoriteRecords([favoriteId]);
+  return removedCount > 0;
+}
+
+async function removeFavoriteRecordsLegacy(favoriteIds, openid) {
   const ids = normalizeSelectedFavoriteIds(favoriteIds);
   if (!ids.length) return 0;
 
-  const results = await Promise.all(ids.map((id) => removeFavorite(id)));
+  const results = await Promise.all(
+    ids.map((id) => removeFavoriteLegacy(id, openid))
+  );
   return results.filter(Boolean).length;
 }
 
-async function clearFavorites() {
+async function removeFavoriteRecords(favoriteIds) {
+  const ids = normalizeSelectedFavoriteIds(favoriteIds);
+  if (!ids.length) return 0;
   const openid = await ensureIdentityForRead({ silentIdentity: true });
+  if (!openid) return 0;
+
+  try {
+    const result = await callUserLibrary("removeFavorites", { ids });
+    return Number(result.removedCount) || 0;
+  } catch (error) {
+    if (!isUserLibraryUnavailableError(error)) throw error;
+    console.warn("用户收藏云函数尚未部署，使用兼容删除");
+    return removeFavoriteRecordsLegacy(ids, openid);
+  }
+}
+
+async function clearFavoritesLegacy(openid) {
   if (!openid) return 0;
 
   let removedCount = 0;
@@ -141,16 +173,35 @@ async function clearFavorites() {
     );
 
     if (!ids.length) break;
-    removedCount += await removeFavoriteRecords(ids);
+    removedCount += await removeFavoriteRecordsLegacy(ids, openid);
     if (ids.length < 100) break;
   }
 
   return removedCount;
 }
 
+async function clearFavorites() {
+  const openid = await ensureIdentityForRead({ silentIdentity: true });
+  if (!openid) return 0;
+
+  try {
+    const result = await callUserLibrary("clearFavorites");
+    return Number(result.removedCount) || 0;
+  } catch (error) {
+    if (!isUserLibraryUnavailableError(error)) throw error;
+    console.warn("用户收藏云函数尚未部署，使用兼容清空");
+    return clearFavoritesLegacy(openid);
+  }
+}
+
 async function toggleFavorite(caseItem, currentFavorite) {
   if (currentFavorite && currentFavorite._id) {
-    await removeFavorite(currentFavorite._id);
+    const removed = await removeFavorite(currentFavorite._id);
+    if (!removed) {
+      const error = new Error("收藏删除结果未生效");
+      error.code = "FAVORITE_REMOVE_NOT_APPLIED";
+      throw error;
+    }
     return {
       isFavorited: false,
       favorite: null,
@@ -182,7 +233,7 @@ async function toggleFavorite(caseItem, currentFavorite) {
   };
 }
 
-async function fetchFavoriteCases() {
+async function fetchFavoriteCasesLegacy() {
   const openid = await ensureIdentityForRead({ silentIdentity: true });
   if (!openid) return [];
 
@@ -227,14 +278,33 @@ async function fetchFavoriteCases() {
   );
 }
 
+async function fetchFavoriteCases() {
+  const openid = await ensureIdentityForRead({ silentIdentity: true });
+  if (!openid) return [];
+  try {
+    const items = await fetchUserLibrary("favorites");
+    return items.map((item) => ({
+      favoriteId: item.recordId,
+      caseItem: item.caseItem,
+    }));
+  } catch (error) {
+    console.warn("收藏聚合接口不可用，使用兼容读取", error);
+    return fetchFavoriteCasesLegacy();
+  }
+}
+
 module.exports = {
   FAVORITE_COLLECTION,
   FAVORITE_LIMIT,
   fetchFavoriteForCase,
   addFavorite,
+  addFavoriteLegacy,
   removeFavorite,
   removeFavoriteRecords,
+  removeFavoriteRecordsLegacy,
   clearFavorites,
+  clearFavoritesLegacy,
   toggleFavorite,
   fetchFavoriteCases,
+  fetchFavoriteCasesLegacy,
 };

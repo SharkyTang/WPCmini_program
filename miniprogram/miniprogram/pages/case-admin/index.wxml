@@ -60,7 +60,7 @@
 
     <view wx:else class="case-list">
       <view wx:for="{{cases}}" wx:key="displayKey" class="case-card">
-        <image wx:if="{{item.coverImageUrl}}" class="case-cover" src="{{item.coverImageUrl}}" mode="aspectFill" />
+        <image wx:if="{{item.coverImageUrl}}" class="case-cover" src="{{item.coverImageUrl}}" mode="aspectFill" lazy-load="{{true}}" fade-in="{{true}}" />
         <view wx:else class="case-cover case-cover-placeholder">暂无图片</view>
         <view class="case-copy">
           <view class="case-head">
@@ -71,6 +71,7 @@
           <view class="case-meta">{{item.caseId || item.id}}</view>
           <view class="case-tags">{{item.tagSummary || '暂无标签'}}</view>
           <view wx:if="{{item.homeSectionSummary}}" class="home-section-summary">首页展示：{{item.homeSectionSummary}}</view>
+          <view wx:if="{{item.pinnedLabel}}" class="home-display-summary">{{item.pinnedLabel}}</view>
           <view wx:if="{{item.displayLabel}}" class="home-display-summary">{{item.displayLabel}} · {{item.displayOrderLabel}}</view>
           <view wx:if="{{item.source !== 'banner'}}" class="case-actions">
             <view class="case-action" data-id="{{item.id}}" bindtap="editCase">编辑</view>
@@ -96,4 +97,15 @@
       <view wx:elif="{{!isHomeDisplay && !hasMore}}" class="list-foot">已显示全部案例</view>
     </view>
   </block>
+
+  <mp-dialog
+    ext-class="brand-dialog"
+    show="{{confirmDialog.show}}"
+    title="{{confirmDialog.title}}"
+    buttons="{{confirmDialog.buttons}}"
+    bindbuttontap="handleConfirmDialogTap"
+    bindclose="closeConfirmDialog"
+  >
+    <view class="dialog-content">{{confirmDialog.content}}</view>
+  </mp-dialog>
 </view>

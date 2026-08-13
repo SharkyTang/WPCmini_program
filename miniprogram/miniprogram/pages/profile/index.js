@@ -1,29 +1,39 @@
 const {
-  DEFAULT_NICKNAME,
   cacheProfile,
-  fetchProfile,
+  fetchSessionSummary,
   getLegacyProfile,
   hasCompletedProfile,
 } = require("../../utils/profileService");
 const {
   cacheCompletedProfileIdentity,
-  fetchOpenId,
+  cacheOpenId,
+  resumePendingProfileAction,
 } = require("../../utils/userService");
+const {
+  requestLibraryAccess,
+  resumePendingLibraryAction,
+} = require("../../utils/libraryAccessService");
 const {
   CUSTOMER_SERVICE_SOURCE,
   buildCustomerSessionFrom,
 } = require("../../utils/customerServiceData");
-const {
-  checkInquiryAdminAccess,
-} = require("../../utils/inquiryAdminService");
-const {
-  checkCaseAdminAccess,
-} = require("../../utils/caseAdminService");
-
+const HOME_SHARE_TITLE = "金亿诚包装科技｜酒包装灵感库";
+const LIBRARY_QUICK_ACTIONS = {
+  favorites: {
+    kind: "favorites",
+    source: "profile_favorites",
+    url: "/pages/favorites/index",
+  },
+  history: {
+    kind: "history",
+    source: "profile_history",
+    url: "/pages/history/index",
+  },
+};
 const DEFAULT_PROFILE_INFO = {
-  nickname: DEFAULT_NICKNAME,
+  nickname: "完善个人资料",
   avatarUrl: "",
-  note: "点击使用微信头像和名称",
+  note: "完善头像和昵称后，可使用收藏与浏览记录",
 };
 
 function toProfileInfo(profile = {}) {
@@ -37,7 +47,13 @@ function toProfileInfo(profile = {}) {
   };
 }
 
+function wasPendingActionResumed(result) {
+  return result === true || Boolean(result && result.resumed);
+}
+
 Page({
+  quickActionPendingKey: "",
+
   data: {
     profileInfo: DEFAULT_PROFILE_INFO,
     hasCompletedProfile: false,
@@ -47,12 +63,15 @@ Page({
     checkingInquiryAdminAccess: false,
     hasCaseAdminAccess: false,
     checkingCaseAdminAccess: false,
+    hasNotificationAdminAccess: false,
+    checkingNotificationAdminAccess: false,
     quickActions: [
       { key: "favorites", iconSrc: "/assets/profile/icon-favorite.png", title: "我的收藏" },
       { key: "history", iconSrc: "/assets/profile/icon-history.png", title: "浏览记录" },
       { key: "notice", iconSrc: "/assets/profile/icon-notice.png", title: "消息通知" },
-      { key: "service", iconSrc: "/assets/profile/icon-service.png", title: "联系客服" },
+      { key: "service", iconSrc: "/assets/profile/icon-service.png", title: "咨询客服" },
       { key: "feedback", iconSrc: "/assets/profile/icon-feedback.png", title: "意见反馈" },
+      { key: "contact", iconSrc: "/assets/profile/icon-contact.png", title: "联系我们" },
     ],
     customerServiceSessionFrom: buildCustomerSessionFrom({
       source: CUSTOMER_SERVICE_SOURCE.PROFILE,
@@ -77,12 +96,24 @@ Page({
 
   onShow() {
     this.loadProfileInfo();
-    this.refreshInquiryAdminAccess();
-    this.refreshCaseAdminAccess();
+    return this.resumePendingLibraryNavigation();
   },
 
   onPullDownRefresh() {
-    this.loadProfileInfo({ stopRefresh: true });
+    this.loadProfileInfo({ stopRefresh: true, forceRefresh: true });
+  },
+
+  onShareAppMessage() {
+    return {
+      title: HOME_SHARE_TITLE,
+      path: "/pages/index/index",
+    };
+  },
+
+  onShareTimeline() {
+    return {
+      title: HOME_SHARE_TITLE,
+    };
   },
 
   async loadProfileInfo(options = {}) {
@@ -97,18 +128,32 @@ Page({
     });
 
     try {
-      const profile = await fetchProfile();
+      const summary = await fetchSessionSummary({
+        forceRefresh: options.forceRefresh === true,
+      });
+      const profile = summary.profile;
+      cacheOpenId(summary.openid);
+      this.setData({
+        hasInquiryAdminAccess: summary.roles.inquiryAdmin,
+        hasCaseAdminAccess: summary.roles.caseAdmin,
+        hasNotificationAdminAccess: summary.roles.notificationAdmin,
+        checkingInquiryAdminAccess: false,
+        checkingCaseAdminAccess: false,
+        checkingNotificationAdminAccess: false,
+      });
       if (profile && hasCompletedProfile(profile)) {
         cacheProfile(profile);
-        try {
-          const openid = await fetchOpenId();
-          cacheCompletedProfileIdentity(openid, profile);
-        } catch (identityError) {
-          console.warn("个人资料已读取，但身份缓存恢复失败", identityError);
-        }
+        cacheCompletedProfileIdentity(summary.openid, profile);
         this.setData({
           profileInfo: toProfileInfo(profile),
           hasCompletedProfile: true,
+        });
+      } else {
+        const currentProfile = profile || {};
+        cacheProfile(currentProfile);
+        this.setData({
+          profileInfo: toProfileInfo(currentProfile),
+          hasCompletedProfile: false,
         });
       }
     } catch (error) {
@@ -133,14 +178,87 @@ Page({
     });
   },
 
-  handleQuickAction(event) {
-    const key = event.currentTarget.dataset.key;
-    if (key === "favorites") {
-      wx.navigateTo({ url: "/pages/favorites/index" });
-      return;
+  async resumePendingLibraryNavigation() {
+    try {
+      const resumedFavorites = await resumePendingLibraryAction("profile_favorites");
+      if (!wasPendingActionResumed(resumedFavorites)) {
+        const resumedHistory = await resumePendingLibraryAction("profile_history");
+        if (!wasPendingActionResumed(resumedHistory)) {
+          await resumePendingProfileAction();
+        }
+      }
+    } catch (error) {
+      console.error("恢复资料完成后的入口失败", error);
+    } finally {
+      this.quickActionPendingKey = "";
     }
-    if (key === "history") {
-      wx.navigateTo({ url: "/pages/history/index" });
+  },
+
+  navigateToLibraryAction(libraryAction) {
+    return new Promise((resolve, reject) => {
+      wx.navigateTo({
+        url: libraryAction.url,
+        success: resolve,
+        fail: (error) => {
+          wx.showToast({
+            title: "页面暂时无法打开，请重试",
+            icon: "none",
+          });
+          reject(error);
+        },
+        complete: () => {
+          this.quickActionPendingKey = "";
+        },
+      });
+    });
+  },
+
+  async handleQuickAction(event) {
+    const key = event.currentTarget.dataset.key;
+    const libraryAction = LIBRARY_QUICK_ACTIONS[key];
+    if (libraryAction) {
+      if (this.quickActionPendingKey) return;
+      this.quickActionPendingKey = key;
+      const navigate = () => this.navigateToLibraryAction(libraryAction);
+      let keepPending = false;
+      try {
+        if (this.data.hasCompletedProfile) {
+          keepPending = true;
+          navigate().catch((error) => {
+            console.error("用户列表页面跳转失败", error);
+          });
+          return;
+        }
+
+        const result = await requestLibraryAccess({
+          kind: libraryAction.kind,
+          source: libraryAction.source,
+          resume: navigate,
+        });
+        if (result && (result.ready === true || result.status === "ready")) {
+          keepPending = true;
+          navigate().catch((error) => {
+            console.error("用户列表页面跳转失败", error);
+          });
+        } else if (result && result.status === "redirected") {
+          keepPending = true;
+        } else if (result && result.status === "error") {
+          wx.showToast({
+            title: result.stage === "navigation"
+              ? "暂时无法打开资料页，请重试"
+              : "暂时无法验证资料，请重试",
+            icon: "none",
+          });
+        }
+      } catch (error) {
+        console.error("用户列表访问检查失败", error);
+        wx.showToast({
+          title: "暂时无法验证资料，请重试",
+          icon: "none",
+        });
+      } finally {
+        if (!keepPending) this.quickActionPendingKey = "";
+      }
       return;
     }
     if (key === "notice") {
@@ -151,6 +269,10 @@ Page({
       wx.navigateTo({ url: "/pages/feedback/index?source=profile" });
       return;
     }
+    if (key === "contact") {
+      wx.navigateTo({ url: "/pages/contact/index" });
+      return;
+    }
 
     wx.showToast({ title: "入口后续开放", icon: "none" });
   },
@@ -159,32 +281,20 @@ Page({
     wx.navigateTo({ url: "/pages/inquiry/index?source=profile" });
   },
 
-  async refreshInquiryAdminAccess() {
-    if (this.data.checkingInquiryAdminAccess) return;
-    this.setData({ checkingInquiryAdminAccess: true });
-    const hasInquiryAdminAccess = await checkInquiryAdminAccess();
-    this.setData({
-      hasInquiryAdminAccess,
-      checkingInquiryAdminAccess: false,
-    });
+  openPrivacyCenter() {
+    wx.navigateTo({ url: "/pages/privacy/index" });
   },
 
   openInquiryAdmin() {
     wx.navigateTo({ url: "/pages/inquiry-admin/index" });
   },
 
-  async refreshCaseAdminAccess() {
-    if (this.data.checkingCaseAdminAccess) return;
-    this.setData({ checkingCaseAdminAccess: true });
-    const hasCaseAdminAccess = await checkCaseAdminAccess();
-    this.setData({
-      hasCaseAdminAccess,
-      checkingCaseAdminAccess: false,
-    });
-  },
-
   openCaseAdmin() {
     wx.navigateTo({ url: "/pages/case-admin/index" });
+  },
+
+  openNotificationAdmin() {
+    wx.navigateTo({ url: "/pages/notification-admin/index" });
   },
 
   handleContact(event) {

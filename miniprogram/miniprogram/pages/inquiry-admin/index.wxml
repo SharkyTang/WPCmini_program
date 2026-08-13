@@ -56,7 +56,7 @@
       <view
         wx:for="{{inquiries}}"
         wx:key="id"
-        class="inquiry-card"
+        class="inquiry-card inquiry-card-{{item.status}}"
         data-id="{{item.id}}"
         bindtap="openDetail"
       >
@@ -64,10 +64,15 @@
           <view class="status-badge status-{{item.status}}">{{item.statusLabel}}</view>
           <view class="created-time">{{item.createdAtText}}</view>
         </view>
-        <view class="contact-line">联系方式：{{item.contact || '未填写'}}</view>
-        <view class="meta-line">包装：{{item.packageSummary || '未选择'}}</view>
-        <view class="meta-line">风格：{{item.styleSummary || '未选择'}} · 价位：{{item.priceLevel || '未选择'}}</view>
-        <view class="meta-line">场景：{{item.sceneSummary || '未选择'}} · 来源：{{item.sourceLabel}}</view>
+        <view class="contact-label">客户联系方式 · {{item.contactTypeLabel}}</view>
+        <view class="contact-line">{{item.contact || '未填写'}}</view>
+        <view class="meta-grid">
+          <view class="meta-item">包装 · {{item.packageSummary || '未选择'}}</view>
+          <view class="meta-item">风格 · {{item.styleSummary || '未选择'}}</view>
+          <view class="meta-item">价位 · {{item.priceLevel || '未选择'}}</view>
+          <view class="meta-item">场景 · {{item.sceneSummary || '未选择'}}</view>
+        </view>
+        <view class="source-line">来源：{{item.sourceLabel}}</view>
         <view wx:if="{{item.caseId || item.caseTitle}}" class="case-line">
           参考案例：{{item.caseId || '-'}} {{item.caseTitle}}
         </view>

@@ -12,18 +12,22 @@ const logic = require(resolve(
 
 const {
   ALLOWED_CASE_FIELDS,
+  CASE_GALLERY_MAX,
   HOME_DISPLAY_LIMITS,
   VALID_CASE_ADMIN_ACTIONS,
   buildCaseSearchText,
   buildHomepageDisplayItems,
   filterCaseItems,
   generateSequentialCaseId,
+  getActivatedHomepageSlots,
   getAdminOpenidsFromEnv,
   getCaseIdNumber,
   isAdminOpenid,
+  isRoleAdminOpenid,
   normalizeCloudFileIds,
   pickAllowedCaseFields,
   sanitizeCasePayload,
+  validateHomepageDisplayCapacity,
 } = logic;
 
 function test(name, fn) {
@@ -46,14 +50,48 @@ test("checks admin openid from comma separated env value", () => {
   assert.equal(isAdminOpenid("x", "a,b,c"), false);
 });
 
+test("case-specific admins override a whitespace-safe general fallback", () => {
+  assert.equal(isRoleAdminOpenid("case_admin", " case_admin ", "general_admin"), true);
+  assert.equal(isRoleAdminOpenid("general_admin", "case_admin", "general_admin"), false);
+  assert.equal(isRoleAdminOpenid("general_admin", "   ", " general_admin "), true);
+});
+
 test("declares supported case admin actions", () => {
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("checkAccess"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getCaseImageUrls"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getVisibleImageUrls"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listHomepageDisplay"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listRecentCases"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("createCase"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("setCaseVisibility"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("deleteCase"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("cleanupUnreferencedFiles"), true);
+});
+
+test("accepts complete v2 image arrays and rejects incomplete banners", () => {
+  const base = {
+    title: "v2 案例",
+    packageTypes: ["礼盒"],
+    galleryImages: ["cloud://env/display.jpg"],
+    sourceGalleryImages: ["cloud://env/source.jpg"],
+    galleryThumbnails: ["cloud://env/thumb.jpg"],
+    galleryBanners: ["cloud://env/banner.jpg"],
+    coverBanner: "cloud://env/banner.jpg",
+    imageVariantVersion: 2,
+  };
+  const valid = sanitizeCasePayload(base, {
+    isCreate: true,
+    defaultCaseId: "case_100",
+  });
+  assert.equal(valid.valid, true);
+  assert.equal(valid.data.coverBanner, "cloud://env/banner.jpg");
+  assert.equal(valid.data.imageVariantVersion, 2);
+  const invalid = sanitizeCasePayload(
+    { ...base, galleryImages: [...base.galleryImages, "cloud://env/display-2.jpg"] },
+    { isCreate: true, defaultCaseId: "case_101" }
+  );
+  assert.equal(invalid.valid, false);
+  assert.equal(invalid.code, "INCOMPLETE_IMAGE_VARIANTS");
 });
 
 test("normalizes cloud file ids for image URL exchange", () => {
@@ -68,15 +106,81 @@ test("keeps only writable case fields", () => {
   const picked = pickAllowedCaseFields({
     title: "案例",
     coverImage: "cloud://cloud1/file.jpg",
+    galleryImages: ["cloud://cloud1/file.jpg", "cloud://cloud1/detail.jpg"],
+    isPinned: true,
     homeSections: ["popular"],
     _openid: "hacker",
     createdAt: "bad",
     updatedByOpenid: "bad",
   });
 
-  assert.deepEqual(plain(Object.keys(picked)), ["title", "coverImage", "homeSections"]);
+  assert.deepEqual(plain(Object.keys(picked)), ["title", "coverImage", "galleryImages", "homeSections", "isPinned"]);
   assert.equal(ALLOWED_CASE_FIELDS.includes("_openid"), false);
   assert.equal(ALLOWED_CASE_FIELDS.includes("homeSections"), true);
+});
+
+test("uses the first gallery image as the server-side cover", () => {
+  const result = sanitizeCasePayload({
+    title: "多图案例",
+    galleryImages: ["cloud://cloud1/cover.jpg", "cloud://cloud1/detail.jpg"],
+    packageTypes: ["礼盒"],
+    isPinned: true,
+  }, { isCreate: true, defaultCaseId: "case_092" });
+
+  assert.equal(result.valid, true);
+  assert.equal(result.data.coverImage, "cloud://cloud1/cover.jpg");
+  assert.deepEqual(plain(result.data.galleryImages), ["cloud://cloud1/cover.jpg", "cloud://cloud1/detail.jpg"]);
+  assert.equal(result.data.isPinned, true);
+});
+
+test("server accepts nine case images and rejects the tenth", () => {
+  const galleryImages = Array.from(
+    { length: CASE_GALLERY_MAX },
+    (_, index) => `cloud://cloud1/display-${index}.jpg`
+  );
+  const accepted = sanitizeCasePayload({
+    title: "九图案例",
+    galleryImages,
+    packageTypes: ["礼盒"],
+  }, { isCreate: true, defaultCaseId: "case_109" });
+  const rejected = sanitizeCasePayload({
+    title: "十图案例",
+    galleryImages: [...galleryImages, "cloud://cloud1/display-9.jpg"],
+    packageTypes: ["礼盒"],
+  }, { isCreate: true, defaultCaseId: "case_111" });
+
+  assert.equal(CASE_GALLERY_MAX, 9);
+  assert.equal(accepted.valid, true);
+  assert.equal(accepted.data.galleryImages.length, 9);
+  assert.equal(rejected.valid, false);
+  assert.equal(rejected.code, "TOO_MANY_IMAGES");
+  assert.equal(rejected.message, "一个案例最多上传 9 张图片");
+});
+
+test("rejects partially generated image variant arrays", () => {
+  const result = sanitizeCasePayload({
+    title: "不完整图片案例",
+    galleryImages: ["cloud://env/display-1.jpg", "cloud://env/display-2.jpg"],
+    sourceGalleryImages: ["cloud://env/source-1.jpg", "cloud://env/source-2.jpg"],
+    galleryThumbnails: ["cloud://env/thumb-1.jpg"],
+    packageTypes: ["礼盒"],
+  }, { isCreate: true, defaultCaseId: "case_092" });
+
+  assert.equal(result.valid, false);
+  assert.equal(result.code, "INCOMPLETE_IMAGE_VARIANTS");
+});
+
+test("rejects original or display images masquerading as thumbnails", () => {
+  const source = "cloud://env/source.jpg";
+  const result = sanitizeCasePayload({
+    title: "错误回退案例",
+    galleryImages: [source],
+    sourceGalleryImages: [source],
+    galleryThumbnails: [source],
+    packageTypes: ["礼盒"],
+  }, { isCreate: true, defaultCaseId: "case_093" });
+  assert.equal(result.valid, false);
+  assert.equal(result.code, "INVALID_IMAGE_VARIANTS");
 });
 
 test("sanitizes create payload with defaults and preserves visible flag", () => {
@@ -125,6 +229,54 @@ test("new cases stay hidden unless visible flag is explicitly enabled", () => {
   assert.deepEqual(plain(omitted.data.homeSections), { values: [] });
   assert.equal(disabled.valid, true);
   assert.equal(disabled.data.isVisible, false);
+});
+
+test("detects homepage slots that become active", () => {
+  assert.deepEqual(
+    plain(getActivatedHomepageSlots(
+      { isVisible: true, homeSections: { values: ["latest"] } },
+      { isVisible: true, homeSections: { values: ["popular", "latest"] } }
+    )),
+    ["popular"]
+  );
+  assert.deepEqual(
+    plain(getActivatedHomepageSlots(
+      { isVisible: false, homeSections: { values: ["banner", "popular"] } },
+      { isVisible: true, homeSections: { values: ["banner", "popular"] } }
+    )),
+    ["banner", "popular"]
+  );
+});
+
+test("rejects homepage selections beyond their visible limits", () => {
+  const popularCases = Array.from({ length: HOME_DISPLAY_LIMITS.popular }, (_, index) => ({
+    _id: `popular_${index}`,
+    caseId: `case_popular_${index}`,
+    isVisible: true,
+    sortOrder: index,
+    homeSections: { values: ["popular"] },
+  }));
+  const candidate = {
+    _id: "candidate",
+    caseId: "case_candidate",
+    isVisible: true,
+    sortOrder: 99,
+    homeSections: { values: ["popular", "latest"] },
+  };
+
+  const result = validateHomepageDisplayCapacity(popularCases, [], candidate, {
+    slots: ["popular"],
+  });
+  assert.equal(result.valid, false);
+  assert.equal(result.code, "HOME_DISPLAY_LIMIT_REACHED");
+  assert.equal(result.slot, "popular");
+  assert.equal(result.limit, HOME_DISPLAY_LIMITS.popular);
+
+  const hiddenResult = validateHomepageDisplayCapacity(popularCases, [], {
+    ...candidate,
+    isVisible: false,
+  });
+  assert.equal(hiddenResult.valid, true);
 });
 
 test("keeps manual sort order when creating cases", () => {

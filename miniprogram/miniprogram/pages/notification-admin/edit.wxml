@@ -1,0 +1,82 @@
+<view class="page">
+  <mp-toptips
+    msg="{{topTips.message}}"
+    type="{{topTips.type}}"
+    show="{{topTips.show}}"
+    bindhide="hideTopTips"
+  />
+
+  <view class="hero">
+    <view class="page-title">{{isEdit ? '编辑通知' : '新建通知'}}</view>
+    <view class="page-subtitle">站内公告所有用户可见，微信提醒仅发送给已授权用户</view>
+  </view>
+
+  <view class="form-card">
+    <view class="field">
+      <view class="field-label">通知类型</view>
+      <view class="type-row">
+        <view class="type-chip {{draft.type === 'version_update' ? 'type-chip-active' : ''}} {{publishStatus !== 'draft' ? 'type-chip-locked' : ''}}" data-type="version_update" bindtap="selectType">版本更新</view>
+        <view class="type-chip {{draft.type === 'product_new' ? 'type-chip-active' : ''}} {{publishStatus !== 'draft' ? 'type-chip-locked' : ''}}" data-type="product_new" bindtap="selectType">产品上新</view>
+      </view>
+    </view>
+
+    <view class="field">
+      <view class="field-label">标题 *</view>
+      <input class="text-input" maxlength="80" value="{{draft.title}}" placeholder="例如：1.1.0 版本更新" bindinput="onTitleInput" />
+    </view>
+
+    <view class="field">
+      <view class="field-label">内容 *</view>
+      <textarea class="textarea-input" maxlength="500" value="{{draft.content}}" placeholder="填写本次更新或上新内容" bindinput="onContentInput" />
+    </view>
+
+    <view wx:if="{{draft.type === 'version_update'}}" class="field">
+      <view class="field-label">版本号</view>
+      <input class="text-input" maxlength="30" value="{{draft.version}}" placeholder="例如：1.1.0" bindinput="onVersionInput" />
+    </view>
+
+    <view wx:if="{{draft.type === 'product_new'}}" class="field">
+      <view class="case-select-heading">
+        <view>
+          <view class="field-label">关联上新案例 *</view>
+          <view class="field-hint">仅可选择近 24 小时新增且已开启前台显示的案例，最多 20 个</view>
+        </view>
+        <view wx:if="{{publishStatus === 'draft' && draft.caseDocIds.length}}" class="clear-cases" bindtap="clearCases">清空</view>
+      </view>
+      <view class="case-select-summary">
+        <view class="case-select-count">已选择 {{draft.caseDocIds.length}} 个案例</view>
+        <view
+          wx:if="{{publishStatus === 'draft'}}"
+          class="case-select-button"
+          bindtap="chooseCases"
+        >
+          {{draft.caseDocIds.length ? '重新选择' : '选择近24小时新增案例'}}
+        </view>
+        <view wx:else class="case-select-locked">已发布后不可更换关联案例</view>
+      </view>
+      <scroll-view wx:if="{{selectedCases.length}}" class="case-preview-scroll" scroll-x enhanced>
+        <view class="case-preview-row">
+          <view wx:for="{{selectedCases}}" wx:key="id" class="case-preview">
+            <image wx:if="{{item.coverImageUrl}}" class="case-preview-image" src="{{item.coverImageUrl}}" mode="aspectFill" lazy-load="{{true}}" fade-in="{{true}}" />
+            <view wx:else class="case-preview-placeholder">暂无图片</view>
+            <view class="case-preview-title">{{item.title}}</view>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+
+    <view wx:if="{{publishStatus === 'draft'}}" class="send-row">
+      <view>
+        <view class="field-label">发送微信订阅提醒</view>
+        <view class="field-hint">未授权用户仍可在消息页查看公告</view>
+      </view>
+      <switch checked="{{draft.sendSubscription}}" color="#285f42" bindchange="onSendChange" />
+    </view>
+
+    <view wx:if="{{publishStatus === 'draft'}}" class="button-row">
+      <button class="secondary-button" loading="{{saving}}" disabled="{{saving}}" bindtap="saveDraft">保存草稿</button>
+      <button class="primary-button" loading="{{saving}}" disabled="{{saving}}" bindtap="publishNow">立即发布</button>
+    </view>
+    <button wx:else class="primary-button save-change-button" loading="{{saving}}" disabled="{{saving}}" bindtap="saveDraft">保存修改</button>
+  </view>
+</view>

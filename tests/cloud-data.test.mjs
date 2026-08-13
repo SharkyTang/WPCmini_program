@@ -133,7 +133,9 @@ function mockCaseLookupData(records) {
                 docCalls.push(id);
                 return {
                   async get() {
-                    throw new Error("doc lookup should not be used for caseId");
+                    const record = records.find((item) => item._id === id);
+                    if (!record) throw new Error("document not found");
+                    return { data: record };
                   },
                 };
               },
@@ -145,7 +147,11 @@ function mockCaseLookupData(records) {
                   },
                   async get() {
                     return {
-                      data: records.filter((record) => record.caseId === condition.caseId),
+                      data: records.filter((record) =>
+                        Object.entries(condition).every(
+                          ([key, value]) => record[key] === value
+                        )
+                      ),
                     };
                   },
                 };
@@ -281,7 +287,7 @@ await test("does not expose raw cloud file ids when image URL exchange is unavai
   assert.equal(cases[0].coverImageUrl, "");
 });
 
-await test("fetchCaseById uses the caseId index directly for stable case ids", async () => {
+await test("fetchCaseById tries the document id before the legacy caseId index", async () => {
   const { fetchCaseById, docCalls, whereCalls } = mockCaseLookupData([
     {
       _id: "doc_001",
@@ -294,7 +300,56 @@ await test("fetchCaseById uses the caseId index directly for stable case ids", a
 
   const caseItem = await fetchCaseById("case_001");
 
-  assert.deepEqual(docCalls, []);
-  assert.deepEqual(plain(whereCalls), [{ caseId: "case_001" }]);
+  assert.deepEqual(docCalls, ["case_001"]);
+  assert.deepEqual(plain(whereCalls), [{ caseId: "case_001", isVisible: true }]);
   assert.equal(caseItem.id, "doc_001");
+});
+
+await test("fetchCaseById returns a visible document id without an index fallback", async () => {
+  const { fetchCaseById, docCalls, whereCalls } = mockCaseLookupData([
+    {
+      _id: "doc_visible",
+      caseId: "case_visible",
+      title: "visible",
+      coverImage: "https://example.com/visible.png",
+      isVisible: true,
+    },
+  ]);
+
+  const caseItem = await fetchCaseById("doc_visible");
+
+  assert.deepEqual(docCalls, ["doc_visible"]);
+  assert.deepEqual(whereCalls, []);
+  assert.equal(caseItem.id, "doc_visible");
+});
+
+await test("fetchCaseById never exposes a hidden document through either lookup path", async () => {
+  const { fetchCaseById, docCalls, whereCalls } = mockCaseLookupData([
+    {
+      _id: "doc_hidden",
+      caseId: "case_hidden",
+      title: "hidden",
+      coverImage: "https://example.com/hidden.png",
+      isVisible: false,
+    },
+  ]);
+
+  await assert.rejects(
+    fetchCaseById("doc_hidden"),
+    (error) => error && error.code === "CASE_NOT_FOUND"
+  );
+  assert.deepEqual(docCalls, ["doc_hidden"]);
+  assert.deepEqual(plain(whereCalls), [
+    { caseId: "doc_hidden", isVisible: true },
+  ]);
+
+  await assert.rejects(
+    fetchCaseById("case_hidden"),
+    (error) => error && error.code === "CASE_NOT_FOUND"
+  );
+  assert.deepEqual(docCalls, ["doc_hidden", "case_hidden"]);
+  assert.deepEqual(plain(whereCalls), [
+    { caseId: "doc_hidden", isVisible: true },
+    { caseId: "case_hidden", isVisible: true },
+  ]);
 });

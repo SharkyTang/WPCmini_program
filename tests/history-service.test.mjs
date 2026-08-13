@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { loadOpenIdLibraryAccessService } from "./library-openid-test-helper.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const modulePath = resolve(
@@ -37,10 +38,39 @@ function loadHistoryService(recordsByCondition = {}, options = {}) {
           normalizeSelectedIds: (ids) => ids.filter(Boolean),
         };
       }
+      if (path === "./caseCatalogService") {
+        return {
+          fetchUserLibrary:
+            options.fetchUserLibrary ||
+            (async () => {
+              throw new Error("catalog unavailable");
+            }),
+        };
+      }
+      if (path === "./userLibraryService") {
+        if (options.userLibraryService) return options.userLibraryService;
+        return {
+          async callUserLibrary() {
+            const error = new Error("function not found");
+            error.code = "FUNCTION_NOT_FOUND";
+            throw error;
+          },
+          isUserLibraryUnavailableError(error) {
+            return error && error.code === "FUNCTION_NOT_FOUND";
+          },
+        };
+      }
       if (path === "./userService") {
         return {
-          ensureProfileIdentity: async () => ({ ready: true, openid: "openid_1" }),
           getCachedOpenId: () => "openid_1",
+        };
+      }
+      if (path === "./libraryAccessService") {
+        if (options.libraryAccessService) return options.libraryAccessService;
+        return {
+          checkLibraryAccess:
+            options.checkLibraryAccess ||
+            (async () => ({ status: "ready", openid: "openid_1" })),
         };
       }
       throw new Error(`Unexpected require: ${path}`);
@@ -181,4 +211,90 @@ await test("fetchHistoryCases removes records whose cases no longer exist", asyn
 
   assert.deepEqual(plain(removedIds), ["history_missing"]);
   assert.deepEqual(plain(cases), [{ _id: "doc_live", caseId: "case_001" }]);
+});
+
+await test("openid build flag supports history write, read, update, and delete without a profile", async () => {
+  const access = loadOpenIdLibraryAccessService("history");
+  const { service, removedIds, updates } = loadHistoryService({
+    [JSON.stringify({ _openid: "openid_1", caseDocId: "doc_001" })]: [
+      { _id: "history_1", caseDocId: "doc_001", caseId: "case_001", viewCount: 2 },
+    ],
+  }, {
+    libraryAccessService: access.service,
+    fetchUserLibrary: async () => [{
+      recordId: "history_1",
+      viewCount: 3,
+      caseItem: { id: "doc_001", caseId: "case_001" },
+    }],
+  });
+
+  const created = await service.recordCaseView({
+    id: "doc_002",
+    caseId: "case_002",
+  });
+  const updated = await service.recordCaseView({
+    id: "doc_001",
+    caseId: "case_001",
+  });
+  const cases = await service.fetchHistoryCases();
+  const removedCount = await service.removeHistoryRecords(["history_1"]);
+
+  assert.equal(created._id, "history_new");
+  assert.equal(updated.viewCount, 3);
+  assert.equal(updates.length, 1);
+  assert.deepEqual(plain(cases), [{
+    historyId: "history_1",
+    viewCount: 3,
+    caseItem: { id: "doc_001", caseId: "case_001" },
+  }]);
+  assert.equal(removedCount, 1);
+  assert.deepEqual(plain(removedIds), ["history_1"]);
+  assert.equal(access.profileChecks, 0);
+  assert.equal(access.openidChecks > 0, true);
+});
+
+await test("history mutations prefer the atomic cloud service when available", async () => {
+  const calls = [];
+  const { service, whereCalls, updates } = loadHistoryService({}, {
+    userLibraryService: {
+      async callUserLibrary(action, payload = {}) {
+        calls.push({ action, payload });
+        if (action === "recordHistory") {
+          return {
+            history: {
+              _id: "his_atomic",
+              caseDocId: payload.history.caseDocId,
+              caseId: payload.history.caseId,
+              viewCount: 1,
+            },
+          };
+        }
+        return { removedCount: 1 };
+      },
+      isUserLibraryUnavailableError() {
+        return false;
+      },
+    },
+  });
+
+  const recorded = await service.recordCaseView({
+    id: "doc_atomic",
+    caseId: "case_atomic",
+  });
+  const removedCount = await service.removeHistoryRecords(["his_atomic"]);
+
+  assert.equal(recorded._id, "his_atomic");
+  assert.equal(removedCount, 1);
+  assert.deepEqual(plain(calls), [
+    {
+      action: "recordHistory",
+      payload: { history: { caseDocId: "doc_atomic", caseId: "case_atomic" } },
+    },
+    {
+      action: "removeHistory",
+      payload: { ids: ["his_atomic"] },
+    },
+  ]);
+  assert.equal(whereCalls.length, 0);
+  assert.equal(updates.length, 0);
 });

@@ -11,27 +11,54 @@
     circular
     interval="3600"
     duration="450"
-    previous-margin="24rpx"
-    next-margin="24rpx"
+    previous-margin="188rpx"
+    next-margin="188rpx"
+    bindchange="onBannerChange"
   >
-    <swiper-item wx:for="{{banners}}" wx:key="id">
-      <view class="banner-card" bindtap="onBannerTap" data-id="{{item.caseId}}">
-        <image class="banner-image" mode="aspectFill" src="{{item.imageUrl}}" lazy-load></image>
-        <view class="banner-title" wx:if="{{item.title}}">{{item.title}}</view>
+    <swiper-item wx:for="{{banners}}" wx:for-index="bannerIndex" wx:key="id">
+      <view
+        class="banner-card {{bannerIndex == activeBannerIndex ? 'banner-card-active' : 'banner-card-preview'}}"
+        bindtap="onBannerTap"
+        data-id="{{item.caseId}}"
+      >
+        <image
+          wx:if="{{item.renderImageUrl}}"
+          class="banner-image"
+          mode="aspectFill"
+          src="{{item.renderImageUrl}}"
+          bindload="onBannerImageLoad"
+          data-index="{{bannerIndex}}"
+          lazy-load
+        ></image>
+        <view wx:else class="banner-image banner-placeholder"></view>
+        <view
+          class="banner-title"
+          wx:if="{{item.title && bannerIndex == activeBannerIndex}}"
+        >{{item.title}}</view>
       </view>
     </swiper-item>
   </swiper>
 
   <view class="content">
     <view class="story-card">
-      <view class="story-title">品牌故事</view>
-      <view class="story-text">
-        金亿诚包装科技专注酒类包装设计与定制生产，提供瓶标、酒瓶、酒盒、手提袋、外箱等一体化包装方案。通过真实案例展示，帮助客户快速寻找适合产品定位、价格带和使用场景的包装灵感。
+      <view class="story-mark">JYC PACKAGING</view>
+      <view class="story-body">
+        <view class="story-title">品牌故事</view>
+        <view class="story-text">
+          金亿诚包装科技专注酒类包装设计与定制生产，提供酒盒、酒瓶、瓶标、手提袋、外箱等一体化包装方案。通过真实案例展示，帮助客户快速寻找适合产品定位、价格和使用场景的包装灵感。
+        </view>
       </view>
     </view>
 
-    <view wx:if="{{loading}}" class="state-box">正在读取案例...</view>
-    <view wx:elif="{{errorMessage}}" class="state-box state-error">{{errorMessage}}</view>
+    <view wx:if="{{errorMessage}}" class="state-box {{timelinePreview ? 'state-preview' : 'state-error'}}">
+      <view>{{errorMessage}}</view>
+      <view
+        wx:if="{{!timelinePreview}}"
+        class="state-retry"
+        bindtap="retryHomeData"
+      >重新加载</view>
+    </view>
+    <view wx:elif="{{loading || !homeContentReady}}" class="state-box">正在读取案例...</view>
     <block wx:else>
       <view class="section">
         <view class="section-head">
@@ -59,6 +86,7 @@
               lazy-load
             ></image>
             <view wx:else class="product-placeholder">暂无图片</view>
+            <view class="product-badge">{{item.homeBadge}}</view>
             <view class="product-title">{{item.title}}</view>
             <view class="product-meta">{{item.tagSummary}}</view>
           </view>
@@ -92,6 +120,7 @@
               lazy-load
             ></image>
             <view wx:else class="product-placeholder">暂无图片</view>
+            <view class="product-badge product-badge-latest">{{item.homeBadge}}</view>
             <view class="product-title">{{item.title}}</view>
             <view class="product-meta">{{item.tagSummary}}</view>
           </view>

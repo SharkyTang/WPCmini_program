@@ -51,6 +51,7 @@
     <view class="inquiry-entry" bindtap="openInquiryForm">提交定制需求</view>
     <view wx:if="{{hasInquiryAdminAccess}}" class="inquiry-admin-entry" bindtap="openInquiryAdmin">需求管理</view>
     <view wx:if="{{hasCaseAdminAccess}}" class="inquiry-admin-entry" bindtap="openCaseAdmin">案例管理</view>
+    <view wx:if="{{hasNotificationAdminAccess}}" class="inquiry-admin-entry" bindtap="openNotificationAdmin">通知管理</view>
   </view>
 
   <view class="section">
@@ -63,6 +64,13 @@
         </view>
         <view class="faq-arrow">›</view>
       </view>
+    </view>
+    <view class="privacy-entry" bindtap="openPrivacyCenter">
+      <view>
+        <view class="privacy-entry-title">隐私与数据管理</view>
+        <view class="privacy-entry-subtitle">查看信息用途、管理记录或申请删除数据</view>
+      </view>
+      <view class="faq-arrow">›</view>
     </view>
   </view>
 </view>

@@ -1,4 +1,11 @@
 <view class="page">
+  <mp-toptips
+    msg="{{topTips.message}}"
+    type="{{topTips.type}}"
+    show="{{topTips.show}}"
+    bindhide="hideTopTips"
+  />
+
   <view class="hero">
     <view class="page-title">定制需求</view>
     <view class="page-subtitle">告诉我们你想做哪类酒包装，方便后续沟通。</view>
@@ -13,6 +20,7 @@
   <view wx:elif="{{caseError}}" class="source-card source-error">{{caseError}}</view>
 
   <view class="form-card">
+    <view class="form-section-title">包装方向</view>
     <view wx:for="{{optionGroups}}" wx:key="key" wx:for-item="group" class="field">
       <view class="field-heading">
         <view class="field-title">{{group.title}}</view>
@@ -35,6 +43,7 @@
       </view>
     </view>
 
+    <view class="form-section-title">需求说明</view>
     <view class="field">
       <view class="field-heading">
         <view class="field-title">补充说明</view>
@@ -50,19 +59,37 @@
       <view class="field-helper">{{draft.content.length}}/{{contentMaxLength}}</view>
     </view>
 
+    <view class="form-section-title">联系信息</view>
     <view class="field">
       <view class="field-heading">
         <view class="field-title">联系方式</view>
         <view class="field-required">必填</view>
       </view>
-      <input
-        class="input"
-        value="{{draft.contact}}"
-        maxlength="{{contactMaxLength}}"
-        placeholder="微信号 / 手机 / 邮箱"
-        bindinput="updateContact"
-      />
+      <view class="contact-input-row">
+        <picker
+          class="contact-type-picker"
+          mode="selector"
+          range="{{contactTypes}}"
+          value="{{contactTypeIndex}}"
+          bindchange="changeContactType"
+        >
+          <view class="contact-type-value">
+            <text>{{selectedContactType}}</text>
+            <text class="contact-type-action">切换</text>
+          </view>
+        </picker>
+        <input
+          class="input contact-input"
+          value="{{draft.contact}}"
+          maxlength="{{contactMaxLength}}"
+          placeholder="{{contactPlaceholder}}"
+          bindinput="updateContact"
+        />
+      </view>
       <view class="field-helper">{{draft.contact.length}}/{{contactMaxLength}}</view>
+      <view class="field-privacy" bindtap="openPrivacyNotice">
+        仅用于就本次需求联系你 · 查看隐私说明 ›
+      </view>
     </view>
   </view>
 

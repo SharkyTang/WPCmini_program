@@ -4,6 +4,7 @@ const CUSTOMER_SERVICE_SOURCE = {
 };
 
 const MAX_SESSION_FROM_LENGTH = 240;
+const DEFAULT_CUSTOMER_MESSAGE_TITLE = "咨询同款包装方案";
 
 function normalizeSource(source) {
   if (source === CUSTOMER_SERVICE_SOURCE.DETAIL) return CUSTOMER_SERVICE_SOURCE.DETAIL;
@@ -20,6 +21,29 @@ function stringifySession(parts) {
     .filter((part) => part.value)
     .map((part) => `${part.key}=${encodeURIComponent(part.value)}`)
     .join("&");
+}
+
+function buildCustomerMessageCard(options = {}) {
+  const caseItem = options.caseItem || {};
+  const caseReferenceId =
+    normalizeValue(caseItem.id, 120) ||
+    normalizeValue(caseItem._id, 120) ||
+    normalizeValue(caseItem.caseId, 120);
+  const caseTitle = normalizeValue(caseItem.title, 80);
+  const requestedImageUrl =
+    typeof options.imageUrl === "string" ? options.imageUrl.trim() : "";
+  const fallbackImageUrl =
+    typeof caseItem.coverImageUrl === "string" ? caseItem.coverImageUrl.trim() : "";
+  const imageUrl = requestedImageUrl || fallbackImageUrl;
+
+  return {
+    enabled: Boolean(caseReferenceId),
+    title: caseTitle ? `咨询同款：${caseTitle}` : DEFAULT_CUSTOMER_MESSAGE_TITLE,
+    path: caseReferenceId
+      ? `/pages/detail/index?id=${encodeURIComponent(caseReferenceId)}`
+      : "",
+    imageUrl,
+  };
 }
 
 function buildCustomerSessionFrom(options = {}) {
@@ -49,6 +73,8 @@ function buildCustomerSessionFrom(options = {}) {
 
 module.exports = {
   CUSTOMER_SERVICE_SOURCE,
+  DEFAULT_CUSTOMER_MESSAGE_TITLE,
   MAX_SESSION_FROM_LENGTH,
+  buildCustomerMessageCard,
   buildCustomerSessionFrom,
 };
