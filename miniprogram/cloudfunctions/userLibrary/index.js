@@ -88,6 +88,19 @@ async function addFavorite(event, openid) {
   });
 }
 
+function getRemovedCount(result) {
+  const candidates = [
+    result && result.stats && result.stats.removed,
+    result && result.deleted,
+    result && result.removed,
+  ];
+  for (const candidate of candidates) {
+    const count = Number(candidate);
+    if (Number.isFinite(count) && count >= 0) return count;
+  }
+  return 0;
+}
+
 async function removeOwnedRecords(collectionName, ids, openid) {
   const requestedIds = normalizeRecordIds(ids);
   if (!requestedIds.length) return 0;
@@ -103,7 +116,7 @@ async function removeOwnedRecords(collectionName, ids, openid) {
         .remove()
     )));
     removedCount += results.reduce(
-      (total, result) => total + (Number(result && result.deleted) || 0),
+      (total, result) => total + getRemovedCount(result),
       0
     );
   }

@@ -690,6 +690,34 @@ await asyncTest("detail favorite requests access and performs immediately when r
   );
 });
 
+await asyncTest("an existing favorite can be removed directly from the detail page", async () => {
+  const currentFavorite = { _id: "favorite_existing" };
+  const toggleInputs = [];
+  const context = loadDetailInteractionPage({
+    favorite: currentFavorite,
+    async toggleFavorite(caseItem, favorite) {
+      toggleInputs.push({ caseItem, favorite });
+      return {
+        action: "removed",
+        favorite: null,
+        isFavorited: false,
+      };
+    },
+  });
+
+  await context.page.toggleFavorite();
+
+  assert.equal(toggleInputs.length, 1);
+  assert.equal(toggleInputs[0].favorite._id, "favorite_existing");
+  assert.equal(context.page.data.favoriteLoading, false);
+  assert.equal(context.page.data.favorite, null);
+  assert.equal(context.page.data.isFavorited, false);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.toasts)),
+    [{ title: "已取消收藏", icon: "success" }]
+  );
+});
+
 await asyncTest("cancelling the access prompt unlocks the favorite action for the next tap", async () => {
   let toggleCalls = 0;
   const context = loadDetailInteractionPage({

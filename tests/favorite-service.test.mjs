@@ -262,7 +262,7 @@ await test("favorite mutations prefer the atomic cloud service when available", 
   assert.equal(whereCalls.length, 0);
 });
 
-await test("toggleFavorite keeps the favorite state when cloud deletion removes nothing", async () => {
+await test("toggleFavorite reconciles a zero removal count when the record is already gone", async () => {
   const { service } = loadFavoriteService({}, {
     userLibraryService: {
       async callUserLibrary() {
@@ -274,11 +274,37 @@ await test("toggleFavorite keeps the favorite state when cloud deletion removes 
     },
   });
 
+  const result = await service.toggleFavorite(
+    { id: "doc_atomic", caseId: "case_atomic" },
+    { _id: "fav_atomic" }
+  );
+
+  assert.deepEqual(plain(result), {
+    isFavorited: false,
+    favorite: null,
+    action: "removed",
+  });
+});
+
+await test("toggleFavorite keeps the favorite state when cloud deletion removes nothing", async () => {
+  const caseItem = { id: "doc_atomic", caseId: "case_atomic" };
+  const { service } = loadFavoriteService({
+    [JSON.stringify({ _openid: "openid_1", caseDocId: "doc_atomic" })]: [
+      { _id: "fav_atomic", caseDocId: "doc_atomic", caseId: "case_atomic" },
+    ],
+  }, {
+    userLibraryService: {
+      async callUserLibrary() {
+        return { removedCount: 0 };
+      },
+      isUserLibraryUnavailableError() {
+        return false;
+      },
+    },
+  });
+
   await assert.rejects(
-    service.toggleFavorite(
-      { id: "doc_atomic", caseId: "case_atomic" },
-      { _id: "fav_atomic" }
-    ),
+    service.toggleFavorite(caseItem, { _id: "fav_atomic" }),
     (error) => error && error.code === "FAVORITE_REMOVE_NOT_APPLIED"
   );
 });

@@ -86,6 +86,8 @@ await test("fault telemetry sends only bounded fields and hashes raw errors", ()
   assert.equal(calls[0].name, telemetry.TELEMETRY_EVENT_NAME);
   assert.equal(calls[0].payload.route, "pages/category/index");
   assert.equal(calls[0].payload.platform, "android");
+  assert.equal(calls[0].payload.client_sdk_version, "3.7.1");
+  assert.equal(Object.prototype.hasOwnProperty.call(calls[0].payload, "sdk_version"), false);
   assert.equal(calls[0].payload.device_tier, "mid");
   assert.equal(calls[0].payload.error_code, "UNKNOWN_ERROR");
   const serialized = JSON.stringify(calls[0]);
@@ -166,6 +168,8 @@ await test("performance telemetry uses a fixed event id and drops extra fields",
   assert.equal(calls[0].payload.on_ready_bucket, "500_999ms");
   assert.equal(calls[0].payload.hero_bucket, "1000_1999ms");
   assert.equal(calls[0].payload.data_bucket, "2000_4999ms");
+  assert.equal(calls[0].payload.client_sdk_version, "3.7.1");
+  assert.equal(Object.prototype.hasOwnProperty.call(calls[0].payload, "sdk_version"), false);
   assert.equal(calls[0].payload.route, "pages/index/index");
   assert.equal(Object.prototype.hasOwnProperty.call(calls[0].payload, "openid"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(calls[0].payload, "secret_bucket"), false);
