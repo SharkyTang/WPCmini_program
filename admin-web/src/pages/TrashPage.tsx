@@ -20,18 +20,28 @@ import {
 } from "antd";
 import type { TableColumnsType } from "antd";
 import dayjs from "dayjs";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CaseImage, CaseTagList } from "../components/CaseVisuals";
 import { PageEmpty, PageError, PageLoading, WriteDisabledAlert } from "../components/PageStates";
 import { EMPTY_FILTERS } from "../constants";
 import { useAdminConfig } from "../context/AdminConfigContext";
+import { useAuth } from "../context/AuthContext";
 import { adminApi } from "../lib/api";
 import { getExpectedVersions } from "../lib/caseLogic";
 import { getErrorMessage } from "../lib/errors";
+import {
+  type PendingPurgeCleanupJob,
+  readPendingPurgeCleanupJobs,
+  removePendingPurgeCleanupJob,
+  toPendingPurgeCleanupJob,
+  upsertPendingPurgeCleanupJob,
+} from "../lib/purgeCleanupStore";
 import type { CaseRecord, ListCasesResponse } from "../types";
 
 export function TrashPage() {
   const { config, loading: configLoading } = useAdminConfig();
+  const { session } = useAuth();
+  const sessionUid = session?.user.id || "";
   const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -44,8 +54,17 @@ export function TrashPage() {
   });
   const [loading, setLoading] = useState(true);
   const [restoring, setRestoring] = useState(false);
+  const [purging, setPurging] = useState(false);
+  const [retryingCleanupJobs, setRetryingCleanupJobs] = useState<string[]>([]);
+  const [cleanupRecoveryError, setCleanupRecoveryError] = useState("");
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<CaseRecord[]>([]);
+  const [purgeTarget, setPurgeTarget] = useState<{
+    items: CaseRecord[];
+    clientMutationId: string;
+  } | null>(null);
+  const [purgeConfirmation, setPurgeConfirmation] = useState("");
+  const [cleanupNotices, setCleanupNotices] = useState<PendingPurgeCleanupJob[]>([]);
   const [refreshToken, setRefreshToken] = useState(0);
 
   const load = useCallback(async () => {
@@ -72,7 +91,104 @@ export function TrashPage() {
     return () => window.clearTimeout(timer);
   }, [load, refreshToken, keyword]);
 
-  const versions = useMemo(() => getExpectedVersions(selected), [selected]);
+  const permanentDeleteAvailable =
+    config.writeEnabled &&
+    config.permanentDeleteEnabled &&
+    Boolean(adminApi.permanentlyDeleteCases);
+  const purgeCleanupAvailable = Boolean(adminApi.retryPurgeCleanup);
+
+  useEffect(() => {
+    if (!sessionUid) {
+      setCleanupNotices([]);
+      setCleanupRecoveryError("");
+      return;
+    }
+
+    const localJobs = readPendingPurgeCleanupJobs(sessionUid);
+    setCleanupNotices(localJobs);
+    setCleanupRecoveryError("");
+    if (configLoading) return;
+
+    const retry = adminApi.retryPurgeCleanup;
+    let disposed = false;
+
+    const recoverPendingCleanup = async () => {
+      const jobsById = new Map(
+        localJobs.map((job) => [job.cleanupJobId, job]),
+      );
+
+      if (adminApi.listPendingPurgeJobs) {
+        try {
+          const serverJobs = await adminApi.listPendingPurgeJobs();
+          if (disposed) return;
+          serverJobs.forEach((job) => {
+            const pendingJob = toPendingPurgeCleanupJob(job);
+            if (pendingJob.cleanupJobId && pendingJob.pendingFileCount > 0) {
+              jobsById.set(pendingJob.cleanupJobId, pendingJob);
+            }
+          });
+        } catch (reason) {
+          if (disposed) return;
+          setCleanupRecoveryError(
+            getErrorMessage(
+              reason,
+              "服务端待清理任务暂时无法读取，已保留本机记录，可稍后重试",
+            ),
+          );
+        }
+      }
+
+      if (disposed) return;
+      const pendingJobs = Array.from(jobsById.values())
+        .filter((job) => job.pendingFileCount > 0)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      pendingJobs.forEach((job) => upsertPendingPurgeCleanupJob(sessionUid, job));
+      setCleanupNotices(pendingJobs);
+      if (!pendingJobs.length || !retry) return;
+
+      setRetryingCleanupJobs(pendingJobs.map((job) => job.cleanupJobId));
+      pendingJobs.forEach((job) => {
+        void retry.call(adminApi, job.cleanupJobId)
+          .then((response) => {
+            if (disposed) return;
+            const next = toPendingPurgeCleanupJob(response);
+            if (next.pendingFileCount > 0) {
+              upsertPendingPurgeCleanupJob(sessionUid, next);
+              setCleanupNotices((current) => [
+                next,
+                ...current.filter((item) => item.cleanupJobId !== next.cleanupJobId),
+              ]);
+            } else {
+              removePendingPurgeCleanupJob(sessionUid, job.cleanupJobId);
+              setCleanupNotices((current) =>
+                current.filter((item) => item.cleanupJobId !== job.cleanupJobId),
+              );
+              message.success("上次待清理的案例图片已处理完成");
+            }
+          })
+          .catch((reason) => {
+            if (!disposed) {
+              setCleanupRecoveryError(
+                getErrorMessage(reason, "上次图片清理暂时无法继续，可稍后手动重试"),
+              );
+            }
+          })
+          .finally(() => {
+            if (!disposed) {
+              setRetryingCleanupJobs((current) =>
+                current.filter((id) => id !== job.cleanupJobId),
+              );
+            }
+          });
+      });
+    };
+
+    void recoverPendingCleanup();
+
+    return () => {
+      disposed = true;
+    };
+  }, [configLoading, sessionUid]);
 
   const restore = (items: CaseRecord[]) => {
     Modal.confirm({
@@ -96,6 +212,92 @@ export function TrashPage() {
         }
       },
     });
+  };
+
+  const openPurgeConfirmation = (items: CaseRecord[]) => {
+    if (!permanentDeleteAvailable || purging || !items.length) return;
+    setPurgeConfirmation("");
+    setPurgeTarget({ items, clientMutationId: crypto.randomUUID() });
+  };
+
+  const permanentlyDelete = async () => {
+    if (!purgeTarget || purgeConfirmation !== "永久删除" || !permanentDeleteAvailable) return;
+    const purge = adminApi.permanentlyDeleteCases;
+    if (!purge) {
+      message.error("当前后台版本不支持永久删除，请刷新页面后重试");
+      return;
+    }
+    setPurging(true);
+    try {
+      const response = await purge.call(
+        adminApi,
+        purgeTarget.items.map((item) => item._id),
+        getExpectedVersions(purgeTarget.items),
+        purgeTarget.clientMutationId,
+      );
+      message.success(`已永久删除 ${response.deleted} 个案例`);
+      const cleanupJob = toPendingPurgeCleanupJob(response);
+      if (cleanupJob.pendingFileCount > 0) {
+        upsertPendingPurgeCleanupJob(sessionUid, cleanupJob);
+        setCleanupNotices((current) => [
+          cleanupJob,
+          ...current.filter((item) => item.cleanupJobId !== cleanupJob.cleanupJobId),
+        ]);
+      } else {
+        removePendingPurgeCleanupJob(sessionUid, cleanupJob.cleanupJobId);
+      }
+      setPurgeTarget(null);
+      setPurgeConfirmation("");
+      setSelected([]);
+      if (page > 1 && result.items.length <= response.deleted) {
+        setPage((value) => Math.max(1, value - 1));
+      } else {
+        setRefreshToken((value) => value + 1);
+      }
+    } catch (reason) {
+      message.error(getErrorMessage(reason, "永久删除失败"));
+    } finally {
+      setPurging(false);
+    }
+  };
+
+  const retryCleanup = async (cleanupJob: PendingPurgeCleanupJob) => {
+    if (!cleanupJob.cleanupJobId) return;
+    const retry = adminApi.retryPurgeCleanup;
+    if (!retry) {
+      message.error("当前后台版本不支持继续清理，请刷新页面后重试");
+      return;
+    }
+    setRetryingCleanupJobs((current) =>
+      current.includes(cleanupJob.cleanupJobId)
+        ? current
+        : [...current, cleanupJob.cleanupJobId],
+    );
+    setCleanupRecoveryError("");
+    try {
+      const response = await retry.call(adminApi, cleanupJob.cleanupJobId);
+      const next = toPendingPurgeCleanupJob(response);
+      if (next.pendingFileCount) {
+        upsertPendingPurgeCleanupJob(sessionUid, next);
+        setCleanupNotices((current) => [
+          next,
+          ...current.filter((item) => item.cleanupJobId !== next.cleanupJobId),
+        ]);
+        message.warning(`仍有 ${next.pendingFileCount} 个文件待清理，请稍后重试`);
+      } else {
+        removePendingPurgeCleanupJob(sessionUid, cleanupJob.cleanupJobId);
+        setCleanupNotices((current) =>
+          current.filter((item) => item.cleanupJobId !== cleanupJob.cleanupJobId),
+        );
+        message.success("案例图片清理已完成");
+      }
+    } catch (reason) {
+      message.error(getErrorMessage(reason, "继续清理失败"));
+    } finally {
+      setRetryingCleanupJobs((current) =>
+        current.filter((id) => id !== cleanupJob.cleanupJobId),
+      );
+    }
   };
 
   const columns: TableColumnsType<CaseRecord> = [
@@ -139,17 +341,28 @@ export function TrashPage() {
     {
       title: "操作",
       key: "action",
-      width: 120,
+      width: 220,
       fixed: "right",
       render: (_, item) => (
-        <Button
-          type="link"
-          icon={<UndoOutlined />}
-          disabled={!config.writeEnabled}
-          onClick={() => restore([item])}
-        >
-          恢复
-        </Button>
+        <Space size={0}>
+          <Button
+            type="link"
+            icon={<UndoOutlined />}
+            disabled={!config.writeEnabled || purging}
+            onClick={() => restore([item])}
+          >
+            恢复
+          </Button>
+          <Button
+            type="link"
+            danger
+            icon={<DeleteOutlined />}
+            disabled={!permanentDeleteAvailable || restoring || purging}
+            onClick={() => openPurgeConfirmation([item])}
+          >
+            永久删除
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -163,9 +376,46 @@ export function TrashPage() {
         type="info"
         showIcon
         icon={<InfoCircleOutlined />}
-        title="回收站不会永久删除图片"
-        description="首版不提供永久清除。恢复后案例仍为隐藏状态，避免未经检查直接回到前台。"
+        title="回收站支持恢复和手动永久删除"
+        description="恢复后案例仍为隐藏状态。永久删除会移除案例，并清理没有被其他案例引用的云端图片；删除后无法恢复。"
       />
+      {cleanupRecoveryError ? (
+        <Alert
+          type="warning"
+          showIcon
+          closable
+          title="待清理图片暂时无法自动恢复"
+          description={cleanupRecoveryError}
+          onClose={() => setCleanupRecoveryError("")}
+        />
+      ) : null}
+      {cleanupNotices.map((cleanupJob) => {
+        const retrying = retryingCleanupJobs.includes(cleanupJob.cleanupJobId);
+        return (
+          <Alert
+            key={cleanupJob.cleanupJobId}
+            type="warning"
+            showIcon
+            title={`案例已删除，仍有 ${cleanupJob.pendingFileCount} 个文件待清理`}
+            description={
+              <Space wrap>
+                <span>已清理 {cleanupJob.deletedFileCount} 个文件</span>
+                {cleanupJob.retainedReferencedCount ? (
+                  <span>保留 {cleanupJob.retainedReferencedCount} 个仍被引用的文件</span>
+                ) : null}
+                <Button
+                  size="small"
+                  loading={retrying}
+                  disabled={!purgeCleanupAvailable}
+                  onClick={() => void retryCleanup(cleanupJob)}
+                >
+                  继续清理
+                </Button>
+              </Space>
+            }
+          />
+        );
+      })}
 
       <div className="page-toolbar">
         <div>
@@ -173,7 +423,7 @@ export function TrashPage() {
             回收站中 <strong>{result.total}</strong> 个案例
           </Typography.Text>
           <Typography.Text className="secondary-text">
-            所有回收操作可逆，原案例编号与标签保持不变
+            恢复会保留原编号与标签；永久删除后无法恢复
           </Typography.Text>
         </div>
         <Space>
@@ -184,10 +434,19 @@ export function TrashPage() {
             刷新
           </Button>
           <Button
+            danger
+            icon={<DeleteOutlined />}
+            loading={purging}
+            disabled={!selected.length || !permanentDeleteAvailable || restoring}
+            onClick={() => openPurgeConfirmation(selected)}
+          >
+            永久删除已选（{selected.length}）
+          </Button>
+          <Button
             type="primary"
             icon={<UndoOutlined />}
             loading={restoring}
-            disabled={!selected.length || !config.writeEnabled}
+            disabled={!selected.length || !config.writeEnabled || purging}
             onClick={() => restore(selected)}
           >
             恢复已选（{selected.length}）
@@ -229,7 +488,7 @@ export function TrashPage() {
               selectedRowKeys: selected.map((item) => item._id),
               onChange: (_, rows) => {
                 if (rows.length > config.limits.batch) {
-                  message.warning(`每次最多恢复 ${config.limits.batch} 个案例`);
+                  message.warning(`每次最多选择 ${config.limits.batch} 个案例`);
                   return;
                 }
                 setSelected(rows);
@@ -258,8 +517,62 @@ export function TrashPage() {
 
       <div className="trash-no-delete">
         <DeleteOutlined />
-        <span>为避免误操作，本版本不提供永久清空。</span>
+        <span>为避免误操作，不提供一键清空；永久删除需要逐次确认。</span>
       </div>
+
+      <Modal
+        open={Boolean(purgeTarget)}
+        title={`永久删除 ${purgeTarget?.items.length || 0} 个案例？`}
+        okText="确认永久删除"
+        okButtonProps={{
+          danger: true,
+          disabled: purgeConfirmation !== "永久删除" || !permanentDeleteAvailable,
+          loading: purging,
+        }}
+        cancelText="取消"
+        cancelButtonProps={{ disabled: purging }}
+        closable={!purging}
+        maskClosable={!purging}
+        destroyOnHidden
+        onCancel={() => {
+          if (purging) return;
+          setPurgeTarget(null);
+          setPurgeConfirmation("");
+        }}
+        onOk={() => void permanentlyDelete()}
+      >
+        <div className="trash-purge-confirmation">
+          <Alert
+            type="error"
+            showIcon
+            title="案例与无引用图片将不可恢复"
+            description="仍被其他案例或首页使用的图片会被安全保留。"
+          />
+          <div className="trash-purge-case-list">
+            {purgeTarget?.items.slice(0, 5).map((item) => (
+              <span key={item._id}>{item.title}（{item.caseId}）</span>
+            ))}
+            {(purgeTarget?.items.length || 0) > 5 ? (
+              <span>另有 {(purgeTarget?.items.length || 0) - 5} 个案例</span>
+            ) : null}
+          </div>
+          <label htmlFor="trash-purge-confirm-input">
+            输入“永久删除”以确认
+          </label>
+          <Input
+            id="trash-purge-confirm-input"
+            aria-label="永久删除确认文字"
+            value={purgeConfirmation}
+            disabled={purging}
+            autoComplete="off"
+            placeholder="永久删除"
+            onChange={(event) => setPurgeConfirmation(event.target.value)}
+            onPressEnter={() => {
+              if (purgeConfirmation === "永久删除") void permanentlyDelete();
+            }}
+          />
+        </div>
+      </Modal>
     </div>
   );
 }

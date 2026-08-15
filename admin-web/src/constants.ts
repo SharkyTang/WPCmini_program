@@ -1,6 +1,10 @@
 import type { AdminConfig, CaseFilters, HomeSection } from "./types";
 import { SCENE_VALUES } from "./lib/sceneOptions";
 
+export const ADMIN_BRAND_NAME = "金亿诚包装科技";
+export const ADMIN_DOCUMENT_TITLE = `${ADMIN_BRAND_NAME}｜案例管理后台`;
+export const ADMIN_DOCUMENT_DESCRIPTION = `${ADMIN_BRAND_NAME}案例管理后台`;
+
 export const BRAND = {
   ink: "#3d2d24",
   inkSoft: "#6f594c",
@@ -53,6 +57,8 @@ export const DEFAULT_CONFIG: AdminConfig = {
     },
   },
   writeEnabled: true,
+  permanentDeleteEnabled: false,
+  activitySyncEnabled: false,
   homeSectionOrders: {
     banner: [],
     popular: [],

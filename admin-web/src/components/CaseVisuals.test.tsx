@@ -15,7 +15,6 @@ describe("CaseTagList", () => {
         }}
       />,
     );
-
     expect(screen.getByText("婚宴/喜宴", { exact: true })).toBeInTheDocument();
     expect(screen.queryByText("婚宴", { exact: true })).not.toBeInTheDocument();
   });

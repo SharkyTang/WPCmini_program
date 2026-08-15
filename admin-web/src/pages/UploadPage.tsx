@@ -1,5 +1,6 @@
 import {
   CheckCircleFilled,
+  ClockCircleOutlined,
   CloseOutlined,
   CloudUploadOutlined,
   DeleteOutlined,
@@ -11,6 +12,7 @@ import {
   MergeCellsOutlined,
   PlayCircleOutlined,
   RedoOutlined,
+  SyncOutlined,
 } from "@ant-design/icons";
 import {
   Alert,
@@ -30,9 +32,11 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBlocker, useNavigate } from "react-router-dom";
 import { QUEUE_STATUS_META } from "../constants";
 import { useAdminConfig } from "../context/AdminConfigContext";
+import { useAuth } from "../context/AuthContext";
 import { adminApi } from "../lib/api";
 import { isSupportedImage } from "../lib/caseLogic";
 import { getErrorMessage } from "../lib/errors";
+import { getSceneOptions } from "../lib/sceneOptions";
 import {
   createLatestAsyncSaver,
   type LatestAsyncSaver,
@@ -42,16 +46,76 @@ import {
   revokeQueuePreviews,
   savePersistedUploadQueue,
 } from "../lib/uploadQueueStore";
-import type { UploadedCaseImages, UploadQueueItem } from "../types";
+import type {
+  AdminActivityAction,
+  AdminActivityItem,
+  CaseDraft,
+  QueueStatus,
+  RegisterUploadItemInput,
+  SharedUploadItem,
+  UploadedCaseImages,
+  UploadItemStatusPatch,
+  UploadQueueItem,
+} from "../types";
 import { PageLoading, WriteDisabledAlert } from "../components/PageStates";
 
 const LEGACY_QUEUE_STORE_KEY = "wine-admin-upload-queue-v2";
 const TITLE_DRAFT_STORE_KEY = "wine-admin-upload-title-drafts-v1";
 const CONCURRENCY = 3;
+const SYNC_POLL_INTERVAL_MS = 5_000;
+let uploadPageSessionGeneration = 0;
 
-function readTitleDrafts(): Map<string, string> {
+export interface UploadPageSessionGuard {
+  readonly uid: string;
+  readonly generation: number;
+  isActive: () => boolean;
+  activate: () => void;
+  deactivate: () => void;
+}
+
+export function createUploadPageSessionGuard(uid: string): UploadPageSessionGuard {
+  let active = true;
+  const generation = ++uploadPageSessionGeneration;
+  return {
+    uid,
+    generation,
+    isActive: () => active,
+    activate: () => {
+      active = true;
+    },
+    deactivate: () => {
+      active = false;
+    },
+  };
+}
+
+export class UploadPageSessionInactiveError extends Error {
+  constructor() {
+    super("管理员账号已切换，旧上传任务同步已停止");
+    this.name = "UploadPageSessionInactiveError";
+  }
+}
+
+function assertUploadPageSessionActive(isActive: () => boolean): void {
+  if (!isActive()) throw new UploadPageSessionInactiveError();
+}
+
+export function uploadTitleDraftStoreKey(userId: string): string {
+  const normalized = userId.trim();
+  if (!normalized) throw new Error("缺少当前管理员 UID，无法读取标题草稿");
+  return `${TITLE_DRAFT_STORE_KEY}:${encodeURIComponent(normalized)}`;
+}
+
+function readTitleDrafts(userId: string): Map<string, string> {
   try {
-    const raw = localStorage.getItem(TITLE_DRAFT_STORE_KEY);
+    const scopedKey = uploadTitleDraftStoreKey(userId);
+    let raw = localStorage.getItem(scopedKey);
+    const legacyRaw = localStorage.getItem(TITLE_DRAFT_STORE_KEY);
+    if (!raw && legacyRaw) {
+      raw = legacyRaw;
+      localStorage.setItem(scopedKey, legacyRaw);
+    }
+    if (legacyRaw) localStorage.removeItem(TITLE_DRAFT_STORE_KEY);
     if (!raw) return new Map();
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return new Map(
@@ -64,14 +128,15 @@ function readTitleDrafts(): Map<string, string> {
   }
 }
 
-function writeTitleDrafts(drafts: Map<string, string>): void {
+function writeTitleDrafts(userId: string, drafts: Map<string, string>): void {
   try {
+    const key = uploadTitleDraftStoreKey(userId);
     if (!drafts.size) {
-      localStorage.removeItem(TITLE_DRAFT_STORE_KEY);
+      localStorage.removeItem(key);
       return;
     }
     localStorage.setItem(
-      TITLE_DRAFT_STORE_KEY,
+      key,
       JSON.stringify(Object.fromEntries(drafts)),
     );
   } catch {
@@ -96,6 +161,7 @@ function applyTitleDrafts(
 function clearMatchingTitleDrafts(
   items: UploadQueueItem[],
   drafts: Map<string, string>,
+  userId: string,
 ): void {
   let changed = false;
   items.forEach((item) => {
@@ -104,7 +170,7 @@ function clearMatchingTitleDrafts(
       changed = true;
     }
   });
-  if (changed) writeTitleDrafts(drafts);
+  if (changed) writeTitleDrafts(userId, drafts);
 }
 
 function fileTitle(fileName: string): string {
@@ -114,6 +180,7 @@ function fileTitle(fileName: string): string {
 function makeQueueItem(
   files: File[],
   packageTypes: string[] = [],
+  scenes: string[] = [],
   uploadBatchId = `batch-${crypto.randomUUID()}`,
 ): UploadQueueItem {
   return {
@@ -124,15 +191,268 @@ function makeQueueItem(
     previews: files.map((file) => URL.createObjectURL(file)),
     title: fileTitle(files[0]?.name || ""),
     packageTypes,
+    scenes,
     status: "waiting",
     progress: 0,
     error: "",
   };
 }
 
+function toUploadRegistration(item: UploadQueueItem): RegisterUploadItemInput {
+  return {
+    mutationId: item.mutationId,
+    uploadBatchId: item.uploadBatchId,
+    title: item.title.trim() || "未命名案例",
+    imageCount: item.files.length || item.previews.length,
+    packageTypes: item.packageTypes,
+    scenes: item.scenes,
+    status: item.status,
+  };
+}
+
+export async function ensureUploadItemRegistered(
+  register: (items: RegisterUploadItemInput[]) => Promise<unknown>,
+  item: UploadQueueItem,
+  registeredMutationIds: Set<string>,
+  isActive: () => boolean = () => true,
+): Promise<void> {
+  assertUploadPageSessionActive(isActive);
+  if (registeredMutationIds.has(item.mutationId)) return;
+  // Registration is the queue event. A restored/failed local item may already
+  // be in a later stage, so always create the remote job at the baseline and
+  // let the separately acknowledged status update advance it exactly once.
+  await register([{ ...toUploadRegistration(item), status: "waiting" }]);
+  assertUploadPageSessionActive(isActive);
+  registeredMutationIds.add(item.mutationId);
+}
+
+export async function reportRegisteredUploadItemStatus(
+  register: (items: RegisterUploadItemInput[]) => Promise<unknown>,
+  update: (mutationId: string, patch: UploadItemStatusPatch) => Promise<unknown>,
+  item: UploadQueueItem,
+  patch: UploadItemStatusPatch,
+  registeredMutationIds: Set<string>,
+  isActive: () => boolean = () => true,
+): Promise<void> {
+  assertUploadPageSessionActive(isActive);
+  await ensureUploadItemRegistered(register, item, registeredMutationIds, isActive);
+  assertUploadPageSessionActive(isActive);
+  await update(item.mutationId, patch);
+  assertUploadPageSessionActive(isActive);
+}
+
+export async function removeRegisteredUploadItem(
+  register: (items: RegisterUploadItemInput[]) => Promise<unknown>,
+  remove: (mutationId: string) => Promise<unknown>,
+  item: UploadQueueItem,
+  registeredMutationIds: Set<string>,
+  isActive: () => boolean = () => true,
+): Promise<void> {
+  assertUploadPageSessionActive(isActive);
+  await ensureUploadItemRegistered(register, item, registeredMutationIds, isActive);
+  assertUploadPageSessionActive(isActive);
+  await remove(item.mutationId);
+  assertUploadPageSessionActive(isActive);
+}
+
+export function createLatestRequestGuard() {
+  let issuedSequence = 0;
+  let appliedSequence = 0;
+  return {
+    issue(): number {
+      issuedSequence += 1;
+      return issuedSequence;
+    },
+    canApply(sequence: number): boolean {
+      if (sequence < appliedSequence) return false;
+      appliedSequence = sequence;
+      return true;
+    },
+  };
+}
+
+export function createUploadRegistrationReconciler({
+  getItems,
+  register,
+  registeredMutationIds,
+  registeringMutationIds,
+  batchSize = 50,
+  intervalMs = SYNC_POLL_INTERVAL_MS,
+  isActive = () => true,
+  onError,
+  onSuccess,
+}: {
+  getItems: () => UploadQueueItem[];
+  register: (items: RegisterUploadItemInput[]) => Promise<unknown>;
+  registeredMutationIds: Set<string>;
+  registeringMutationIds: Set<string>;
+  batchSize?: number;
+  intervalMs?: number;
+  isActive?: () => boolean;
+  onError?: (reason: unknown) => void;
+  onSuccess?: () => void;
+}) {
+  let stopped = false;
+  let running = false;
+  const ownedRegisteringMutationIds = new Set<string>();
+
+  const reconcileNow = async () => {
+    if (stopped || running || !isActive()) return;
+    const candidates = getItems().filter(
+      (item) =>
+        item.status === "waiting" &&
+        !registeredMutationIds.has(item.mutationId) &&
+        !registeringMutationIds.has(item.mutationId),
+    );
+    if (!candidates.length) return;
+
+    running = true;
+    let completedAny = false;
+    try {
+      const safeBatchSize = Math.max(1, Math.min(50, batchSize));
+      for (
+        let index = 0;
+        index < candidates.length && !stopped && isActive();
+        index += safeBatchSize
+      ) {
+        const chunk = candidates.slice(index, index + safeBatchSize);
+        chunk.forEach((item) => {
+          registeringMutationIds.add(item.mutationId);
+          ownedRegisteringMutationIds.add(item.mutationId);
+        });
+        try {
+          assertUploadPageSessionActive(isActive);
+          await register(chunk.map(toUploadRegistration));
+          if (!stopped && isActive()) {
+            chunk.forEach((item) => registeredMutationIds.add(item.mutationId));
+            completedAny = true;
+          }
+        } catch (reason) {
+          if (!stopped && isActive()) onError?.(reason);
+        } finally {
+          if (!stopped && isActive()) {
+            chunk.forEach((item) => {
+              registeringMutationIds.delete(item.mutationId);
+              ownedRegisteringMutationIds.delete(item.mutationId);
+            });
+          }
+        }
+      }
+      if (!stopped && isActive() && completedAny) onSuccess?.();
+    } finally {
+      running = false;
+    }
+  };
+
+  const timer = setInterval(() => {
+    void reconcileNow();
+  }, intervalMs);
+
+  return {
+    reconcileNow,
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+      ownedRegisteringMutationIds.forEach((mutationId) => {
+        registeringMutationIds.delete(mutationId);
+      });
+      ownedRegisteringMutationIds.clear();
+    },
+  };
+}
+
+export interface PendingUploadStatusSync {
+  item: UploadQueueItem;
+  patch: UploadItemStatusPatch;
+  attemptId: number;
+}
+
+export function createUploadStatusReconciler({
+  getPending,
+  replay,
+  acknowledge,
+  intervalMs = SYNC_POLL_INTERVAL_MS,
+  isActive = () => true,
+  onError,
+  onSuccess,
+}: {
+  getPending: () => PendingUploadStatusSync[];
+  replay: (entry: PendingUploadStatusSync) => Promise<void>;
+  acknowledge: (entry: PendingUploadStatusSync) => void;
+  intervalMs?: number;
+  isActive?: () => boolean;
+  onError?: (reason: unknown) => void;
+  onSuccess?: () => void;
+}) {
+  let stopped = false;
+  const inFlightMutationIds = new Set<string>();
+
+  const reconcileNow = async () => {
+    if (stopped || !isActive()) return;
+    const candidates = getPending().filter(
+      (entry) => !inFlightMutationIds.has(entry.item.mutationId),
+    );
+    await Promise.all(candidates.map(async (entry) => {
+      const mutationId = entry.item.mutationId;
+      inFlightMutationIds.add(mutationId);
+      try {
+        assertUploadPageSessionActive(isActive);
+        await replay(entry);
+        if (stopped || !isActive()) return;
+        acknowledge(entry);
+        onSuccess?.();
+      } catch (reason) {
+        if (!stopped && isActive()) onError?.(reason);
+      } finally {
+        inFlightMutationIds.delete(mutationId);
+      }
+    }));
+  };
+
+  const timer = setInterval(() => {
+    void reconcileNow();
+  }, intervalMs);
+
+  return {
+    reconcileNow,
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
+}
+
+export function buildUploadedCaseDraft(
+  source: UploadQueueItem,
+  uploaded: UploadedCaseImages,
+): Partial<CaseDraft> {
+  return {
+    title: source.title.trim() || "未命名案例",
+    wineType: "白酒",
+    packageTypes: source.packageTypes,
+    styles: [],
+    priceLevel: "",
+    scenes: source.scenes,
+    statuses: [],
+    homeSections: [],
+    notes: "",
+    isVisible: false,
+    isPinned: false,
+    sourceGalleryImages: uploaded.sources,
+    galleryImages: uploaded.variants.map((variant) => variant.displayFileID),
+    galleryThumbnails: uploaded.variants.map((variant) => variant.thumbnailFileID),
+    galleryBanners: uploaded.variants.map((variant) => variant.bannerFileID),
+    coverImage: uploaded.variants[0].displayFileID,
+    coverThumbnail: uploaded.variants[0].thumbnailFileID,
+    coverBanner: uploaded.variants[0].bannerFileID,
+    imageVariantVersion: 2,
+  };
+}
+
 interface QueueItemRowProps {
   item: UploadQueueItem;
   packageOptions: Array<{ value: string; label: string }>;
+  sceneOptions: Array<{ value: string; label: string }>;
   running: boolean;
   selected: boolean;
   onOpenCreated: (id: string) => void;
@@ -146,6 +466,7 @@ interface QueueItemRowProps {
 export const QueueItemRow = memo(function QueueItemRow({
   item,
   packageOptions,
+  sceneOptions,
   running,
   selected,
   onOpenCreated,
@@ -227,16 +548,29 @@ export const QueueItemRow = memo(function QueueItemRow({
         ) : null}
         {item.error ? <span className="queue-error">{item.error}</span> : null}
       </div>
-      <div className="queue-package-field">
-        <Select
-          mode="multiple"
-          maxTagCount={1}
-          placeholder="包装标签"
-          value={item.packageTypes}
-          disabled={!editable}
-          options={packageOptions}
-          onChange={(values) => onPatch(item.id, { packageTypes: values })}
-        />
+      <div className="queue-label-fields">
+        <div className="queue-label-field">
+          <Select
+            mode="multiple"
+            maxTagCount={1}
+            placeholder="包装标签"
+            value={item.packageTypes}
+            disabled={!editable}
+            options={packageOptions}
+            onChange={(values) => onPatch(item.id, { packageTypes: values })}
+          />
+        </div>
+        <div className="queue-label-field">
+          <Select
+            mode="multiple"
+            maxTagCount={1}
+            placeholder="使用场景"
+            value={item.scenes}
+            disabled={!editable}
+            options={sceneOptions}
+            onChange={(values) => onPatch(item.id, { scenes: values })}
+          />
+        </div>
       </div>
       <Space size={4} className="queue-actions">
         {item.status === "failed" && item.files.length ? (
@@ -271,15 +605,148 @@ export const QueueItemRow = memo(function QueueItemRow({
   );
 });
 
+const ACTIVITY_ACTION_LABELS: Record<AdminActivityAction, string> = {
+  upload_queued: "加入上传队列",
+  upload_started: "开始上传",
+  upload_processing: "正在处理图片",
+  case_creating: "正在创建案例",
+  upload_completed: "上传任务完成",
+  case_created: "完成建档",
+  upload_failed: "上传失败",
+  upload_removed: "移出上传队列",
+  case_moved_to_trash: "移入回收站",
+  case_restored: "恢复案例",
+  case_permanently_deleted: "永久删除案例",
+};
+
+const ACTIVE_REMOTE_STATUSES: QueueStatus[] = [
+  "waiting",
+  "uploading",
+  "processing",
+  "creating",
+];
+
+function activityTime(value: string): string {
+  if (!value) return "刚刚";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "刚刚";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function AdminActivityPanel({
+  activities,
+  sharedJobs,
+  currentUid,
+  loading,
+}: {
+  activities: AdminActivityItem[];
+  sharedJobs: SharedUploadItem[];
+  currentUid: string;
+  loading: boolean;
+}) {
+  const remoteJobs = sharedJobs
+    .filter(
+      (item) =>
+        item.ownerUid !== currentUid && ACTIVE_REMOTE_STATUSES.includes(item.status),
+    )
+    .slice(0, 10);
+
+  return (
+    <Card className="admin-activity-card">
+      <div className="admin-activity-header">
+        <div>
+          <Typography.Title level={4}>管理员实时动态</Typography.Title>
+          <Typography.Text className="secondary-text">
+            仅同步任务阶段和操作记录，不同步原图或本机文件。
+          </Typography.Text>
+        </div>
+        <Tag icon={<SyncOutlined spin={loading} />} color="green">
+          {loading ? "同步中" : "实时同步"}
+        </Tag>
+      </div>
+
+      {remoteJobs.length ? (
+        <div className="admin-activity-list" aria-label="其他管理员进行中的任务">
+          {remoteJobs.map((item) => {
+            const meta = QUEUE_STATUS_META[item.status];
+            return (
+              <div className="admin-activity-item" key={`job-${item.id || item.mutationId}`}>
+                <div className="admin-activity-main">
+                  <strong>{item.ownerLabel}</strong>
+                  <span>{item.title}</span>
+                  <Tag color={meta.color}>{meta.label}</Tag>
+                </div>
+                <div className="admin-activity-meta">
+                  <span>{item.imageCount} 张图片</span>
+                  <span>只读，需由发起电脑继续</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {activities.length ? (
+        <div className="admin-activity-list" aria-live="polite">
+          {activities.slice(0, 50).map((item) => (
+            <div className="admin-activity-item" key={item.id}>
+              <div className="admin-activity-main">
+                <strong>{item.actorLabel}</strong>
+                <span>{ACTIVITY_ACTION_LABELS[item.action] || item.action}</span>
+                <span>{item.title}</span>
+                {item.caseId ? <Tag>{item.caseId}</Tag> : null}
+              </div>
+              <div className="admin-activity-meta">
+                <ClockCircleOutlined />
+                <span>{activityTime(item.createdAt)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : !remoteJobs.length ? (
+        <div className="admin-activity-empty">暂时还没有管理员操作动态</div>
+      ) : null}
+    </Card>
+  );
+}
+
 export function UploadPage() {
+  const { session } = useAuth();
+  if (!session?.user.id) return <PageLoading rows={5} />;
+  // The key forces all local queue refs, pending savers and realtime listeners
+  // to be torn down before another authenticated UID can reuse this route.
+  return <UploadPageForUser key={session.user.id} sessionUid={session.user.id} />;
+}
+
+function UploadPageForUser({ sessionUid }: { sessionUid: string }) {
   const { config, loading: configLoading } = useAdminConfig();
   const navigate = useNavigate();
+  const sessionGuardRef = useRef<UploadPageSessionGuard | null>(null);
+  if (!sessionGuardRef.current || sessionGuardRef.current.uid !== sessionUid) {
+    sessionGuardRef.current?.deactivate();
+    sessionGuardRef.current = createUploadPageSessionGuard(sessionUid);
+  }
+  const sessionGuard = sessionGuardRef.current;
+  const isSessionActive = useCallback(
+    () => sessionGuard.isActive(),
+    [sessionGuard],
+  );
   const inputRef = useRef<HTMLInputElement>(null);
   const [queue, setQueue] = useState<UploadQueueItem[]>([]);
   const [queueHydrated, setQueueHydrated] = useState(false);
   const [persistenceError, setPersistenceError] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [defaultPackages, setDefaultPackages] = useState<string[]>([]);
+  const [defaultScenes, setDefaultScenes] = useState<string[]>([]);
+  const [activities, setActivities] = useState<AdminActivityItem[]>([]);
+  const [sharedJobs, setSharedJobs] = useState<SharedUploadItem[]>([]);
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncError, setSyncError] = useState("");
   const [running, setRunning] = useState(false);
   const [addingFiles, setAddingFiles] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -288,18 +755,27 @@ export function UploadPage() {
   const queueLoadedRef = useRef(false);
   const persistenceFailedRef = useRef(false);
   const queueRef = useRef<UploadQueueItem[]>([]);
+  const syncChainsRef = useRef<Map<string, Promise<void>>>(new Map());
+  const syncRegisteredRef = useRef<Set<string>>(new Set());
+  const syncRegisteringRef = useRef<Set<string>>(new Set());
+  const syncAcknowledgedStatusRef = useRef<Map<string, QueueStatus>>(new Map());
+  const syncPendingStatusRef = useRef<Map<string, PendingUploadStatusSync>>(new Map());
+  const syncStatusAttemptSequenceRef = useRef(0);
+  const syncStatusReconcilerRef = useRef<ReturnType<
+    typeof createUploadStatusReconciler
+  > | null>(null);
   const alreadyPersistedQueueRef = useRef<UploadQueueItem[] | null>(null);
   const titleDraftsRef = useRef<Map<string, string> | null>(null);
-  if (!titleDraftsRef.current) titleDraftsRef.current = readTitleDrafts();
+  if (!titleDraftsRef.current) titleDraftsRef.current = readTitleDrafts(sessionUid);
   const queueSaverRef = useRef<LatestAsyncSaver<UploadQueueItem[]> | null>(null);
   if (!queueSaverRef.current) {
     queueSaverRef.current = createLatestAsyncSaver(
       async (items) => {
-        await savePersistedUploadQueue(items);
+        await savePersistedUploadQueue(items, sessionUid);
         persistenceFailedRef.current = false;
         const drafts = titleDraftsRef.current;
         if (!drafts) return;
-        clearMatchingTitleDrafts(items, drafts);
+        clearMatchingTitleDrafts(items, drafts, sessionUid);
       },
       {
         debounceMs: 500,
@@ -318,13 +794,28 @@ export function UploadPage() {
     () => config.options.packageTypes.map((value) => ({ value, label: value })),
     [config.options.packageTypes],
   );
+  const sceneOptions = useMemo(
+    () => getSceneOptions(config.options.scenes),
+    [config.options.scenes],
+  );
   const navigationBlocker = useBlocker(running || addingFiles);
+
+  useEffect(() => {
+    // React StrictMode intentionally performs setup -> cleanup -> setup once
+    // during development. Reactivate this component instance's guard on every
+    // setup, while the keyed UID boundary guarantees another account receives
+    // a different guard that cannot revive this one.
+    sessionGuard.activate();
+    return () => {
+      sessionGuard.deactivate();
+    };
+  }, [sessionGuard]);
 
   useEffect(() => {
     let cancelled = false;
     mountedRef.current = true;
     queueLoadedRef.current = false;
-    void loadPersistedUploadQueue()
+    void loadPersistedUploadQueue(sessionUid)
       .then((items) => {
         if (cancelled) {
           revokeQueuePreviews(items);
@@ -364,7 +855,7 @@ export function UploadPage() {
       }
       revokeQueuePreviews(queueRef.current);
     };
-  }, []);
+  }, [sessionUid]);
 
   useEffect(() => {
     queueRef.current = queue;
@@ -436,8 +927,8 @@ export function UploadPage() {
     const drafts = titleDraftsRef.current;
     if (!drafts || drafts.get(id) === title) return;
     drafts.set(id, title);
-    writeTitleDrafts(drafts);
-  }, []);
+    writeTitleDrafts(sessionUid, drafts);
+  }, [sessionUid]);
 
   const toggleSelected = useCallback((id: string, checked: boolean) => {
     setSelectedIds((current) => {
@@ -446,16 +937,468 @@ export function UploadPage() {
     });
   }, []);
 
+  const trackSyncChain = useCallback((mutationId: string, promise: Promise<void>) => {
+    const tracked = promise.finally(() => {
+      if (!isSessionActive()) return;
+      if (syncChainsRef.current.get(mutationId) === tracked) {
+        syncChainsRef.current.delete(mutationId);
+      }
+    });
+    if (isSessionActive()) syncChainsRef.current.set(mutationId, tracked);
+    return tracked;
+  }, [isSessionActive]);
+
+  const registerForSync = useCallback((items: UploadQueueItem[]) => {
+    if (
+      !isSessionActive() ||
+      !config.activitySyncEnabled ||
+      !items.length ||
+      !adminApi.registerUploadItems
+    ) return;
+    const candidates = items.filter(
+      (item) =>
+        !syncRegisteredRef.current.has(item.mutationId) &&
+        !syncRegisteringRef.current.has(item.mutationId),
+    );
+    const batchSize = Math.max(1, Math.min(50, config.limits.batch));
+    for (let index = 0; index < candidates.length; index += batchSize) {
+      const chunk = candidates.slice(index, index + batchSize);
+      chunk.forEach((item) => syncRegisteringRef.current.add(item.mutationId));
+      const registration = Promise.resolve()
+        .then(() => {
+          assertUploadPageSessionActive(isSessionActive);
+          return adminApi.registerUploadItems!(chunk.map(toUploadRegistration));
+        })
+        .then(() => {
+          assertUploadPageSessionActive(isSessionActive);
+          chunk.forEach((item) => {
+            syncRegisteredRef.current.add(item.mutationId);
+            if (item.status === "waiting") {
+              syncAcknowledgedStatusRef.current.set(item.mutationId, "waiting");
+            }
+          });
+          setSyncError("");
+        })
+        .catch((reason) => {
+          if (isSessionActive() && mountedRef.current) {
+            setSyncError(getErrorMessage(reason, "管理员动态暂时无法同步"));
+          }
+        })
+        .finally(() => {
+          if (isSessionActive()) {
+            chunk.forEach((item) => syncRegisteringRef.current.delete(item.mutationId));
+          }
+        });
+      chunk.forEach((item) => {
+        void trackSyncChain(item.mutationId, registration);
+      });
+    }
+  }, [
+    config.activitySyncEnabled,
+    config.limits.batch,
+    isSessionActive,
+    trackSyncChain,
+  ]);
+
+  useEffect(() => {
+    if (
+      !config.activitySyncEnabled ||
+      !queueHydrated ||
+      !adminApi.registerUploadItems
+    ) return;
+    const reconciler = createUploadRegistrationReconciler({
+      getItems: () => queueRef.current,
+      register: (items) => {
+        assertUploadPageSessionActive(isSessionActive);
+        return adminApi.registerUploadItems!(items);
+      },
+      registeredMutationIds: syncRegisteredRef.current,
+      registeringMutationIds: syncRegisteringRef.current,
+      batchSize: config.limits.batch,
+      isActive: isSessionActive,
+      onError: (reason) => {
+        if (isSessionActive() && mountedRef.current) {
+          setSyncError(getErrorMessage(reason, "管理员动态暂时无法同步"));
+        }
+      },
+      onSuccess: () => {
+        if (isSessionActive() && mountedRef.current) setSyncError("");
+      },
+    });
+    return () => reconciler.stop();
+  }, [
+    config.activitySyncEnabled,
+    config.limits.batch,
+    isSessionActive,
+    queueHydrated,
+    sessionUid,
+  ]);
+
+  const performStatusSync = useCallback((entry: PendingUploadStatusSync) => {
+    if (!isSessionActive()) {
+      return Promise.reject(new UploadPageSessionInactiveError());
+    }
+    if (!adminApi.registerUploadItems || !adminApi.updateUploadItemStatus) {
+      return Promise.reject(new Error("当前后台版本不支持上传状态同步"));
+    }
+    const previous = syncChainsRef.current.get(entry.item.mutationId) || Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(() => reportRegisteredUploadItemStatus(
+        (items) => adminApi.registerUploadItems!(items),
+        (mutationId, statusPatch) => adminApi.updateUploadItemStatus!(
+          mutationId,
+          statusPatch,
+        ),
+        entry.item,
+        entry.patch,
+        syncRegisteredRef.current,
+        isSessionActive,
+      ));
+    return trackSyncChain(entry.item.mutationId, next);
+  }, [isSessionActive, trackSyncChain]);
+
+  const acknowledgeStatusSync = useCallback((entry: PendingUploadStatusSync) => {
+    if (!isSessionActive()) return;
+    syncAcknowledgedStatusRef.current.set(
+      entry.item.mutationId,
+      entry.patch.status,
+    );
+    const pending = syncPendingStatusRef.current.get(entry.item.mutationId);
+    if (pending?.attemptId === entry.attemptId) {
+      syncPendingStatusRef.current.delete(entry.item.mutationId);
+    }
+  }, [isSessionActive]);
+
+  const makePendingStatusSync = useCallback((
+    item: UploadQueueItem,
+    status: QueueStatus,
+    extra: Partial<UploadItemStatusPatch> = {},
+  ): PendingUploadStatusSync => ({
+    item,
+    patch: {
+      status,
+      title: item.title.trim() || "未命名案例",
+      imageCount: item.files.length || item.previews.length,
+      packageTypes: item.packageTypes,
+      scenes: item.scenes,
+      ...extra,
+    },
+    attemptId: ++syncStatusAttemptSequenceRef.current,
+  }), []);
+
+  const updateSyncStatus = useCallback((
+    item: UploadQueueItem,
+    status: QueueStatus,
+    extra: Partial<UploadItemStatusPatch> = {},
+  ) => {
+    if (
+      !config.activitySyncEnabled ||
+      !adminApi.registerUploadItems ||
+      !adminApi.updateUploadItemStatus
+    ) return;
+    const entry = makePendingStatusSync(item, status, extra);
+    syncPendingStatusRef.current.set(item.mutationId, entry);
+    void performStatusSync(entry)
+      .then(() => {
+        acknowledgeStatusSync(entry);
+        if (isSessionActive() && mountedRef.current) setSyncError("");
+      })
+      .catch((reason) => {
+        if (isSessionActive() && mountedRef.current) {
+          setSyncError(getErrorMessage(reason, "管理员动态暂时无法同步"));
+        }
+      });
+  }, [
+    acknowledgeStatusSync,
+    config.activitySyncEnabled,
+    isSessionActive,
+    makePendingStatusSync,
+    performStatusSync,
+  ]);
+
+  useEffect(() => {
+    if (
+      !config.activitySyncEnabled ||
+      !queueHydrated ||
+      !adminApi.registerUploadItems ||
+      !adminApi.updateUploadItemStatus
+    ) return;
+
+    queueRef.current.forEach((item) => {
+      if (item.status === "waiting") return;
+      if (syncAcknowledgedStatusRef.current.get(item.mutationId) === item.status) return;
+      const pending = syncPendingStatusRef.current.get(item.mutationId);
+      if (pending?.patch.status === item.status) return;
+      syncPendingStatusRef.current.set(
+        item.mutationId,
+        makePendingStatusSync(item, item.status, {
+          ...(item.createdCaseId ? { caseId: item.createdCaseId } : {}),
+          ...(item.status === "failed" && item.error ? { error: item.error } : {}),
+        }),
+      );
+    });
+
+    const reconciler = createUploadStatusReconciler({
+      getPending: () => Array.from(syncPendingStatusRef.current.values()),
+      replay: performStatusSync,
+      acknowledge: acknowledgeStatusSync,
+      isActive: isSessionActive,
+      onError: (reason) => {
+        if (isSessionActive() && mountedRef.current) {
+          setSyncError(getErrorMessage(reason, "管理员动态暂时无法同步"));
+        }
+      },
+      onSuccess: () => {
+        if (isSessionActive() && mountedRef.current) setSyncError("");
+      },
+    });
+    syncStatusReconcilerRef.current = reconciler;
+    void reconciler.reconcileNow();
+    return () => {
+      reconciler.stop();
+      if (syncStatusReconcilerRef.current === reconciler) {
+        syncStatusReconcilerRef.current = null;
+      }
+    };
+  }, [
+    acknowledgeStatusSync,
+    config.activitySyncEnabled,
+    isSessionActive,
+    makePendingStatusSync,
+    performStatusSync,
+    queueHydrated,
+    sessionUid,
+  ]);
+
+  const removeFromSync = useCallback((item: UploadQueueItem) => {
+    if (!isSessionActive()) return;
+    syncPendingStatusRef.current.delete(item.mutationId);
+    syncAcknowledgedStatusRef.current.delete(item.mutationId);
+    if (
+      !config.activitySyncEnabled ||
+      !adminApi.registerUploadItems ||
+      !adminApi.removeUploadItem
+    ) return;
+    const previous = syncChainsRef.current.get(item.mutationId) || Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(() => removeRegisteredUploadItem(
+        (items) => adminApi.registerUploadItems!(items),
+        (mutationId) => adminApi.removeUploadItem!(mutationId),
+        item,
+        syncRegisteredRef.current,
+        isSessionActive,
+      ))
+      .then(() => {
+        if (isSessionActive()) setSyncError("");
+      })
+      .catch((reason) => {
+        if (isSessionActive() && mountedRef.current) {
+          setSyncError(getErrorMessage(reason, "管理员动态暂时无法同步"));
+        }
+      });
+    void trackSyncChain(item.mutationId, next);
+  }, [config.activitySyncEnabled, isSessionActive, trackSyncChain]);
+
+  useEffect(() => {
+    if (!config.activitySyncEnabled || !sessionUid) {
+      setActivities([]);
+      setSharedJobs([]);
+      setSyncLoading(false);
+      return;
+    }
+
+    let disposed = false;
+    let watcher: ReturnType<NonNullable<typeof adminApi.subscribeAdminActivity>> | null = null;
+    let activityPollTimer: ReturnType<typeof setInterval> | null = null;
+    let jobPollTimer: ReturnType<typeof setInterval> | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    const activityRequests = createLatestRequestGuard();
+    const jobRequests = createLatestRequestGuard();
+    let activityFailure = "";
+    let jobFailure = "";
+
+    const publishFailures = () => {
+      if (disposed) return;
+      setSyncError([activityFailure, jobFailure].filter(Boolean).join("；"));
+    };
+
+    const refreshActivities = async () => {
+      if (!adminApi.listAdminActivity) {
+        throw new Error("当前后台版本不支持管理员动态同步");
+      }
+      const sequence = activityRequests.issue();
+      try {
+        const nextActivities = await adminApi.listAdminActivity(50);
+        if (disposed || !activityRequests.canApply(sequence)) return false;
+        setActivities(nextActivities.slice(0, 50));
+        return true;
+      } catch (reason) {
+        if (disposed || !activityRequests.canApply(sequence)) return false;
+        throw reason;
+      }
+    };
+
+    const refreshJobs = async () => {
+      if (!adminApi.listSharedUploadItems) {
+        throw new Error("当前后台版本不支持共享上传任务");
+      }
+      const sequence = jobRequests.issue();
+      try {
+        const nextJobs = await adminApi.listSharedUploadItems(50);
+        if (disposed || !jobRequests.canApply(sequence)) return false;
+        setSharedJobs(nextJobs.slice(0, 50));
+        return true;
+      } catch (reason) {
+        if (disposed || !jobRequests.canApply(sequence)) return false;
+        throw reason;
+      }
+    };
+
+    const pollActivities = () => {
+      void refreshActivities()
+        .then((applied) => {
+          if (!applied) return;
+          activityFailure = "";
+          publishFailures();
+        })
+        .catch((reason) => {
+          activityFailure = getErrorMessage(reason, "管理员动态暂时无法同步");
+          publishFailures();
+        });
+    };
+
+    const pollJobs = () => {
+      void refreshJobs()
+        .then((applied) => {
+          if (!applied) return;
+          jobFailure = "";
+          publishFailures();
+        })
+        .catch((reason) => {
+          jobFailure = getErrorMessage(reason, "任务状态暂时无法同步");
+          publishFailures();
+        });
+    };
+
+    const stopActivityPolling = () => {
+      if (!activityPollTimer) return;
+      clearInterval(activityPollTimer);
+      activityPollTimer = null;
+    };
+
+    const startActivityPolling = () => {
+      if (activityPollTimer || disposed) return;
+      activityPollTimer = setInterval(pollActivities, SYNC_POLL_INTERVAL_MS);
+    };
+
+    const startJobPolling = () => {
+      if (jobPollTimer || disposed) return;
+      jobPollTimer = setInterval(pollJobs, SYNC_POLL_INTERVAL_MS);
+    };
+
+    const scheduleReconnect = () => {
+      if (
+        reconnectTimer ||
+        watcher ||
+        disposed ||
+        !adminApi.subscribeAdminActivity
+      ) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectWatch();
+      }, SYNC_POLL_INTERVAL_MS);
+    };
+
+    const connectWatch = () => {
+      if (disposed || watcher || !adminApi.subscribeAdminActivity) return;
+      try {
+        watcher = adminApi.subscribeAdminActivity(
+          sessionUid,
+          (nextActivities) => {
+            if (disposed) return;
+            const sequence = activityRequests.issue();
+            if (activityRequests.canApply(sequence)) {
+              setActivities(nextActivities.slice(0, 50));
+            }
+            stopActivityPolling();
+            if (reconnectTimer) {
+              clearTimeout(reconnectTimer);
+              reconnectTimer = null;
+            }
+            setSyncLoading(false);
+            activityFailure = "";
+            publishFailures();
+          },
+          (reason) => {
+            if (disposed) return;
+            watcher?.close();
+            watcher = null;
+            activityFailure = getErrorMessage(
+              reason,
+              "实时连接已断开，已切换为定时同步",
+            );
+            publishFailures();
+            startActivityPolling();
+            scheduleReconnect();
+          },
+        );
+      } catch (reason) {
+        watcher = null;
+        activityFailure = getErrorMessage(
+          reason,
+          "实时连接不可用，已切换为定时同步",
+        );
+        publishFailures();
+        startActivityPolling();
+        scheduleReconnect();
+      }
+    };
+
+    setSyncLoading(true);
+    void Promise.allSettled([refreshActivities(), refreshJobs()]).then((results) => {
+      if (disposed) return;
+      if (results[0].status === "rejected") {
+        activityFailure = getErrorMessage(
+          results[0].reason,
+          "管理员动态暂时无法同步",
+        );
+      }
+      if (results[1].status === "rejected") {
+        jobFailure = getErrorMessage(results[1].reason, "任务状态暂时无法同步");
+      }
+      publishFailures();
+      setSyncLoading(false);
+    });
+    startJobPolling();
+    if (adminApi.subscribeAdminActivity) {
+      connectWatch();
+    } else {
+      startActivityPolling();
+    }
+
+    return () => {
+      disposed = true;
+      watcher?.close();
+      stopActivityPolling();
+      if (jobPollTimer) clearInterval(jobPollTimer);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+    };
+  }, [config.activitySyncEnabled, sessionUid]);
+
   const removeItem = useCallback((id: string) => {
+    const item = queueRef.current.find((candidate) => candidate.id === id);
+    if (item && ["waiting", "failed"].includes(item.status)) removeFromSync(item);
     updateQueue((current) => {
       const removed = current.filter((candidate) => candidate.id === id);
       revokeQueuePreviews(removed);
       return current.filter((candidate) => candidate.id !== id);
     });
     titleDraftsRef.current?.delete(id);
-    if (titleDraftsRef.current) writeTitleDrafts(titleDraftsRef.current);
+    if (titleDraftsRef.current) writeTitleDrafts(sessionUid, titleDraftsRef.current);
     setSelectedIds((current) => current.filter((candidate) => candidate !== id));
-  }, [updateQueue]);
+  }, [removeFromSync, sessionUid, updateQueue]);
 
   const openCreated = useCallback((id: string) => {
     if (id) navigate(`/cases/${id}/edit`);
@@ -503,7 +1446,7 @@ export function UploadPage() {
       setAddingFiles(true);
       const uploadBatchId = `batch-${crypto.randomUUID()}`;
       const added = valid.map((file) =>
-        makeQueueItem([file], defaultPackages, uploadBatchId),
+        makeQueueItem([file], defaultPackages, defaultScenes, uploadBatchId),
       );
       const next = [...currentQueue, ...added];
       let persisted = false;
@@ -527,6 +1470,7 @@ export function UploadPage() {
       if (persisted) alreadyPersistedQueueRef.current = next;
       queueRef.current = next;
       updateQueue(() => next);
+      registerForSync(added);
       message.success(`已加入 ${valid.length} 张图片，默认一图一个隐藏案例`);
       addingFilesRef.current = false;
       setAddingFiles(false);
@@ -557,6 +1501,7 @@ export function UploadPage() {
     const merged = makeQueueItem(
       files,
       selected[0].packageTypes,
+      selected[0].scenes,
       `batch-${crypto.randomUUID()}`,
     );
     merged.title = selected[0].title;
@@ -570,27 +1515,38 @@ export function UploadPage() {
       remaining.splice(firstIndex, 0, merged);
       return remaining;
     });
+    selected.forEach(removeFromSync);
+    registerForSync([merged]);
     selected.forEach((item) => titleDraftsRef.current?.delete(item.id));
-    if (titleDraftsRef.current) writeTitleDrafts(titleDraftsRef.current);
+    if (titleDraftsRef.current) writeTitleDrafts(sessionUid, titleDraftsRef.current);
     setSelectedIds([]);
     message.success(`已合并为一个 ${files.length} 图案例，第一张为封面`);
   };
 
   const processItem = useCallback(async (source: UploadQueueItem) => {
+    if (!isSessionActive()) return;
     if (!source.files.length) {
       updateItem(source.id, {
         status: "failed",
         error: "本地文件不可用，请移除后重新选择图片",
       });
+      updateSyncStatus(source, "failed", { error: "本地文件不可用" });
       return;
     }
     updateItem(source.id, { status: "uploading", progress: 4, error: "" });
+    updateSyncStatus(source, "uploading");
+    let reportedStage: QueueStatus = "uploading";
     let uploaded: UploadedCaseImages | null = null;
     try {
       uploaded = await adminApi.uploadCaseImages(
         source.files,
         source.uploadBatchId,
         (progress) => {
+          if (!isSessionActive()) return;
+          if (progress.stage === "processing" && reportedStage !== "processing") {
+            reportedStage = "processing";
+            updateSyncStatus(source, "processing");
+          }
           const ratio = progress.total ? progress.completed / progress.total : 0;
           updateItem(source.id, {
             status: progress.stage === "uploading" ? "uploading" : "processing",
@@ -601,42 +1557,30 @@ export function UploadPage() {
           });
         },
       );
+      assertUploadPageSessionActive(isSessionActive);
       updateItem(source.id, { status: "creating", progress: 90 });
+      updateSyncStatus(source, "creating");
       const result = await adminApi.createCase(
-        {
-          title: source.title.trim() || "未命名案例",
-          wineType: "白酒",
-          packageTypes: source.packageTypes,
-          styles: [],
-          priceLevel: "",
-          scenes: [],
-          statuses: [],
-          homeSections: [],
-          notes: "",
-          isVisible: false,
-          isPinned: false,
-          sourceGalleryImages: uploaded.sources,
-          galleryImages: uploaded.variants.map((variant) => variant.displayFileID),
-          galleryThumbnails: uploaded.variants.map((variant) => variant.thumbnailFileID),
-          galleryBanners: uploaded.variants.map((variant) => variant.bannerFileID),
-          coverImage: uploaded.variants[0].displayFileID,
-          coverThumbnail: uploaded.variants[0].thumbnailFileID,
-          coverBanner: uploaded.variants[0].bannerFileID,
-          imageVariantVersion: 2,
-        },
+        buildUploadedCaseDraft(source, uploaded),
         source.mutationId,
         source.uploadBatchId,
       );
+      assertUploadPageSessionActive(isSessionActive);
       revokeQueuePreviews([source]);
+      const completedStatus: QueueStatus = source.packageTypes.length
+        ? "done"
+        : "needs_tags";
       updateItem(source.id, {
-        status: source.packageTypes.length ? "done" : "needs_tags",
+        status: completedStatus,
         progress: 100,
         files: [],
         previews: [],
         createdId: result.id,
         createdCaseId: result.caseId,
       });
+      updateSyncStatus(source, completedStatus, { caseId: result.caseId });
     } catch (reason) {
+      if (!isSessionActive() || reason instanceof UploadPageSessionInactiveError) return;
       if (uploaded) {
         const generatedFileIDs = uploaded.variants.flatMap((variant) => [
           variant.displayFileID,
@@ -644,24 +1588,27 @@ export function UploadPage() {
           variant.bannerFileID,
         ]);
         try {
+          assertUploadPageSessionActive(isSessionActive);
           await adminApi.cleanupUnreferencedFiles(generatedFileIDs);
         } catch {
           // Preserve the create/upload error; cleanup is best effort and server-side reference safe.
         }
       }
+      if (!isSessionActive()) return;
       updateItem(source.id, {
         status: "failed",
         error: getErrorMessage(reason, "上传失败，请重试"),
       });
+      updateSyncStatus(source, "failed", { error: "上传失败" });
     }
-  }, [updateItem]);
+  }, [isSessionActive, updateItem, updateSyncStatus]);
 
   const runPool = async (items: UploadQueueItem[]) => {
     let cursor = 0;
     const workers = Array.from(
       { length: Math.min(CONCURRENCY, items.length) },
       async () => {
-        while (cursor < items.length) {
+        while (cursor < items.length && isSessionActive()) {
           const index = cursor;
           cursor += 1;
           await processItem(items[index]);
@@ -672,6 +1619,7 @@ export function UploadPage() {
   };
 
   const startUpload = async () => {
+    if (!isSessionActive()) return;
     const currentQueue = applyTitleDrafts(
       queueRef.current,
       titleDraftsRef.current || new Map(),
@@ -684,19 +1632,22 @@ export function UploadPage() {
     updateQueue(() => currentQueue);
     setRunning(true);
     await runPool(waiting);
+    if (!isSessionActive()) return;
     setRunning(false);
     message.success("本批次处理完成，可查看失败项或补充标签");
   };
 
   const retry = useCallback(async (item: UploadQueueItem) => {
+    if (!isSessionActive()) return;
     const current = applyTitleDrafts(
       queueRef.current,
       titleDraftsRef.current || new Map(),
     ).find((candidate) => candidate.id === item.id) || item;
     setRunning(true);
     await processItem(current);
+    if (!isSessionActive()) return;
     setRunning(false);
-  }, [processItem]);
+  }, [isSessionActive, processItem]);
 
   const applyDefaultPackages = (values: string[]) => {
     if (running || addingFiles) return;
@@ -704,6 +1655,16 @@ export function UploadPage() {
     updateQueue((current) =>
       current.map((item) =>
         item.status === "waiting" ? { ...item, packageTypes: values } : item,
+      ),
+    );
+  };
+
+  const applyDefaultScenes = (values: string[]) => {
+    if (running || addingFiles) return;
+    setDefaultScenes(values);
+    updateQueue((current) =>
+      current.map((item) =>
+        item.status === "waiting" ? { ...item, scenes: values } : item,
       ),
     );
   };
@@ -734,6 +1695,16 @@ export function UploadPage() {
           title="上传队列刷新恢复不可用"
           description={persistenceError}
           onClose={() => setPersistenceError("")}
+        />
+      ) : null}
+      {config.activitySyncEnabled && syncError ? (
+        <Alert
+          type="warning"
+          showIcon
+          closable
+          title="管理员动态同步暂时不可用"
+          description={`${syncError}。本机上传不受影响。`}
+          onClose={() => setSyncError("")}
         />
       ) : null}
 
@@ -781,18 +1752,36 @@ export function UploadPage() {
         </Card>
 
         <Card className="upload-settings-card" title="本批次默认设置">
-          <Typography.Text className="field-label">包装标签（可暂不选择）</Typography.Text>
-          <Select
-            mode="multiple"
-            allowClear
-            maxTagCount="responsive"
-            value={defaultPackages}
-            disabled={running || addingFiles}
-            placeholder="上传后再补充也可以"
-            options={config.options.packageTypes.map((value) => ({ value, label: value }))}
-            onChange={applyDefaultPackages}
-            className="full-width"
-          />
+          <div className="upload-default-labels">
+            <div>
+              <Typography.Text className="field-label">包装标签（可暂不选择）</Typography.Text>
+              <Select
+                mode="multiple"
+                allowClear
+                maxTagCount="responsive"
+                value={defaultPackages}
+                disabled={running || addingFiles}
+                placeholder="上传后再补充也可以"
+                options={packageOptions}
+                onChange={applyDefaultPackages}
+                className="full-width"
+              />
+            </div>
+            <div>
+              <Typography.Text className="field-label">使用场景（可暂不选择）</Typography.Text>
+              <Select
+                mode="multiple"
+                allowClear
+                maxTagCount="responsive"
+                value={defaultScenes}
+                disabled={running || addingFiles}
+                placeholder="同一场景可一次设置"
+                options={sceneOptions}
+                onChange={applyDefaultScenes}
+                className="full-width"
+              />
+            </div>
+          </div>
           <Alert
             type="info"
             showIcon
@@ -860,6 +1849,7 @@ export function UploadPage() {
                 key={item.id}
                 item={item}
                 packageOptions={packageOptions}
+                sceneOptions={sceneOptions}
                 running={running || addingFiles}
                 selected={selectedIdSet.has(item.id)}
                 onOpenCreated={openCreated}
@@ -887,7 +1877,9 @@ export function UploadPage() {
                   )
                   .map((item) => item.id);
                 removeIds.forEach((id) => titleDraftsRef.current?.delete(id));
-                if (titleDraftsRef.current) writeTitleDrafts(titleDraftsRef.current);
+                if (titleDraftsRef.current) {
+                  writeTitleDrafts(sessionUid, titleDraftsRef.current);
+                }
                 updateQueue((current) => {
                   const keep = current.filter((item) =>
                     ["waiting", "uploading", "processing", "creating"].includes(item.status),
@@ -905,6 +1897,15 @@ export function UploadPage() {
           </div>
         ) : null}
       </Card>
+
+      {config.activitySyncEnabled ? (
+        <AdminActivityPanel
+          activities={activities}
+          sharedJobs={sharedJobs}
+          currentUid={sessionUid}
+          loading={syncLoading}
+        />
+      ) : null}
     </div>
   );
 }

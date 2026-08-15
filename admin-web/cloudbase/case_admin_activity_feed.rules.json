@@ -1,0 +1,4 @@
+{
+  "read": "doc.viewerUid == auth.uid",
+  "write": false
+}

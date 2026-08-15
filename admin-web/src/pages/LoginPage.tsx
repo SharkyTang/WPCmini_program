@@ -7,6 +7,7 @@ import {
 import { Alert, Button, Form, Input, Space, Typography } from "antd";
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { ADMIN_BRAND_NAME } from "../constants";
 import { useAuth } from "../context/AuthContext";
 import { adminApi, isDemoMode } from "../lib/api";
 import { getDemoCredentials } from "../lib/demoConfig";
@@ -47,7 +48,7 @@ export function LoginPage() {
             <span />
           </span>
           <span>
-            <strong>酿艺案例库</strong>
+            <strong>{ADMIN_BRAND_NAME}</strong>
             <small>MERCHANT STUDIO</small>
           </span>
         </div>

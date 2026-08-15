@@ -38,7 +38,7 @@ const SCENE_VALUES = [
   "电商展示",
 ];
 const SCENE_LABELS = {
-  "婚宴": "婚宴/喜宴",
+  婚宴: "婚宴/喜宴",
 };
 const CASE_ADMIN_OPTIONS = {
   wineType: ["白酒"],
@@ -80,6 +80,15 @@ const CASE_IMAGE_SCALAR_FIELDS = [
   "coverBanner",
   "imageVariantVersion",
 ];
+const UPLOAD_JOB_STATUSES = [
+  "waiting",
+  "uploading",
+  "processing",
+  "creating",
+  "needs_tags",
+  "done",
+  "failed",
+];
 
 const VALID_CASE_ADMIN_ACTIONS = [
   "checkAccess",
@@ -101,6 +110,14 @@ const VALID_CASE_ADMIN_ACTIONS = [
   "setCaseVisibility",
   "deleteCase",
   "cleanupUnreferencedFiles",
+  "permanentlyDeleteCases",
+  "retryPurgeCleanup",
+  "listPendingPurgeJobs",
+  "registerUploadItems",
+  "updateUploadItemStatus",
+  "removeUploadItem",
+  "listSharedUploadItems",
+  "listAdminActivity",
 ];
 
 const ALLOWED_CASE_FIELDS = [
@@ -235,6 +252,37 @@ function isAdminActor(actor, env = {}) {
 
 function isWebWriteEnabled(value) {
   return ["1", "true", "yes", "on"].includes(trimText(value).toLowerCase());
+}
+
+function parseAdminDisplayNames(value) {
+  const rawValue = typeof value === "string" && value.startsWith("json:")
+    ? value.slice(5)
+    : value;
+  const parsed = parseCloudbaseContext(rawValue);
+  return Object.keys(parsed).reduce((result, uid) => {
+    const normalizedUid = trimText(uid);
+    const displayName = trimText(parsed[uid]);
+    if (normalizedUid && displayName) result[normalizedUid] = displayName.slice(0, 40);
+    return result;
+  }, {});
+}
+
+function getAdminDisplayName(actor, env = {}) {
+  if (!actor || !trimText(actor.id)) return "管理员";
+  const configured = parseAdminDisplayNames(env.CASE_ADMIN_DISPLAY_NAMES);
+  if (configured[actor.id]) return configured[actor.id];
+  return actor.type === "cloudbase_uid" ? "网页管理员" : "微信管理员";
+}
+
+function normalizeUploadJobStatus(value) {
+  const status = trimText(value).toLowerCase();
+  return UPLOAD_JOB_STATUSES.includes(status) ? status : "";
+}
+
+function normalizeAdminListLimit(value, fallback = 50) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(50, Math.floor(parsed)));
 }
 
 function normalizeValues(value) {
@@ -1299,6 +1347,7 @@ module.exports = {
   PAGE_SIZE_MAX,
   PINNED_CASE_LIMIT,
   SEARCH_FETCH_LIMIT,
+  UPLOAD_JOB_STATUSES,
   WEB_UPLOAD_PREFIX,
   VALID_CASE_ADMIN_ACTIONS,
   buildBatchCasePatch,
@@ -1315,12 +1364,13 @@ module.exports = {
   generateSequentialCaseId,
   getCloudFilePath,
   getEnvList,
-  getSceneLabel,
   getHomeSectionOrder,
   getActivatedHomepageSlots,
   getActiveHomepageSlots,
   getAdminOpenidsFromEnv,
   getRoleAdminOpenidsEnv,
+  getAdminDisplayName,
+  getSceneLabel,
   getCaseIdNumber,
   getRecordVersion,
   hasCaseImageChanges,
@@ -1332,6 +1382,7 @@ module.exports = {
   isWebAdminUploadFile,
   isWebWriteEnabled,
   normalizeCaseIds,
+  normalizeAdminListLimit,
   normalizeClientMutationId,
   normalizeCloudFileIds,
   normalizeGalleryImages,
@@ -1341,9 +1392,11 @@ module.exports = {
   normalizePage,
   normalizePageSize,
   normalizeHomepageDisplaySlot,
+  normalizeUploadJobStatus,
   normalizeVisibilityFilter,
   paginateCaseItems,
   parseCloudbaseContext,
+  parseAdminDisplayNames,
   pickAllowedCaseFields,
   resolveAdminActor,
   sanitizeCasePayload,

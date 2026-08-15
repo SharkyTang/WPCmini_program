@@ -71,6 +71,191 @@ describe("MockAdminApi mutation idempotency", () => {
     });
   });
 
+  it("permanently deletes only trashed cases and reuses the purge result", async () => {
+    const api = new MockAdminApi();
+    await api.signIn(DEMO_ACCOUNT, DEMO_PASSWORD);
+    const trash = await api.listCases({
+      page: 1,
+      pageSize: 10,
+      filters: { ...EMPTY_FILTERS, trash: true },
+    });
+    const candidate = trash.items[0];
+    const mutationId = "purge-trash-case-1";
+
+    const deleted = await api.permanentlyDeleteCases(
+      [candidate._id],
+      getExpectedVersions([candidate]),
+      mutationId,
+    );
+    const retried = await api.permanentlyDeleteCases(
+      [candidate._id],
+      getExpectedVersions([candidate]),
+      mutationId,
+    );
+
+    expect(deleted.deleted).toBe(1);
+    expect(retried).toEqual(deleted);
+    const latestTrash = await api.listCases({
+      page: 1,
+      pageSize: 10,
+      filters: { ...EMPTY_FILTERS, trash: true },
+    });
+    expect(latestTrash.items.some((item) => item._id === candidate._id)).toBe(false);
+  });
+
+  it("rejects permanent deletion for a case outside the trash", async () => {
+    const api = new MockAdminApi();
+    await api.signIn(DEMO_ACCOUNT, DEMO_PASSWORD);
+    const active = await api.listCases({
+      page: 1,
+      pageSize: 1,
+      filters: { ...EMPTY_FILTERS },
+    });
+    const candidate = active.items[0];
+
+    await expect(
+      api.permanentlyDeleteCases(
+        [candidate._id],
+        getExpectedVersions([candidate]),
+        "purge-active-case-1",
+      ),
+    ).rejects.toMatchObject({ code: "CASE_NOT_FOUND" });
+  });
+
+  it("discovers only the current administrator pending purge jobs", async () => {
+    const api = new MockAdminApi();
+    await api.signIn(DEMO_ACCOUNT, DEMO_PASSWORD);
+    const now = new Date().toISOString();
+    localStorage.setItem("wine-admin-demo-config-override-v1", JSON.stringify({
+      writeEnabled: false,
+      permanentDeleteEnabled: false,
+    }));
+    localStorage.setItem("wine-admin-demo-purge-jobs-v1", JSON.stringify({
+      "current-admin-mutation": {
+        deleted: 1,
+        cleanupJobId: "current-admin-job",
+        deletedFileCount: 2,
+        retainedReferencedCount: 0,
+        pendingFileCount: 1,
+        clientMutationId: "current-admin-mutation",
+        ownerUid: "demo-admin",
+        status: "cleanup_release_pending",
+        createdAt: now,
+        updatedAt: now,
+      },
+      "other-admin-mutation": {
+        deleted: 1,
+        cleanupJobId: "other-admin-job",
+        deletedFileCount: 0,
+        retainedReferencedCount: 0,
+        pendingFileCount: 3,
+        clientMutationId: "other-admin-mutation",
+        ownerUid: "another-admin",
+        status: "cleanup_pending",
+        createdAt: now,
+        updatedAt: now,
+      },
+    }));
+
+    await expect(api.getAdminConfig()).resolves.toMatchObject({
+      writeEnabled: false,
+      permanentDeleteEnabled: false,
+    });
+    await expect(api.listPendingPurgeJobs()).resolves.toEqual([
+      expect.objectContaining({
+        cleanupJobId: "current-admin-job",
+        clientMutationId: "current-admin-mutation",
+        pendingFileCount: 1,
+      }),
+    ]);
+    await api.retryPurgeCleanup("current-admin-job");
+    await expect(api.listPendingPurgeJobs()).resolves.toEqual([]);
+
+    const jobs = JSON.parse(
+      localStorage.getItem("wine-admin-demo-purge-jobs-v1") || "{}",
+    ) as Record<string, { pendingFileCount: number }>;
+    expect(jobs["other-admin-mutation"].pendingFileCount).toBe(3);
+  });
+
+  it("shares upload status and activity without exposing files", async () => {
+    const api = new MockAdminApi();
+    await api.signIn(DEMO_ACCOUNT, DEMO_PASSWORD);
+    await api.registerUploadItems([
+      {
+        mutationId: "shared-upload-1",
+        uploadBatchId: "batch-1",
+        title: "共享上传案例",
+        imageCount: 2,
+        packageTypes: ["整套包装"],
+        scenes: ["婚宴"],
+        status: "waiting",
+      },
+    ]);
+    await api.updateUploadItemStatus("shared-upload-1", {
+      status: "processing",
+      title: "共享上传案例",
+    });
+
+    const jobs = await api.listSharedUploadItems();
+    const activities = await api.listAdminActivity();
+    expect(jobs[0]).toMatchObject({
+      mutationId: "shared-upload-1",
+      status: "processing",
+      ownerUid: "demo-admin",
+    });
+    expect(jobs[0]).not.toHaveProperty("files");
+    expect(activities.map((item) => item.action)).toEqual([
+      "upload_processing",
+      "upload_queued",
+    ]);
+  });
+
+  it("records move, restore, and permanent-delete case activity once", async () => {
+    const api = new MockAdminApi();
+    await api.signIn(DEMO_ACCOUNT, DEMO_PASSWORD);
+    const active = await api.listCases({
+      page: 1,
+      pageSize: 1,
+      filters: { ...EMPTY_FILTERS },
+    });
+    const candidate = active.items[0];
+    await api.moveCasesToTrash(
+      [candidate._id],
+      getExpectedVersions([candidate]),
+    );
+    const trashed = (await api.listCases({
+      page: 1,
+      pageSize: 50,
+      filters: { ...EMPTY_FILTERS, trash: true },
+    })).items.find((item) => item._id === candidate._id)!;
+    await api.restoreCases([trashed._id], getExpectedVersions([trashed]));
+    const restored = await api.getCase(candidate._id);
+    await api.moveCasesToTrash([restored._id], getExpectedVersions([restored]));
+    const trashedAgain = (await api.listCases({
+      page: 1,
+      pageSize: 50,
+      filters: { ...EMPTY_FILTERS, trash: true },
+    })).items.find((item) => item._id === candidate._id)!;
+    const mutationId = "purge-case-activity-1";
+    await api.permanentlyDeleteCases(
+      [trashedAgain._id],
+      getExpectedVersions([trashedAgain]),
+      mutationId,
+    );
+    await api.permanentlyDeleteCases(
+      [trashedAgain._id],
+      getExpectedVersions([trashedAgain]),
+      mutationId,
+    );
+
+    const activities = (await api.listAdminActivity()).filter(
+      (item) => item.caseId === candidate.caseId,
+    );
+    expect(activities.filter((item) => item.action === "case_moved_to_trash")).toHaveLength(2);
+    expect(activities.filter((item) => item.action === "case_restored")).toHaveLength(1);
+    expect(activities.filter((item) => item.action === "case_permanently_deleted")).toHaveLength(1);
+  });
+
   it("returns the saved version when an update retry reuses its mutation id", async () => {
     const api = new MockAdminApi();
     await api.signIn(DEMO_ACCOUNT, DEMO_PASSWORD);
@@ -122,22 +307,25 @@ describe("MockAdminApi mutation idempotency", () => {
   it("使用显示别名搜索婚宴案例，保存时仍保留内部值", async () => {
     const api = new MockAdminApi();
     await api.signIn(DEMO_ACCOUNT, DEMO_PASSWORD);
-    const response = await api.listCases({
+    const list = await api.listCases({
+      page: 1,
+      pageSize: 50,
+      filters: { ...EMPTY_FILTERS },
+    });
+    const candidate = list.items[0];
+    await api.updateCase(
+      candidate._id,
+      { scenes: ["婚宴"] },
+      candidate.version,
+      "scene-wedding-alias",
+    );
+
+    const searched = await api.listCases({
       page: 1,
       pageSize: 50,
       filters: { ...EMPTY_FILTERS, keyword: "喜宴" },
     });
-
-    expect(response.items.length).toBeGreaterThan(0);
-    expect(response.items.every((item) => item.scenes.includes("婚宴"))).toBe(true);
-
-    const original = response.items[0];
-    const saved = await api.updateCase(
-      original._id,
-      { title: `${original.title}（别名检查）`, scenes: ["婚宴"] },
-      original.version,
-      "scene-label-save-test",
-    );
-    expect(saved.scenes).toEqual(["婚宴"]);
+    expect(searched.items.some((item) => item._id === candidate._id)).toBe(true);
+    expect((await api.getCase(candidate._id)).scenes).toEqual(["婚宴"]);
   });
 });

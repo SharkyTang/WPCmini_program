@@ -69,10 +69,10 @@ export function CaseFiltersPanel({
           复合筛选
         </span>
         <Select
+          aria-label="场景筛选"
           mode="multiple"
           maxTagCount={1}
           allowClear
-          aria-label="场景筛选"
           value={filters.scenes}
           placeholder="场景"
           options={getSceneOptions(config.options.scenes)}

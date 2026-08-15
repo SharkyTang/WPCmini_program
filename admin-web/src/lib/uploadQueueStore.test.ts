@@ -4,6 +4,7 @@ import {
   restoreUploadQueue,
   revokeQueuePreviews,
   toPersistedUploadQueue,
+  uploadQueueSnapshotKey,
 } from "./uploadQueueStore";
 
 function item(
@@ -18,6 +19,7 @@ function item(
     previews: ["blob:preview-1"],
     title: "案例",
     packageTypes: [],
+    scenes: ["宴会"],
     status,
     progress: 45,
     error: "",
@@ -32,6 +34,7 @@ describe("uploadQueueStore", () => {
     expect("previews" in waiting).toBe(false);
     expect(waiting.files).toHaveLength(1);
     expect(waiting.uploadBatchId).toBe("batch-1");
+    expect(waiting.scenes).toEqual(["宴会"]);
     expect(done.files).toEqual([]);
   });
 
@@ -48,6 +51,24 @@ describe("uploadQueueStore", () => {
     expect(restored.error).toContain("安全重试");
     expect(restored.mutationId).toBe("mutation-1");
     expect(restored.uploadBatchId).toBe("batch-1");
+    expect(restored.scenes).toEqual(["宴会"]);
+  });
+
+  it("isolates snapshots by administrator UID", () => {
+    expect(uploadQueueSnapshotKey("admin-a")).toBe("current:admin-a");
+    expect(uploadQueueSnapshotKey("admin-b")).toBe("current:admin-b");
+    expect(() => uploadQueueSnapshotKey(" ")).toThrow("UID");
+  });
+
+  it("restores old queue items without scenes as an empty selection", () => {
+    const legacy = toPersistedUploadQueue([item("waiting")])[0] as unknown as Record<string, unknown>;
+    delete legacy.scenes;
+    const restored = restoreUploadQueue(
+      [legacy as unknown as ReturnType<typeof toPersistedUploadQueue>[number]],
+      () => "blob:legacy",
+    )[0];
+
+    expect(restored.scenes).toEqual([]);
   });
 
   it("revokes only local object URLs", () => {

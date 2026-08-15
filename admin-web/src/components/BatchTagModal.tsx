@@ -27,18 +27,18 @@ export function BatchTagModal({
   const [form] = Form.useForm<BatchTagValues>();
   const { config } = useAdminConfig();
   const [field, setField] = useState<TagField>("packageTypes");
-  const options = useMemo(() => {
-    const values = ({
-      packageTypes: config.options.packageTypes,
-      styles: config.options.styles,
-      priceLevel: config.options.priceLevels,
-      scenes: config.options.scenes,
-      statuses: config.options.statuses,
-    })[field];
-    return field === "scenes"
-      ? getSceneOptions(values)
-      : values.map((value) => ({ value, label: value }));
-  }, [config, field]);
+  const options = useMemo(
+    () =>
+      ({
+        packageTypes: config.options.packageTypes,
+        styles: config.options.styles,
+        priceLevel: config.options.priceLevels,
+        scenes: config.options.scenes,
+        statuses: config.options.statuses,
+      })[field].map((value) => ({ value, label: value })),
+    [config, field],
+  );
+  const displayedOptions = field === "scenes" ? getSceneOptions(config.options.scenes) : options;
 
   useEffect(() => {
     if (!open) return;
@@ -99,12 +99,12 @@ export function BatchTagModal({
           ]}
         >
           <Select
+            aria-label="批量标签值"
             mode="multiple"
             maxCount={field === "priceLevel" ? 1 : undefined}
             allowClear
-            aria-label="批量标签值"
             placeholder="选择要处理的标签"
-            options={options}
+            options={displayedOptions}
           />
         </Form.Item>
       </Form>

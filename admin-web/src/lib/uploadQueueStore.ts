@@ -17,7 +17,7 @@ export interface PersistedUploadQueueItem
 }
 
 interface QueueSnapshot {
-  id: typeof SNAPSHOT_KEY;
+  id: string;
   items: PersistedUploadQueueItem[];
   savedAt: string;
 }
@@ -85,6 +85,9 @@ export function restoreUploadQueue(
       ...item,
       files,
       previews: files.map((file) => createObjectUrl(file)),
+      scenes: Array.isArray((item as { scenes?: unknown }).scenes)
+        ? (item as { scenes: unknown[] }).scenes.map(String).filter(Boolean)
+        : [],
       status: interrupted ? "failed" : item.status,
       progress: interrupted ? 0 : Number(item.progress || 0),
       error: interrupted
@@ -92,6 +95,12 @@ export function restoreUploadQueue(
         : String(item.error || ""),
     };
   });
+}
+
+export function uploadQueueSnapshotKey(userId: string): string {
+  const normalized = userId.trim();
+  if (!normalized) throw new Error("缺少当前管理员 UID，无法读取上传队列");
+  return `${SNAPSHOT_KEY}:${encodeURIComponent(normalized)}`;
 }
 
 export function revokeQueuePreviews(
@@ -105,23 +114,36 @@ export function revokeQueuePreviews(
   });
 }
 
-export async function loadPersistedUploadQueue(): Promise<UploadQueueItem[]> {
+export async function loadPersistedUploadQueue(userId: string): Promise<UploadQueueItem[]> {
   const database = await openDatabase();
-  const transaction = database.transaction(STORE_NAME, "readonly");
-  const snapshot = await requestResult(
-    transaction.objectStore(STORE_NAME).get(SNAPSHOT_KEY),
-  ) as QueueSnapshot | undefined;
-  await transactionDone(transaction);
+  const transaction = database.transaction(STORE_NAME, "readwrite");
+  const completed = transactionDone(transaction);
+  const store = transaction.objectStore(STORE_NAME);
+  const scopedKey = uploadQueueSnapshotKey(userId);
+  const [scopedSnapshot, legacySnapshot] = await Promise.all([
+    requestResult(store.get(scopedKey)) as Promise<QueueSnapshot | undefined>,
+    requestResult(store.get(SNAPSHOT_KEY)) as Promise<QueueSnapshot | undefined>,
+  ]);
+  let snapshot = scopedSnapshot;
+  if (!snapshot && legacySnapshot) {
+    snapshot = { ...legacySnapshot, id: scopedKey };
+    store.put(snapshot);
+  }
+  // The unscoped snapshot is claimed by the first authenticated account only.
+  // Removing it also prevents a later account from seeing the same local files.
+  if (legacySnapshot) store.delete(SNAPSHOT_KEY);
+  await completed;
   return restoreUploadQueue(snapshot?.items || []);
 }
 
 export async function savePersistedUploadQueue(
   items: UploadQueueItem[],
+  userId: string,
 ): Promise<void> {
   const database = await openDatabase();
   const transaction = database.transaction(STORE_NAME, "readwrite");
   transaction.objectStore(STORE_NAME).put({
-    id: SNAPSHOT_KEY,
+    id: uploadQueueSnapshotKey(userId),
     items: toPersistedUploadQueue(items),
     savedAt: new Date().toISOString(),
   } satisfies QueueSnapshot);

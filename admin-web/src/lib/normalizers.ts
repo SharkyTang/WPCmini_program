@@ -1,5 +1,4 @@
 import { DEFAULT_CONFIG } from "../constants";
-import { normalizeSceneOptions } from "./sceneOptions";
 import type {
   AdminConfig,
   CaseDraft,
@@ -8,6 +7,7 @@ import type {
   HomeSectionOrders,
 } from "../types";
 import { normalizeValues } from "./caseLogic";
+import { normalizeSceneOptions } from "./sceneOptions";
 
 function dateText(value: unknown): string {
   if (!value) return "";
@@ -169,6 +169,8 @@ export function normalizeAdminConfig(value: unknown): AdminConfig {
       },
     },
     writeEnabled: raw.writeEnabled === true,
+    permanentDeleteEnabled: raw.permanentDeleteEnabled === true,
+    activitySyncEnabled: raw.activitySyncEnabled === true,
     homeSectionOrders: normalizeOrders(raw.homeSectionOrders || raw.orders || raw.homeSectionOrder),
   };
 }

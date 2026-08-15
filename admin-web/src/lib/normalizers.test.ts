@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { SCENE_VALUES } from "./sceneOptions";
 import { normalizeAdminConfig, normalizeCaseRecord, toCasePayload } from "./normalizers";
+import { SCENE_VALUES } from "./sceneOptions";
 
 describe("normalizers", () => {
   it("preserves gallery URL indexes and never exposes cloud IDs as URLs", () => {
@@ -32,18 +32,27 @@ describe("normalizers", () => {
   });
 
   it("uses safe configuration defaults for partial server config", () => {
-    const config = normalizeAdminConfig({ writeEnabled: false, limits: { gallery: 6 } });
+    const config = normalizeAdminConfig({
+      writeEnabled: false,
+      permanentDeleteEnabled: true,
+      activitySyncEnabled: true,
+      limits: { gallery: 6 },
+    });
     expect(config.writeEnabled).toBe(false);
+    expect(config.permanentDeleteEnabled).toBe(true);
+    expect(config.activitySyncEnabled).toBe(true);
     expect(config.limits.gallery).toBe(6);
     expect(config.options.packageTypes).toContain("礼盒");
   });
 
   it("keeps writes disabled when an old or partial response omits the flag", () => {
     expect(normalizeAdminConfig({}).writeEnabled).toBe(false);
+    expect(normalizeAdminConfig({}).permanentDeleteEnabled).toBe(false);
+    expect(normalizeAdminConfig({}).activitySyncEnabled).toBe(false);
     expect(normalizeAdminConfig({ writeEnabled: true }).writeEnabled).toBe(true);
   });
 
-  it("将旧服务端的场景选项补齐为规范11项", () => {
+  it("补齐旧服务端缺少的四个宴席场景并保留规范顺序", () => {
     const config = normalizeAdminConfig({
       options: {
         scenes: [

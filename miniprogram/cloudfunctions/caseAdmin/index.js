@@ -20,17 +20,21 @@ const {
   getCloudFilePath,
   getActivatedHomepageSlots,
   getCaseIdNumber,
+  getAdminDisplayName,
+  getEnvList,
   getRecordVersion,
   hasCaseImageChanges,
   isAdminActor,
   isWebAdminUploadFile,
   isWebWriteEnabled,
   normalizeCaseIds,
+  normalizeAdminListLimit,
   normalizeClientMutationId,
   normalizeCloudFileIds,
   normalizeHomepageDisplaySlot,
   normalizePage,
   normalizePageSize,
+  normalizeUploadJobStatus,
   normalizeVisibilityFilter,
   paginateCaseItems,
   resolveAdminActor,
@@ -53,6 +57,22 @@ const _ = db.command;
 const RECENT_CASE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const CATALOG_META_COLLECTION = "catalog_meta";
 const CATALOG_META_DOCUMENT_ID = "current";
+const PURGE_JOB_COLLECTION = "case_admin_purge_jobs";
+const PURGE_GUARD_DOCUMENT_ID = "purge_guard_current";
+// CloudBase functions can be configured up to 900 seconds. Keep the lease
+// comfortably beyond that ceiling so a live invocation can never lose its
+// fence merely because its configured timeout was increased.
+const PURGE_GUARD_LEASE_MS = 30 * 60 * 1000;
+// Storage deletion has no documented cancellation signal. Stop awaiting an
+// individual request well before the lease can expire, then deliberately keep
+// the guard active until its lease expires. This prevents an ambiguous,
+// still-in-flight request from racing a newly introduced image reference.
+const PURGE_DELETE_CALL_TIMEOUT_MS = 45 * 1000;
+const UPLOAD_JOB_COLLECTION = "case_admin_upload_jobs";
+const ACTIVITY_FEED_COLLECTION = "case_admin_activity_feed";
+const ACTIVITY_OUTBOX_VIEWER_UID = "__server_outbox__";
+const ACTIVITY_OUTBOX_REPAIR_LIMIT = 10;
+const ADMIN_RECORD_RETENTION_LIMIT = 50;
 const WEB_WRITE_ACTIONS = new Set([
   "createCase",
   "updateCase",
@@ -64,6 +84,20 @@ const WEB_WRITE_ACTIONS = new Set([
   "setCaseVisibility",
   "deleteCase",
   "cleanupUnreferencedFiles",
+  "permanentlyDeleteCases",
+  "registerUploadItems",
+  "updateUploadItemStatus",
+  "removeUploadItem",
+]);
+const ACTIVITY_SYNC_ACTIONS = new Set([
+  "registerUploadItems",
+  "updateUploadItemStatus",
+  "removeUploadItem",
+  "listSharedUploadItems",
+  "listAdminActivity",
+]);
+const PERMANENT_DELETE_ACTIONS = new Set([
+  "permanentlyDeleteCases",
 ]);
 
 function ok(data = {}) {
@@ -107,6 +141,415 @@ function getExpectedVersion(event, id) {
     return event.expectedVersions[id];
   }
   return event && event.expectedVersion;
+}
+
+function isActivitySyncEnabled() {
+  return isWebWriteEnabled(process.env.ADMIN_ACTIVITY_SYNC_ENABLED);
+}
+
+function isPermanentDeleteEnabled() {
+  return isWebWriteEnabled(process.env.ADMIN_PERMANENT_DELETE_ENABLED);
+}
+
+function getDeterministicDocumentId(prefix, value) {
+  const digest = crypto
+    .createHash("sha256")
+    .update(String(value || ""))
+    .digest("hex")
+    .slice(0, 40);
+  return `${prefix}_${digest}`;
+}
+
+function getUploadJobDocumentId(actor, mutationId) {
+  return getDeterministicDocumentId("upload", `${actor.id}:${mutationId}`);
+}
+
+function getPurgeJobDocumentId(actor, clientMutationId) {
+  return getDeterministicDocumentId("purge", `${actor.id}:${clientMutationId}`);
+}
+
+async function getDocumentOrNull(collectionName, id, source = db) {
+  try {
+    const response = await source.collection(collectionName).doc(id).get();
+    return response.data || null;
+  } catch (error) {
+    if (isDocumentNotFoundError(error)) return null;
+    throw error;
+  }
+}
+
+async function getPurgeGuard(source = db) {
+  return getDocumentOrNull(PURGE_JOB_COLLECTION, PURGE_GUARD_DOCUMENT_ID, source);
+}
+
+async function assertNoActivePurgeCleanup(source = db) {
+  const guard = await getPurgeGuard(source);
+  if (guard && guard.status === "active" && trimText(guard.activeJobId)) {
+    if (isPurgeGuardLeaseExpired(guard)) {
+      // Fence the expired owner in the same transaction as the image write.
+      // A late renewal conflicts with this write and must re-read the idle
+      // token before it can reach another storage deletion batch.
+      await source
+        .collection(PURGE_JOB_COLLECTION)
+        .doc(PURGE_GUARD_DOCUMENT_ID)
+        .set({
+          data: {
+            status: "idle",
+            activeJobId: "",
+            activeRunToken: "",
+            leaseExpiresAt: null,
+            updatedAt: db.serverDate(),
+          },
+        });
+      return;
+    }
+    const error = new Error("回收站正在安全清理图片，请稍后重试图片保存");
+    error.code = "PURGE_CLEANUP_IN_PROGRESS";
+    throw error;
+  }
+}
+
+function getPurgeRunToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+function getDateTimestamp(value) {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number") return value;
+  const parsed = Date.parse(trimText(value));
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function isPurgeGuardLeaseExpired(guard, now = Date.now()) {
+  const expiresAt = getDateTimestamp(guard && guard.leaseExpiresAt);
+  // Every guard written by the token-based protocol has a valid lease. Older
+  // or partially written guards without one cannot be proven live and would
+  // otherwise lock image writes forever, so fence them as expired.
+  return !Number.isFinite(expiresAt) || expiresAt <= now;
+}
+
+async function acquirePurgeGuard(jobId, runToken) {
+  const leaseExpiresAt = new Date(Date.now() + PURGE_GUARD_LEASE_MS);
+  await withTransaction(async (transaction) => {
+    const ref = transaction
+      .collection(PURGE_JOB_COLLECTION)
+      .doc(PURGE_GUARD_DOCUMENT_ID);
+    const current = await getPurgeGuard(transaction);
+    if (current && current.status === "active" && trimText(current.activeJobId)) {
+      const ownsGuard = current.activeJobId === jobId
+        && trimText(current.activeRunToken) === runToken;
+      if (!ownsGuard && !isPurgeGuardLeaseExpired(current)) {
+        const error = new Error("永久删除任务正在清理图片，请稍后重试");
+        error.code = "PURGE_CLEANUP_BUSY";
+        throw error;
+      }
+    }
+    await ref.set({
+      data: {
+        status: "active",
+        activeJobId: jobId,
+        activeRunToken: runToken,
+        leaseExpiresAt,
+        updatedAt: db.serverDate(),
+      },
+    });
+  }, { required: true });
+}
+
+async function releasePurgeGuard(jobId, runToken) {
+  return withTransaction(async (transaction) => {
+    const ref = transaction
+      .collection(PURGE_JOB_COLLECTION)
+      .doc(PURGE_GUARD_DOCUMENT_ID);
+    const current = await getPurgeGuard(transaction);
+    if (!current || current.status !== "active") return true;
+    if (
+      current.activeJobId !== jobId
+      || trimText(current.activeRunToken) !== runToken
+    ) return false;
+    await ref.set({
+      data: {
+        status: "idle",
+        activeJobId: "",
+        activeRunToken: "",
+        leaseExpiresAt: null,
+        updatedAt: db.serverDate(),
+      },
+    });
+    return true;
+  }, { required: true });
+}
+
+async function renewPurgeGuardLease(jobId, runToken) {
+  return withTransaction(async (transaction) => {
+    const ref = transaction
+      .collection(PURGE_JOB_COLLECTION)
+      .doc(PURGE_GUARD_DOCUMENT_ID);
+    const current = await getPurgeGuard(transaction);
+    if (
+      !current
+      || current.status !== "active"
+      || current.activeJobId !== jobId
+      || trimText(current.activeRunToken) !== runToken
+    ) {
+      const error = new Error("永久删除任务已失去清理锁，请重新恢复任务");
+      error.code = "PURGE_CLEANUP_FENCE_LOST";
+      throw error;
+    }
+    await ref.set({
+      data: {
+        status: "active",
+        activeJobId: jobId,
+        activeRunToken: runToken,
+        leaseExpiresAt: new Date(Date.now() + PURGE_GUARD_LEASE_MS),
+        updatedAt: db.serverDate(),
+      },
+    });
+    return true;
+  }, { required: true });
+}
+
+function requireWebActor(actor) {
+  return actor && actor.type === "cloudbase_uid"
+    ? null
+    : fail("WEB_ADMIN_REQUIRED", "此操作仅支持电脑后台管理员");
+}
+
+function getActivityViewers() {
+  return getEnvList(process.env.CASE_ADMIN_UIDS);
+}
+
+function buildSanitizedActivityPayload(activity, actor, eventId) {
+  const actorType = trimText(actor && actor.type);
+  const actorId = trimText(actor && actor.id);
+  return {
+    eventId: trimText(eventId),
+    actor: actorType && actorId ? { type: actorType, id: actorId } : null,
+    actorDisplayName: trimText(activity && activity.actorDisplayName).slice(0, 80)
+      || getAdminDisplayName(actor, process.env),
+    action: trimText(activity && activity.action),
+    targetType: trimText(activity && activity.targetType) || "case",
+    targetId: trimText(activity && activity.targetId),
+    title: trimText(activity && activity.title).slice(0, 120),
+    caseId: trimText(activity && activity.caseId).slice(0, 80),
+    batchId: trimText(activity && activity.batchId).slice(0, 120),
+    mutationId: trimText(activity && activity.mutationId).slice(0, 120),
+    status: normalizeUploadJobStatus(activity && activity.status),
+    imageCount: Math.max(0, Math.min(9, Number(activity && activity.imageCount) || 0)),
+  };
+}
+
+function getActivityOutboxDocumentId(eventId) {
+  return getDeterministicDocumentId("outbox", eventId);
+}
+
+async function persistActivityOutbox(payload) {
+  const documentId = getActivityOutboxDocumentId(payload.eventId);
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await db.collection(ACTIVITY_FEED_COLLECTION).doc(documentId).set({
+        data: {
+          ...payload,
+          viewerUid: ACTIVITY_OUTBOX_VIEWER_UID,
+          serverOutbox: true,
+          createdAt: db.serverDate(),
+          updatedAt: db.serverDate(),
+        },
+      });
+      return documentId;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("管理员动态补偿记录写入失败");
+}
+
+async function fanoutSanitizedActivity(payload, viewers = getActivityViewers()) {
+  if (!viewers.length) {
+    return [{
+      status: "rejected",
+      reason: new Error("管理员动态接收者尚未配置"),
+    }];
+  }
+  const results = await Promise.allSettled(viewers.map(async (viewerUid) => {
+    const documentId = getDeterministicDocumentId(
+      "feed",
+      `${payload.eventId}:${viewerUid}`
+    );
+    await db.collection(ACTIVITY_FEED_COLLECTION).doc(documentId).set({
+      data: {
+        ...payload,
+        viewerUid,
+        createdAt: db.serverDate(),
+      },
+    });
+  }));
+  return results.filter((result) => result.status === "rejected");
+}
+
+async function removeActivityOutbox(documentId) {
+  try {
+    await db.collection(ACTIVITY_FEED_COLLECTION).doc(documentId).remove();
+    return true;
+  } catch (error) {
+    if (isDocumentNotFoundError(error)) return true;
+    console.warn("case admin activity outbox removal deferred", error);
+    return false;
+  }
+}
+
+async function writeAdminActivity(activity, actor, dedupeKey) {
+  if (!isActivitySyncEnabled()) return false;
+  const viewers = getActivityViewers();
+  if (!viewers.length) return false;
+  const eventId = getDeterministicDocumentId("activity", dedupeKey);
+  const payload = buildSanitizedActivityPayload(activity, actor, eventId);
+  const outboxId = await persistActivityOutbox(payload);
+  const failures = await fanoutSanitizedActivity(payload, viewers);
+  if (failures.length) {
+    const error = new Error(`管理员动态有 ${failures.length} 个副本待修复`);
+    error.code = "ACTIVITY_FANOUT_PARTIAL";
+    error.causes = failures.map((result) => result.reason);
+    throw error;
+  }
+  await removeActivityOutbox(outboxId);
+  return true;
+}
+
+async function repairAdminActivityOutboxesSafe() {
+  try {
+    const response = await db
+      .collection(ACTIVITY_FEED_COLLECTION)
+      .where({ viewerUid: ACTIVITY_OUTBOX_VIEWER_UID })
+      .orderBy("createdAt", "asc")
+      .limit(ACTIVITY_OUTBOX_REPAIR_LIMIT)
+      .get();
+    for (const item of response.data || []) {
+      if (!item || item.serverOutbox !== true || !trimText(item.eventId)) continue;
+      try {
+        const payload = buildSanitizedActivityPayload(
+          item,
+          item.actor,
+          item.eventId
+        );
+        const failures = await fanoutSanitizedActivity(payload);
+        if (!failures.length) {
+          await removeActivityOutbox(item._id || getActivityOutboxDocumentId(item.eventId));
+        }
+      } catch (error) {
+        console.warn("case admin activity outbox repair deferred", error);
+      }
+    }
+  } catch (error) {
+    // Polling endpoints must continue to serve their primary data even when
+    // activity repair is temporarily unavailable.
+    console.warn("case admin activity outbox scan deferred", error);
+  }
+}
+
+async function writeAdminActivitySafe(activity, actor, dedupeKey) {
+  try {
+    return await writeAdminActivity(activity, actor, dedupeKey);
+  } catch (error) {
+    // Activity synchronization must never turn a committed case mutation into
+    // a client-visible failure. The list endpoint/polling will recover later.
+    console.warn("case admin activity write deferred", error);
+    return false;
+  }
+}
+
+function normalizeStringList(value, allowedValues) {
+  const input = Array.isArray(value)
+    ? value
+    : value && Array.isArray(value.values)
+      ? value.values
+      : [];
+  const allowed = new Set(allowedValues || []);
+  return Array.from(new Set(
+    input.map(trimText).filter((item) => item && allowed.has(item))
+  ));
+}
+
+function normalizeUploadJobInput(input = {}) {
+  const mutation = normalizeClientMutationId(input.mutationId || input.clientMutationId);
+  if (!mutation.valid || !mutation.value) {
+    return {
+      valid: false,
+      code: mutation.code || "MUTATION_ID_REQUIRED",
+      message: mutation.message || "上传任务必须携带任务编号",
+    };
+  }
+  const uploadBatch = normalizeUploadBatchId(
+    input.uploadBatchId,
+    "",
+    true
+  );
+  if (!uploadBatch.valid) return uploadBatch;
+  const imageCount = Number(input.imageCount);
+  if (!Number.isInteger(imageCount) || imageCount < 1 || imageCount > CASE_GALLERY_MAX) {
+    return {
+      valid: false,
+      code: "INVALID_IMAGE_COUNT",
+      message: `单个上传任务必须包含 1-${CASE_GALLERY_MAX} 张图片`,
+    };
+  }
+  const status = normalizeUploadJobStatus(input.status || "waiting");
+  if (!status) {
+    return { valid: false, code: "INVALID_UPLOAD_STATUS", message: "上传任务状态无效" };
+  }
+  return {
+    valid: true,
+    data: {
+      mutationId: mutation.value,
+      uploadBatchId: uploadBatch.value,
+      title: (trimText(input.title) || "未命名案例").slice(0, 120),
+      imageCount,
+      packageTypes: normalizeStringList(input.packageTypes, CASE_ADMIN_OPTIONS.packageTypes),
+      scenes: normalizeStringList(input.scenes, CASE_ADMIN_OPTIONS.scenes),
+      status,
+    },
+  };
+}
+
+function isAllowedUploadStatusTransition(currentStatus, nextStatus) {
+  if (currentStatus === nextStatus) return true;
+  if (currentStatus === "done") return false;
+  if (currentStatus === "needs_tags") return nextStatus === "done";
+  if (currentStatus === "failed") {
+    return [
+      "waiting",
+      "uploading",
+      "processing",
+      "creating",
+      "needs_tags",
+      "done",
+    ].includes(nextStatus);
+  }
+  if (nextStatus === "failed") return true;
+  const ranks = {
+    waiting: 0,
+    uploading: 1,
+    processing: 2,
+    creating: 3,
+    needs_tags: 4,
+    done: 5,
+  };
+  return Number.isInteger(ranks[currentStatus])
+    && Number.isInteger(ranks[nextStatus])
+    && ranks[nextStatus] > ranks[currentStatus];
+}
+
+function getUploadActivityAction(status, fallback = "upload_updated") {
+  return ({
+    waiting: "upload_queued",
+    uploading: "upload_started",
+    processing: "upload_processing",
+    creating: "case_creating",
+    needs_tags: "upload_completed",
+    done: "upload_completed",
+    failed: "upload_failed",
+  })[status] || fallback;
 }
 
 async function loadOfficialCloudbaseUserInfo() {
@@ -365,6 +808,12 @@ async function getAdminConfig(actor) {
   const writeEnabled = actor && actor.type === "cloudbase_uid"
     ? isWebWriteEnabled(process.env.ADMIN_WEB_WRITE_ENABLED)
     : true;
+  const activitySyncEnabled = Boolean(
+    actor && actor.type === "cloudbase_uid" && isActivitySyncEnabled()
+  );
+  const permanentDeleteEnabled = Boolean(
+    actor && actor.type === "cloudbase_uid" && isPermanentDeleteEnabled()
+  );
   return ok({
     config: {
       options: {
@@ -382,6 +831,9 @@ async function getAdminConfig(actor) {
         homepage: HOME_DISPLAY_LIMITS,
       },
       writeEnabled,
+      activitySyncEnabled,
+      permanentDeleteEnabled,
+      actorDisplayName: getAdminDisplayName(actor, process.env),
       homeSectionOrders,
       upload: {
         acceptedExtensions: [".jpg", ".jpeg", ".png", ".webp"],
@@ -667,6 +1119,336 @@ async function getCaseImageUrls(event) {
   return ok({ urls });
 }
 
+async function registerUploadItems(event, actor) {
+  const actorError = requireWebActor(actor);
+  if (actorError) return actorError;
+  const rawItems = Array.isArray(event.items) ? event.items : [];
+  if (!rawItems.length || rawItems.length > CASE_BATCH_MAX) {
+    return fail(
+      "INVALID_UPLOAD_ITEMS",
+      `每次必须登记 1-${CASE_BATCH_MAX} 个上传任务`
+    );
+  }
+  const normalizedItems = [];
+  const seenMutationIds = new Set();
+  for (const rawItem of rawItems) {
+    const normalized = normalizeUploadJobInput(rawItem);
+    if (!normalized.valid) return failFromValidation(normalized);
+    if (seenMutationIds.has(normalized.data.mutationId)) {
+      return fail("DUPLICATE_MUTATION_ID", "同一批任务中不能包含重复任务编号");
+    }
+    seenMutationIds.add(normalized.data.mutationId);
+    normalizedItems.push(normalized.data);
+  }
+
+  const createdItems = [];
+  const existingItems = [];
+  const removedItems = [];
+  try {
+    await withTransaction(async (transaction) => {
+      createdItems.length = 0;
+      existingItems.length = 0;
+      removedItems.length = 0;
+      const rows = [];
+      for (const item of normalizedItems) {
+        const id = getUploadJobDocumentId(actor, item.mutationId);
+        const ref = transaction.collection(UPLOAD_JOB_COLLECTION).doc(id);
+        const existing = await getDocumentOrNull(UPLOAD_JOB_COLLECTION, id, transaction);
+        rows.push({ id, ref, item, existing });
+      }
+      for (const row of rows) {
+        if (row.existing) {
+          if (row.existing.tombstone === true || row.existing.status === "removed") {
+            removedItems.push({ ...row.existing, _id: row.id });
+          } else {
+            existingItems.push({ ...row.existing, _id: row.id });
+          }
+          continue;
+        }
+        const data = {
+          ...row.item,
+          ownerUid: actor.id,
+          ownerActor: actor,
+          ownerDisplayName: getAdminDisplayName(actor, process.env),
+          createdAt: db.serverDate(),
+          updatedAt: db.serverDate(),
+        };
+        await row.ref.set({ data });
+        createdItems.push({ _id: row.id, ...data });
+      }
+    }, { required: true });
+  } catch (error) {
+    if (error.code) return failFromValidation(error);
+    throw error;
+  }
+
+  await Promise.all(createdItems.concat(existingItems).map((item) => writeAdminActivitySafe({
+    action: getUploadActivityAction(item.status),
+    targetType: "upload_job",
+    targetId: item._id,
+    title: item.title,
+    batchId: item.uploadBatchId,
+    mutationId: item.mutationId,
+    status: item.status,
+    imageCount: item.imageCount,
+  }, actor, `upload-register:${actor.id}:${item.mutationId}`)));
+  await Promise.all(removedItems.map((item) => writeAdminActivitySafe({
+    action: "upload_removed",
+    targetType: "upload_job",
+    targetId: item._id,
+    title: item.title,
+    batchId: item.uploadBatchId,
+    mutationId: item.mutationId,
+    status: "removed",
+    imageCount: item.imageCount,
+  }, actor, `upload-remove:${actor.id}:${item.mutationId}`)));
+
+  return ok({
+    registered: createdItems.length,
+    existing: existingItems.length,
+    removed: removedItems.length,
+    items: createdItems.concat(existingItems),
+  });
+}
+
+async function updateUploadItemStatus(event, actor) {
+  const actorError = requireWebActor(actor);
+  if (actorError) return actorError;
+  const mutation = normalizeClientMutationId(event.mutationId || event.clientMutationId);
+  if (!mutation.valid || !mutation.value) {
+    return failFromValidation(mutation.valid
+      ? { code: "MUTATION_ID_REQUIRED", message: "缺少上传任务编号" }
+      : mutation);
+  }
+  const nextStatus = normalizeUploadJobStatus(event.status);
+  if (!nextStatus) return fail("INVALID_UPLOAD_STATUS", "上传任务状态无效");
+  const id = getUploadJobDocumentId(actor, mutation.value);
+  let nextItem = null;
+  try {
+    await withTransaction(async (transaction) => {
+      const ref = transaction.collection(UPLOAD_JOB_COLLECTION).doc(id);
+      const current = await getDocumentOrNull(UPLOAD_JOB_COLLECTION, id, transaction);
+      if (!current) {
+        const error = new Error("上传任务不存在或已移除");
+        error.code = "UPLOAD_JOB_NOT_FOUND";
+        throw error;
+      }
+      if (trimText(current.ownerUid) !== actor.id) {
+        const error = new Error("只能更新自己创建的上传任务");
+        error.code = "UPLOAD_JOB_FORBIDDEN";
+        throw error;
+      }
+      if (current.tombstone === true || current.status === "removed") {
+        const error = new Error("上传任务已被移除");
+        error.code = "UPLOAD_JOB_REMOVED";
+        throw error;
+      }
+      if (!isAllowedUploadStatusTransition(current.status, nextStatus)) {
+        const error = new Error("上传任务状态变化无效，请刷新后重试");
+        error.code = "INVALID_UPLOAD_STATUS_TRANSITION";
+        throw error;
+      }
+      const patch = {
+        status: nextStatus,
+        updatedAt: db.serverDate(),
+      };
+      if (Object.prototype.hasOwnProperty.call(event, "title")) {
+        patch.title = (trimText(event.title) || current.title || "未命名案例").slice(0, 120);
+      }
+      if (Object.prototype.hasOwnProperty.call(event, "caseId")) {
+        patch.caseId = trimText(event.caseId).slice(0, 80);
+      }
+      if (Object.prototype.hasOwnProperty.call(event, "createdId")) {
+        patch.caseDocumentId = trimText(event.createdId).slice(0, 120);
+      }
+      if (Object.prototype.hasOwnProperty.call(event, "error")) {
+        patch.errorMessage = trimText(event.error).slice(0, 300);
+      }
+      await ref.update({ data: patch });
+      nextItem = { ...current, ...patch, _id: id };
+    }, { required: true });
+  } catch (error) {
+    if (error.code) return fail(error.code, error.message);
+    throw error;
+  }
+
+  await writeAdminActivitySafe({
+    action: getUploadActivityAction(nextStatus),
+    targetType: "upload_job",
+    targetId: id,
+    title: nextItem.title,
+    caseId: nextItem.caseId,
+    batchId: nextItem.uploadBatchId,
+    mutationId: nextItem.mutationId,
+    status: nextStatus,
+    imageCount: nextItem.imageCount,
+  }, actor, `upload-status:${actor.id}:${mutation.value}:${nextStatus}`);
+  return ok({ updated: 1, item: nextItem });
+}
+
+async function removeUploadItem(event, actor) {
+  const actorError = requireWebActor(actor);
+  if (actorError) return actorError;
+  const mutation = normalizeClientMutationId(event.mutationId || event.clientMutationId);
+  if (!mutation.valid || !mutation.value) {
+    return failFromValidation(mutation.valid
+      ? { code: "MUTATION_ID_REQUIRED", message: "缺少上传任务编号" }
+      : mutation);
+  }
+  const id = getUploadJobDocumentId(actor, mutation.value);
+  let removedItem = null;
+  let removed = 0;
+  try {
+    await withTransaction(async (transaction) => {
+      const ref = transaction.collection(UPLOAD_JOB_COLLECTION).doc(id);
+      const current = await getDocumentOrNull(UPLOAD_JOB_COLLECTION, id, transaction);
+      if (!current) {
+        const data = {
+          mutationId: mutation.value,
+          ownerUid: actor.id,
+          ownerActor: actor,
+          ownerDisplayName: getAdminDisplayName(actor, process.env),
+          title: "已移除的上传任务",
+          imageCount: 0,
+          status: "removed",
+          tombstone: true,
+          removedAt: db.serverDate(),
+          createdAt: db.serverDate(),
+          updatedAt: db.serverDate(),
+        };
+        removedItem = { ...data, _id: id };
+        removed = 1;
+        await ref.set({ data });
+        return;
+      }
+      if (trimText(current.ownerUid) !== actor.id) {
+        const error = new Error("只能移除自己创建的上传任务");
+        error.code = "UPLOAD_JOB_FORBIDDEN";
+        throw error;
+      }
+      if (current.tombstone === true || current.status === "removed") {
+        removedItem = { ...current, _id: id };
+        return;
+      }
+      if (!["waiting", "failed"].includes(current.status)) {
+        const error = new Error("只能移除等待中或失败的上传任务");
+        error.code = "UPLOAD_JOB_BUSY";
+        throw error;
+      }
+      const tombstone = {
+        ...current,
+        status: "removed",
+        tombstone: true,
+        removedAt: db.serverDate(),
+        updatedAt: db.serverDate(),
+      };
+      removedItem = { ...tombstone, _id: id };
+      removed = 1;
+      await ref.set({
+        data: tombstone,
+      });
+    }, { required: true });
+  } catch (error) {
+    if (error.code) return fail(error.code, error.message);
+    throw error;
+  }
+  await writeAdminActivitySafe({
+    action: "upload_removed",
+    targetType: "upload_job",
+    targetId: id,
+    title: removedItem.title,
+    batchId: removedItem.uploadBatchId,
+    mutationId: removedItem.mutationId,
+    status: removedItem.status,
+    imageCount: removedItem.imageCount,
+  }, actor, `upload-remove:${actor.id}:${mutation.value}`);
+  return ok({ removed, mutationId: mutation.value });
+}
+
+async function listSharedUploadItems(event, actor) {
+  const actorError = requireWebActor(actor);
+  if (actorError) return actorError;
+  await repairAdminActivityOutboxesSafe();
+  const limit = normalizeAdminListLimit(event.limit, ADMIN_RECORD_RETENTION_LIMIT);
+  const items = [];
+  let skip = 0;
+  while (items.length < limit) {
+    const response = await db.collection(UPLOAD_JOB_COLLECTION)
+      .orderBy("updatedAt", "desc")
+      .skip(skip)
+      .limit(CASE_SCAN_BATCH_SIZE)
+      .get();
+    const batch = response.data || [];
+    batch.forEach((item) => {
+      if (
+        items.length < limit
+        && item.tombstone !== true
+        && item.status !== "removed"
+      ) items.push(item);
+    });
+    if (batch.length < CASE_SCAN_BATCH_SIZE || items.length >= limit) break;
+    skip += batch.length;
+  }
+  return ok({
+    items,
+    limit,
+  });
+}
+
+async function listAdminActivity(event, actor) {
+  const actorError = requireWebActor(actor);
+  if (actorError) return actorError;
+  await repairAdminActivityOutboxesSafe();
+  const limit = normalizeAdminListLimit(event.limit, ADMIN_RECORD_RETENTION_LIMIT);
+  const response = await db
+    .collection(ACTIVITY_FEED_COLLECTION)
+    .where({ viewerUid: actor.id })
+    .orderBy("createdAt", "desc")
+    .limit(limit)
+    .get();
+  return ok({ items: response.data || [], limit });
+}
+
+async function completeUploadJobForCaseSafe(actor, mutationId, created, caseData) {
+  if (!isActivitySyncEnabled() || !actor || actor.type !== "cloudbase_uid") return;
+  const id = getUploadJobDocumentId(actor, mutationId);
+  try {
+    const current = await getDocumentOrNull(UPLOAD_JOB_COLLECTION, id);
+    if (
+      current
+      && trimText(current.ownerUid) === actor.id
+      && current.tombstone !== true
+      && current.status !== "removed"
+    ) {
+      const status = caseData.packageTypes
+        && Array.isArray(caseData.packageTypes.values)
+        && caseData.packageTypes.values.length
+        ? "done"
+        : "needs_tags";
+      await db.collection(UPLOAD_JOB_COLLECTION).doc(id).update({
+        data: {
+          status,
+          caseId: created.caseId,
+          caseDocumentId: created.id,
+          updatedAt: db.serverDate(),
+        },
+      });
+    }
+    await writeAdminActivitySafe({
+      action: "case_created",
+      targetType: "case",
+      targetId: created.id,
+      title: caseData.title,
+      caseId: created.caseId,
+      mutationId,
+      status: "done",
+      imageCount: Array.isArray(caseData.galleryImages) ? caseData.galleryImages.length : 0,
+    }, actor, `case-create:${created.id}:${created.version || 1}`);
+  } catch (error) {
+    console.warn("upload completion synchronization deferred", error);
+  }
+}
+
 async function findCaseByMutationId(clientMutationId) {
   if (!clientMutationId) return null;
   const response = await db
@@ -770,6 +1552,11 @@ async function createWebCaseAtomically({
       };
       return;
     }
+
+    // The purge guard is read in the same transaction that writes the case.
+    // If cleanup acquires the guard concurrently, CloudBase retries one side;
+    // a retried create sees the active guard and cannot introduce a late ref.
+    await assertNoActivePurgeCleanup(transaction);
 
     const metaRef = transaction
       .collection(CATALOG_META_COLLECTION)
@@ -947,6 +1734,14 @@ async function createCase(event, actor) {
         fallbackNumber: getCaseIdNumber(defaults.defaultCaseId),
         preserveSortOrder: Object.prototype.hasOwnProperty.call(input, "sortOrder"),
       });
+      if (!atomicResult.idempotentReplay) {
+        await completeUploadJobForCaseSafe(
+          actor,
+          mutationResult.value,
+          atomicResult,
+          result.data
+        );
+      }
       return ok(atomicResult);
     } catch (error) {
       console.error("atomic web case create error", error);
@@ -957,18 +1752,42 @@ async function createCase(event, actor) {
     }
   }
 
-  const response = await db.collection(CASE_COLLECTION).add({
-    data: {
-      ...result.data,
-      version: 1,
-      ...(mutationResult.value ? { clientMutationId: mutationResult.value } : {}),
-      createdAt: db.serverDate(),
-      updatedAt: db.serverDate(),
-      ...actorAuditFields(actor, "created"),
-      ...actorAuditFields(actor, "updated"),
-    },
-  });
+  let response;
+  try {
+    await withTransaction(async (transaction) => {
+      await assertNoActivePurgeCleanup(transaction);
+      response = await transaction.collection(CASE_COLLECTION).add({
+        data: {
+          ...result.data,
+          version: 1,
+          ...(mutationResult.value ? { clientMutationId: mutationResult.value } : {}),
+          createdAt: db.serverDate(),
+          updatedAt: db.serverDate(),
+          ...actorAuditFields(actor, "created"),
+          ...actorAuditFields(actor, "updated"),
+        },
+      });
+    }, { required: true });
+  } catch (error) {
+    return fail(
+      error.code || "TRANSACTION_FAILED",
+      error.message || "案例创建事务失败，请稍后重试"
+    );
+  }
   await bumpCatalogRevision();
+
+  await writeAdminActivitySafe({
+    action: "case_created",
+    targetType: "case",
+    targetId: response._id,
+    title: result.data.title,
+    caseId: result.data.caseId,
+    mutationId: mutationResult.value,
+    status: "done",
+    imageCount: Array.isArray(result.data.galleryImages)
+      ? result.data.galleryImages.length
+      : 0,
+  }, actor, `case-create:${response._id}:1`);
 
   return ok({
     id: response._id,
@@ -1036,7 +1855,8 @@ async function updateCase(event, actor) {
     );
     nextCase.homeSectionOrder = result.data.homeSectionOrder;
   }
-  if (hasCaseImageChanges(existing, result.data)) {
+  const imageChanges = hasCaseImageChanges(existing, result.data);
+  if (imageChanges) {
     const variantValidation = validateWebImageVariants(nextCase, actor, { existing });
     if (!variantValidation.valid) return failFromValidation(variantValidation);
     if (variantValidation.introducedVariants) {
@@ -1056,11 +1876,15 @@ async function updateCase(event, actor) {
   if (homepageError) return homepageError;
 
   let nextVersion = getRecordVersion(existing) + 1;
+  let committedBase = existing;
   try {
     await withTransaction(async (transaction) => {
       const ref = transaction.collection(CASE_COLLECTION).doc(id);
       const currentResponse = await ref.get();
       const current = currentResponse.data;
+      committedBase = current;
+      const currentImageChanges = hasCaseImageChanges(current, result.data);
+      if (currentImageChanges) await assertNoActivePurgeCleanup(transaction);
       const currentValidation = validateExpectedVersion(current, event.expectedVersion, {
         required: actor && actor.type === "cloudbase_uid",
       });
@@ -1079,14 +1903,14 @@ async function updateCase(event, actor) {
           ...actorAuditFields(actor, "updated"),
         },
       });
-    }, { required: actor && actor.type === "cloudbase_uid" });
+    }, { required: true });
   } catch (error) {
     if (error.code) return failFromValidation(error);
     throw error;
   }
-  const nextFileIds = new Set(getCaseImageFileIds({ ...existing, ...result.data }));
-  const sourceFileIds = new Set(getCaseSourceFileIds(existing));
-  const removedFileIds = getCaseImageFileIds(existing).filter(
+  const nextFileIds = new Set(getCaseImageFileIds({ ...committedBase, ...result.data }));
+  const sourceFileIds = new Set(getCaseSourceFileIds(committedBase));
+  const removedFileIds = getCaseImageFileIds(committedBase).filter(
     (fileID) => !nextFileIds.has(fileID) && !sourceFileIds.has(fileID)
   );
   await deleteUnreferencedCaseFiles(removedFileIds);
@@ -1235,6 +2059,15 @@ function isAllowedCleanupFile(fileID, actor) {
   return isVariant || /^wine-packaging\/admin\/[^/]+\.(?:jpe?g|png|webp)$/i.test(path);
 }
 
+function isAllowedPurgeFile(fileID) {
+  const path = getCloudFilePath(fileID);
+  return (
+    /^wine-packaging\/(?:admin|cases)\/[^/]+\.(?:jpe?g|png|webp)$/i.test(path)
+    || /^wine-packaging\/admin-web\/[^/]+\/[^/]+\/[^/]+\.(?:jpe?g|png|webp)$/i.test(path)
+    || /^wine-packaging\/variants\/v2\/[a-f0-9]{32}\/(?:display|thumbnail|banner)\.jpg$/i.test(path)
+  );
+}
+
 async function cleanupUnreferencedFiles(event, actor) {
   const fileIDs = normalizeCloudFileIds(event.fileIDs || event.fileIds);
   if (!fileIDs.length) return ok({ deletedFileIds: [] });
@@ -1246,6 +2079,521 @@ async function cleanupUnreferencedFiles(event, actor) {
   }
   const deletedFileIds = await deleteUnreferencedCaseFiles(fileIDs);
   return ok({ deletedFileIds });
+}
+
+async function scanCollectionByStableId(collectionName) {
+  const items = [];
+  let cursor = "";
+  while (true) {
+    let query = db.collection(collectionName);
+    if (cursor) query = query.where({ _id: _.gt(cursor) });
+    const response = await query
+      .orderBy("_id", "asc")
+      .limit(CASE_SCAN_BATCH_SIZE)
+      .get();
+    const batch = response.data || [];
+    items.push(...batch);
+    if (batch.length < CASE_SCAN_BATCH_SIZE) break;
+    const nextCursor = trimText(batch[batch.length - 1] && batch[batch.length - 1]._id);
+    if (!nextCursor || nextCursor <= cursor) {
+      const error = new Error("图片引用扫描游标没有前进");
+      error.code = "REFERENCE_SCAN_FAILED";
+      throw error;
+    }
+    cursor = nextCursor;
+  }
+  return items;
+}
+
+async function getRemainingImageReferenceSet() {
+  const [cases, banners] = await Promise.all([
+    scanCollectionByStableId(CASE_COLLECTION),
+    scanCollectionByStableId(BANNER_COLLECTION),
+  ]);
+  const references = new Set(cases.flatMap((item) => getCaseImageFileIds(item)));
+  banners.forEach((item) => {
+    [trimText(item.image), trimText(item.optimizedImage)].forEach((fileID) => {
+      if (fileID.indexOf("cloud://") === 0) references.add(fileID);
+    });
+  });
+  return references;
+}
+
+function isStorageFileMissing(value) {
+  const code = trimText(value && (value.code || value.errCode || value.status)).toUpperCase();
+  const message = trimText(value && (value.message || value.errMsg));
+  return (
+    code.includes("NOT_FOUND")
+    || code === "-503003"
+    || /(?:file|object|resource).*(?:not found|does not exist)/i.test(message)
+    || /文件.*不存在/.test(message)
+  );
+}
+
+function classifyDeleteFileResponse(requestedFileIds, response) {
+  const rows = response && Array.isArray(response.fileList) ? response.fileList : [];
+  if (!rows.length || rows.every((item) => typeof item === "string")) {
+    return { deleted: [], pending: requestedFileIds.slice(), ambiguous: true };
+  }
+  const byId = new Map(rows.map((item) => [trimText(item && item.fileID), item]));
+  const deleted = [];
+  const pending = [];
+  let ambiguous = false;
+  requestedFileIds.forEach((fileID) => {
+    const item = byId.get(fileID);
+    const status = item && item.status;
+    if (!item) {
+      pending.push(fileID);
+      ambiguous = true;
+    } else if (
+      status === 0
+      || status === "0"
+      || status === "success"
+      || isStorageFileMissing(item)
+    ) {
+      deleted.push(fileID);
+    } else pending.push(fileID);
+  });
+  return { deleted, pending, ambiguous };
+}
+
+async function deletePurgeFileBatches(fileIDs, jobId, runToken) {
+  const deleted = [];
+  const pending = [];
+  let keepGuardActive = false;
+  for (let offset = 0; offset < fileIDs.length; offset += IMAGE_URL_BATCH_SIZE) {
+    const batch = fileIDs.slice(offset, offset + IMAGE_URL_BATCH_SIZE);
+    // Fence every destructive batch. If another invocation has taken over an
+    // expired lease, this run stops before issuing another storage request.
+    await renewPurgeGuardLease(jobId, runToken);
+    try {
+      const response = await deletePurgeFileBatchWithTimeout(batch);
+      const classified = classifyDeleteFileResponse(batch, response);
+      deleted.push(...classified.deleted);
+      pending.push(...classified.pending);
+      if (classified.ambiguous) {
+        pending.push(...fileIDs.slice(offset + batch.length));
+        keepGuardActive = true;
+        break;
+      }
+    } catch (error) {
+      // A thrown request can mean CloudBase accepted the deletion but the
+      // response was lost. Its result is therefore ambiguous even for a
+      // not-found-looking transport error. Keep the guard until lease expiry
+      // so an in-flight request cannot race a newly saved image reference.
+      pending.push(...fileIDs.slice(offset));
+      keepGuardActive = true;
+      break;
+    }
+  }
+  return { deleted, pending, keepGuardActive };
+}
+
+function deletePurgeFileBatchWithTimeout(fileList) {
+  let timeoutId = null;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error("云存储删除请求超时，已保留清理锁等待安全重试");
+      error.code = "PURGE_DELETE_TIMEOUT";
+      reject(error);
+    }, PURGE_DELETE_CALL_TIMEOUT_MS);
+  });
+  return Promise.race([
+    Promise.resolve().then(() => cloud.deleteFile({ fileList })),
+    timeout,
+  ]).finally(() => {
+    if (timeoutId !== null) clearTimeout(timeoutId);
+  });
+}
+
+function buildPurgeCleanupResult(job, overrides = {}) {
+  const pendingFileIds = Array.isArray(job.pendingFileIds)
+    ? job.pendingFileIds
+    : (job.candidateFileIds || []);
+  return {
+    deleted: Number(job.deletedCaseCount) || 0,
+    cleanupJobId: job._id,
+    deletedFileCount: Array.isArray(job.deletedFileIds)
+      ? job.deletedFileIds.length
+      : 0,
+    retainedReferencedCount: Array.isArray(job.retainedReferencedFileIds)
+      ? job.retainedReferencedFileIds.length
+      : 0,
+    pendingFileCount: pendingFileIds.length,
+    status: trimText(job.status) || "cleanup_pending",
+    ...overrides,
+  };
+}
+
+async function markPurgeGuardReleasePending(job, cleanupResult, releaseError) {
+  try {
+    await db.collection(PURGE_JOB_COLLECTION).doc(job._id).update({
+      data: {
+        status: "cleanup_release_pending",
+        guardReleasePending: true,
+        cleanupResultStatus: trimText(cleanupResult && cleanupResult.status),
+        cleanupUpdatedAt: db.serverDate(),
+        updatedAt: db.serverDate(),
+      },
+    });
+  } catch (error) {
+    // Keep the guard active and fail closed. The caller still receives the job
+    // id and a non-zero pending count so the browser retains its retry record.
+    console.warn("purge release-pending job update failed", error);
+  }
+  if (releaseError) console.warn("purge guard release deferred", releaseError);
+  return {
+    ...buildPurgeCleanupResult(job),
+    ...(cleanupResult || {}),
+    pendingFileCount: Math.max(
+      1,
+      Number(cleanupResult && cleanupResult.pendingFileCount) || 0
+    ),
+    status: "cleanup_release_pending",
+    cleanupDeferred: true,
+    guardReleasePending: true,
+  };
+}
+
+async function runPurgeCleanup(job) {
+  const runToken = getPurgeRunToken();
+  await acquirePurgeGuard(job._id, runToken);
+  let cleanupResult = null;
+  let cleanupError = null;
+  let keepGuardActive = false;
+  try {
+    const existingDeleted = new Set(job.deletedFileIds || []);
+    const existingRetained = new Set(job.retainedReferencedFileIds || []);
+    const candidates = Array.isArray(job.pendingFileIds) && job.pendingFileIds.length
+      ? job.pendingFileIds
+      : (job.candidateFileIds || []).filter(
+        (fileID) => !existingDeleted.has(fileID) && !existingRetained.has(fileID)
+      );
+    const allowedCandidates = candidates.filter(isAllowedPurgeFile);
+    candidates
+      .filter((fileID) => !isAllowedPurgeFile(fileID))
+      .forEach((fileID) => existingRetained.add(fileID));
+
+    // First pass identifies likely references. The second stable-cursor pass
+    // happens while the global purge guard blocks case image writes and is the
+    // authoritative check immediately before the storage deletion.
+    const initialReferences = await getRemainingImageReferenceSet();
+    const initiallyDeletable = allowedCandidates.filter(
+      (fileID) => !initialReferences.has(fileID)
+    );
+    const finalReferences = await getRemainingImageReferenceSet();
+    const retainedNow = allowedCandidates.filter(
+      (fileID) => initialReferences.has(fileID) || finalReferences.has(fileID)
+    );
+    const deletable = initiallyDeletable.filter(
+      (fileID) => !finalReferences.has(fileID)
+    );
+    const cleanup = await deletePurgeFileBatches(deletable, job._id, runToken);
+    keepGuardActive = cleanup.keepGuardActive === true;
+    cleanup.deleted.forEach((fileID) => existingDeleted.add(fileID));
+    retainedNow.forEach((fileID) => existingRetained.add(fileID));
+    const pending = Array.from(new Set(cleanup.pending));
+    const status = pending.length
+      ? "cleanup_pending"
+      : existingRetained.size
+        ? "completed_with_references"
+        : "completed";
+    await db.collection(PURGE_JOB_COLLECTION).doc(job._id).update({
+      data: {
+        deletedFileIds: Array.from(existingDeleted),
+        retainedReferencedFileIds: Array.from(existingRetained),
+        pendingFileIds: pending,
+        status,
+        guardReleasePending: false,
+        cleanupResultStatus: status,
+        cleanupUpdatedAt: db.serverDate(),
+        updatedAt: db.serverDate(),
+      },
+    });
+    cleanupResult = {
+      deleted: Number(job.deletedCaseCount) || 0,
+      cleanupJobId: job._id,
+      deletedFileCount: existingDeleted.size,
+      retainedReferencedCount: existingRetained.size,
+      pendingFileCount: pending.length,
+      status,
+    };
+  } catch (error) {
+    cleanupError = error;
+  }
+
+  if (keepGuardActive) {
+    return markPurgeGuardReleasePending(
+      job,
+      cleanupResult,
+      new Error("云存储删除请求结果未知，清理锁将保留至租约安全到期")
+    );
+  }
+
+  let released = false;
+  let releaseError = null;
+  try {
+    released = await releasePurgeGuard(job._id, runToken);
+  } catch (error) {
+    releaseError = error;
+  }
+  if (!released || releaseError) {
+    return markPurgeGuardReleasePending(
+      job,
+      cleanupResult,
+      releaseError || new Error("永久删除清理锁已由其他运行持有")
+    );
+  }
+  if (cleanupError) throw cleanupError;
+  return cleanupResult;
+}
+
+async function permanentlyDeleteCases(event, actor) {
+  const actorError = requireWebActor(actor);
+  if (actorError) return actorError;
+  const idsResult = normalizeCaseIds(event.ids);
+  if (!idsResult.valid) return failFromValidation(idsResult);
+  const mutation = normalizeClientMutationId(event.clientMutationId);
+  if (!mutation.valid || !mutation.value) {
+    return failFromValidation(mutation.valid
+      ? { code: "MUTATION_ID_REQUIRED", message: "永久删除必须携带幂等任务编号" }
+      : mutation);
+  }
+  const jobId = getPurgeJobDocumentId(actor, mutation.value);
+  let job = await getDocumentOrNull(PURGE_JOB_COLLECTION, jobId);
+  let created = false;
+
+  if (!job) {
+    try {
+      await withTransaction(async (transaction) => {
+        const jobRef = transaction.collection(PURGE_JOB_COLLECTION).doc(jobId);
+        const replay = await getDocumentOrNull(PURGE_JOB_COLLECTION, jobId, transaction);
+        if (replay) {
+          job = { ...replay, _id: jobId };
+          return;
+        }
+        const guard = await getPurgeGuard(transaction);
+        if (
+          guard
+          && guard.status === "active"
+          && trimText(guard.activeJobId)
+          && !isPurgeGuardLeaseExpired(guard)
+        ) {
+          const error = new Error("另一个永久删除任务正在清理图片，请稍后重试");
+          error.code = "PURGE_CLEANUP_BUSY";
+          throw error;
+        }
+
+        const rows = [];
+        for (const id of idsResult.ids) {
+          const ref = transaction.collection(CASE_COLLECTION).doc(id);
+          const item = await getDocumentOrNull(CASE_COLLECTION, id, transaction);
+          rows.push({ id, ref, item });
+        }
+        const missing = rows.filter((row) => !row.item).map((row) => row.id);
+        if (missing.length) {
+          const error = new Error(`以下案例不存在或已删除：${missing.join("、")}`);
+          error.code = "CASE_NOT_FOUND";
+          throw error;
+        }
+        if (rows.some((row) => !row.item.deletedAt)) {
+          const error = new Error("只能永久删除回收站中的案例");
+          error.code = "CASE_NOT_IN_TRASH";
+          throw error;
+        }
+        for (const row of rows) {
+          const validation = validateExpectedVersion(
+            row.item,
+            getExpectedVersion(event, row.id),
+            { required: true }
+          );
+          if (!validation.valid) {
+            const error = new Error(validation.message);
+            Object.assign(error, validation, { id: row.id });
+            throw error;
+          }
+        }
+
+        const candidateFileIds = Array.from(new Set(
+          rows.flatMap((row) => getCaseImageFileIds(row.item))
+        ));
+        const caseSummaries = rows.map((row) => ({
+          id: row.id,
+          title: trimText(row.item.title).slice(0, 120),
+          caseId: trimText(row.item.caseId).slice(0, 80),
+          version: getRecordVersion(row.item),
+        }));
+        const data = {
+          clientMutationId: mutation.value,
+          actor,
+          actorDisplayName: getAdminDisplayName(actor, process.env),
+          deletedCaseCount: rows.length,
+          caseSummaries,
+          candidateFileIds,
+          deletedFileIds: [],
+          retainedReferencedFileIds: [],
+          pendingFileIds: candidateFileIds,
+          status: "cleanup_pending",
+          createdAt: db.serverDate(),
+          updatedAt: db.serverDate(),
+        };
+        // All validation reads finish before the first write so a rejected
+        // batch cannot partially remove case documents.
+        await jobRef.set({ data });
+        for (const row of rows) await row.ref.remove();
+        job = { ...data, _id: jobId };
+        created = true;
+      }, { required: true });
+    } catch (error) {
+      if (error.code) return failFromValidation(error);
+      throw error;
+    }
+  }
+
+  if (!job) return fail("PURGE_JOB_NOT_FOUND", "永久删除任务不存在");
+  if (created) {
+    await bumpCatalogRevision();
+    await Promise.all((job.caseSummaries || []).map((item) => writeAdminActivitySafe({
+      action: "case_permanently_deleted",
+      targetType: "case",
+      targetId: item.id,
+      title: item.title,
+      caseId: item.caseId,
+    }, actor, `case-purge:${jobId}:${item.id}`)));
+  }
+  try {
+    return ok(await runPurgeCleanup(job));
+  } catch (error) {
+    if (error.code === "PURGE_CLEANUP_BUSY") {
+      return {
+        ...failFromValidation(error),
+        ...buildPurgeCleanupResult(job),
+      };
+    }
+    // The database deletion is already committed. Report a retryable cleanup
+    // result instead of making the client believe that the cases still exist.
+    console.warn("purge cleanup deferred", error);
+    return ok({
+      deleted: Number(job.deletedCaseCount) || 0,
+      cleanupJobId: job._id,
+      deletedFileCount: Array.isArray(job.deletedFileIds) ? job.deletedFileIds.length : 0,
+      retainedReferencedCount: Array.isArray(job.retainedReferencedFileIds)
+        ? job.retainedReferencedFileIds.length
+        : 0,
+      pendingFileCount: Array.isArray(job.pendingFileIds)
+        ? job.pendingFileIds.length
+        : (job.candidateFileIds || []).length,
+      status: "cleanup_pending",
+      cleanupDeferred: true,
+    });
+  }
+}
+
+async function retryPurgeCleanup(event, actor) {
+  const actorError = requireWebActor(actor);
+  if (actorError) return actorError;
+  const jobId = trimText(event.jobId || event.cleanupJobId);
+  if (!/^purge_[a-f0-9]{40}$/.test(jobId)) {
+    return fail("INVALID_PURGE_JOB_ID", "永久删除清理任务编号无效");
+  }
+  const job = await getDocumentOrNull(PURGE_JOB_COLLECTION, jobId);
+  if (!job) return fail("PURGE_JOB_NOT_FOUND", "永久删除清理任务不存在");
+  try {
+    return ok(await runPurgeCleanup({ ...job, _id: jobId }));
+  } catch (error) {
+    if (error.code) return failFromValidation(error);
+    throw error;
+  }
+}
+
+function sanitizePendingPurgeJob(job, guard) {
+  const cleanupJobId = trimText(job && job._id);
+  const guardActive = Boolean(
+    guard
+    && guard.status === "active"
+    && trimText(guard.activeJobId) === cleanupJobId
+  );
+  const storedPendingCount = Array.isArray(job && job.pendingFileIds)
+    ? job.pendingFileIds.length
+    : Array.isArray(job && job.candidateFileIds)
+      ? job.candidateFileIds.length
+      : 0;
+  const releasePending = job && job.guardReleasePending === true
+    || trimText(job && job.status) === "cleanup_release_pending";
+  const pendingFileCount = Math.max(
+    storedPendingCount,
+    guardActive || releasePending ? 1 : 0
+  );
+  const status = releasePending
+    ? "cleanup_release_pending"
+    : guardActive
+      ? "cleanup_in_progress"
+      : trimText(job && job.status) || "cleanup_pending";
+  return {
+    cleanupJobId,
+    clientMutationId: trimText(job && job.clientMutationId),
+    deleted: Number(job && job.deletedCaseCount) || 0,
+    deletedFileCount: Array.isArray(job && job.deletedFileIds)
+      ? job.deletedFileIds.length
+      : 0,
+    retainedReferencedCount: Array.isArray(job && job.retainedReferencedFileIds)
+      ? job.retainedReferencedFileIds.length
+      : 0,
+    pendingFileCount,
+    status,
+    actor: job && job.actor,
+    actorDisplayName: trimText(job && job.actorDisplayName),
+    caseSummaries: Array.isArray(job && job.caseSummaries)
+      ? job.caseSummaries.map((item) => ({
+        id: trimText(item && item.id),
+        title: trimText(item && item.title).slice(0, 120),
+        caseId: trimText(item && item.caseId).slice(0, 80),
+      }))
+      : [],
+    createdAt: job && job.createdAt,
+    updatedAt: job && (job.cleanupUpdatedAt || job.updatedAt),
+  };
+}
+
+function isRecoverablePurgeJob(job, guard) {
+  if (!job || trimText(job._id) === PURGE_GUARD_DOCUMENT_ID) return false;
+  const status = trimText(job.status);
+  const guardActive = guard
+    && guard.status === "active"
+    && trimText(guard.activeJobId) === trimText(job._id);
+  return Boolean(
+    guardActive
+    || job.guardReleasePending === true
+    || status === "cleanup_pending"
+    || status === "cleanup_release_pending"
+    || (Array.isArray(job.pendingFileIds) && job.pendingFileIds.length)
+  );
+}
+
+async function listPendingPurgeJobs(event, actor) {
+  const actorError = requireWebActor(actor);
+  if (actorError) return actorError;
+  const rawMutationId = trimText(event.clientMutationId);
+  let jobs = [];
+  if (rawMutationId) {
+    const mutation = normalizeClientMutationId(rawMutationId);
+    if (!mutation.valid || !mutation.value) return failFromValidation(mutation);
+    const jobId = getPurgeJobDocumentId(actor, mutation.value);
+    const job = await getDocumentOrNull(PURGE_JOB_COLLECTION, jobId);
+    if (job) jobs = [{ ...job, _id: jobId }];
+  } else {
+    jobs = await scanCollectionByStableId(PURGE_JOB_COLLECTION);
+  }
+  const guard = await getPurgeGuard();
+  const items = jobs
+    .filter((job) => isRecoverablePurgeJob(job, guard))
+    .map((job) => sanitizePendingPurgeJob(job, guard))
+    .sort((left, right) => (
+      getDateTimestamp(right.updatedAt || right.createdAt)
+      - getDateTimestamp(left.updatedAt || left.createdAt)
+    ))
+    .slice(0, ADMIN_RECORD_RETENTION_LIMIT);
+  return ok({ items });
 }
 
 async function validatePinnedCapacity(isPinned, excludedId = "") {
@@ -1421,6 +2769,13 @@ async function moveCasesToTrash(event, actor) {
   );
   if (!applied.ok) return failFromValidation(applied.error);
   await bumpCatalogRevision();
+  await Promise.all(items.map((item) => writeAdminActivitySafe({
+    action: "case_moved_to_trash",
+    targetType: "case",
+    targetId: item._id,
+    title: item.title,
+    caseId: item.caseId,
+  }, actor, `case-trash:${item._id}:${applied.versions[item._id]}`)));
   return ok({
     moved: plans.length,
     ids: idsResult.ids,
@@ -1462,6 +2817,13 @@ async function restoreCases(event, actor) {
   );
   if (!applied.ok) return failFromValidation(applied.error);
   await bumpCatalogRevision();
+  await Promise.all(items.map((item) => writeAdminActivitySafe({
+    action: "case_restored",
+    targetType: "case",
+    targetId: item._id,
+    title: item.title,
+    caseId: item.caseId,
+  }, actor, `case-restore:${item._id}:${applied.versions[item._id]}`)));
   return ok({ restored: plans.length, ids: idsResult.ids, versions: applied.versions });
 }
 
@@ -1701,6 +3063,12 @@ exports.main = async (event = {}) => {
   ) {
     return fail("WEB_WRITE_DISABLED", "电脑后台当前为只读模式");
   }
+  if (ACTIVITY_SYNC_ACTIONS.has(action) && !isActivitySyncEnabled()) {
+    return fail("ACTIVITY_SYNC_DISABLED", "管理员实时同步功能尚未开启");
+  }
+  if (PERMANENT_DELETE_ACTIONS.has(action) && !isPermanentDeleteEnabled()) {
+    return fail("PERMANENT_DELETE_DISABLED", "回收站永久删除功能尚未开启");
+  }
 
   try {
     if (action === "getAdminConfig") return await getAdminConfig(actor);
@@ -1719,6 +3087,22 @@ exports.main = async (event = {}) => {
     if (action === "setHomeSectionOrder") return await setHomeSectionOrder(event, actor);
     if (action === "setCaseVisibility") return await setCaseVisibility(event, actor);
     if (action === "deleteCase") return await deleteCase(event, actor);
+    if (action === "permanentlyDeleteCases") {
+      return await permanentlyDeleteCases(event, actor);
+    }
+    if (action === "retryPurgeCleanup") return await retryPurgeCleanup(event, actor);
+    if (action === "listPendingPurgeJobs") {
+      return await listPendingPurgeJobs(event, actor);
+    }
+    if (action === "registerUploadItems") return await registerUploadItems(event, actor);
+    if (action === "updateUploadItemStatus") {
+      return await updateUploadItemStatus(event, actor);
+    }
+    if (action === "removeUploadItem") return await removeUploadItem(event, actor);
+    if (action === "listSharedUploadItems") {
+      return await listSharedUploadItems(event, actor);
+    }
+    if (action === "listAdminActivity") return await listAdminActivity(event, actor);
     if (action === "cleanupUnreferencedFiles") {
       return await cleanupUnreferencedFiles(event, actor);
     }

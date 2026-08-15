@@ -147,6 +147,12 @@ code {
   letter-spacing: 0.12em;
 }
 
+.brand-lockup strong {
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
 .login-brand small,
 .brand-lockup small {
   display: block;
@@ -1301,6 +1307,19 @@ code {
   gap: 15px;
 }
 
+.upload-default-labels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.upload-default-labels > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+}
+
 .field-label {
   font-size: 11px;
   font-weight: 600;
@@ -1394,7 +1413,7 @@ code {
 
 .queue-item {
   display: grid;
-  grid-template-columns: 24px 74px minmax(270px, 1fr) minmax(170px, 240px) auto;
+  grid-template-columns: 24px 74px minmax(270px, 1fr) minmax(290px, 420px) auto;
   align-items: center;
   gap: 13px;
   min-height: 102px;
@@ -1471,7 +1490,18 @@ code {
   font-size: 10px;
 }
 
-.queue-package-field .ant-select {
+.queue-label-fields {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.queue-label-field {
+  min-width: 0;
+}
+
+.queue-label-field .ant-select {
   width: 100%;
 }
 
@@ -1480,6 +1510,80 @@ code {
   justify-content: flex-end;
   padding: 10px 17px;
   background: #faf6ef;
+}
+
+.admin-activity-card {
+  border-color: var(--line);
+  box-shadow: var(--shadow);
+}
+
+.admin-activity-card .ant-card-body {
+  padding: 0;
+}
+
+.admin-activity-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-activity-header h4.ant-typography {
+  margin: 0;
+  font-family: "Songti SC", serif;
+}
+
+.admin-activity-list {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.admin-activity-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 18px;
+  border-bottom: 1px solid #eee4d8;
+}
+
+.admin-activity-item:last-child {
+  border-bottom: 0;
+}
+
+.admin-activity-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.admin-activity-main strong,
+.admin-activity-main span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-activity-main span,
+.admin-activity-meta {
+  color: var(--ink-soft);
+  font-size: 10px;
+}
+
+.admin-activity-meta {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+.admin-activity-empty {
+  display: grid;
+  min-height: 120px;
+  place-items: center;
+  padding: 18px;
+  color: var(--ink-soft);
+  font-size: 11px;
 }
 
 /* Homepage */
@@ -1642,6 +1746,33 @@ code {
   font-size: 10px;
 }
 
+.trash-purge-confirmation {
+  display: flex;
+  margin-top: 18px;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.trash-purge-confirmation > label {
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.trash-purge-case-list {
+  display: flex;
+  max-height: 130px;
+  padding: 10px 12px;
+  overflow: auto;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  background: #faf6ef;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
 /* Ant Design refinements */
 
 .ant-btn-primary {
@@ -1732,6 +1863,11 @@ code {
   }
 
   .upload-intro-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .upload-default-labels,
+  .queue-label-fields {
     grid-template-columns: 1fr;
   }
 

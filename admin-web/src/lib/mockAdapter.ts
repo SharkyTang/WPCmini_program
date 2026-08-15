@@ -1,5 +1,7 @@
 import { DEFAULT_CONFIG } from "../constants";
 import type {
+  AdminActivityAction,
+  AdminActivityItem,
   AdminApi,
   AdminConfig,
   AuthSession,
@@ -10,10 +12,15 @@ import type {
   CreateCaseResult,
   HomeSection,
   HomeSectionOrders,
+  ListPendingPurgeJobsRequest,
   ListCasesRequest,
   ListCasesResponse,
   MutationResult,
+  PendingPurgeJob,
+  RegisterUploadItemInput,
+  SharedUploadItem,
   UploadedCaseImages,
+  UploadItemStatusPatch,
   UploadProgress,
 } from "../types";
 import { mergeTagValues, normalizeValues } from "./caseLogic";
@@ -25,6 +32,154 @@ import { getSceneLabel } from "./sceneOptions";
 const STORE_KEY = "wine-admin-demo-cases-v2";
 const ORDER_KEY = "wine-admin-demo-home-orders-v2";
 const SESSION_KEY = "wine-admin-demo-session-v1";
+const PURGE_JOB_KEY = "wine-admin-demo-purge-jobs-v1";
+const UPLOAD_JOB_KEY = "wine-admin-demo-upload-jobs-v1";
+const ACTIVITY_FEED_KEY = "wine-admin-demo-activity-feed-v1";
+const CONFIG_OVERRIDE_KEY = "wine-admin-demo-config-override-v1";
+
+function readConfigOverride(): Partial<
+  Pick<AdminConfig, "writeEnabled" | "permanentDeleteEnabled" | "activitySyncEnabled">
+> {
+  try {
+    const value = JSON.parse(localStorage.getItem(CONFIG_OVERRIDE_KEY) || "{}") as Record<
+      string,
+      unknown
+    >;
+    return {
+      ...(typeof value.writeEnabled === "boolean"
+        ? { writeEnabled: value.writeEnabled }
+        : {}),
+      ...(typeof value.permanentDeleteEnabled === "boolean"
+        ? { permanentDeleteEnabled: value.permanentDeleteEnabled }
+        : {}),
+      ...(typeof value.activitySyncEnabled === "boolean"
+        ? { activitySyncEnabled: value.activitySyncEnabled }
+        : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+interface MockPurgeResult {
+  deleted: number;
+  cleanupJobId: string;
+  deletedFileCount: number;
+  retainedReferencedCount: number;
+  pendingFileCount: number;
+}
+
+interface MockPurgeJob extends MockPurgeResult {
+  clientMutationId: string;
+  ownerUid: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function readPurgeJobs(): Record<string, MockPurgeJob> {
+  try {
+    return JSON.parse(localStorage.getItem(PURGE_JOB_KEY) || "{}") as Record<string, MockPurgeJob>;
+  } catch {
+    return {};
+  }
+}
+
+function writePurgeJobs(jobs: Record<string, MockPurgeJob>): void {
+  localStorage.setItem(PURGE_JOB_KEY, JSON.stringify(jobs));
+}
+
+function toMockPurgeResult(job: MockPurgeResult): MockPurgeResult {
+  return {
+    deleted: Number(job.deleted || 0),
+    cleanupJobId: String(job.cleanupJobId || ""),
+    deletedFileCount: Number(job.deletedFileCount || 0),
+    retainedReferencedCount: Number(job.retainedReferencedCount || 0),
+    pendingFileCount: Number(job.pendingFileCount || 0),
+  };
+}
+
+function readUploadJobs(): SharedUploadItem[] {
+  try {
+    return JSON.parse(localStorage.getItem(UPLOAD_JOB_KEY) || "[]") as SharedUploadItem[];
+  } catch {
+    return [];
+  }
+}
+
+function writeUploadJobs(jobs: SharedUploadItem[]): void {
+  localStorage.setItem(UPLOAD_JOB_KEY, JSON.stringify(jobs));
+}
+
+function readActivityFeed(): AdminActivityItem[] {
+  try {
+    return JSON.parse(localStorage.getItem(ACTIVITY_FEED_KEY) || "[]") as AdminActivityItem[];
+  } catch {
+    return [];
+  }
+}
+
+function appendActivity(
+  action: AdminActivityAction,
+  item: Pick<SharedUploadItem, "mutationId" | "uploadBatchId" | "title" | "imageCount" | "status">,
+  patch: UploadItemStatusPatch = { status: item.status },
+): void {
+  const activity: AdminActivityItem = {
+    id: `mock-activity-${crypto.randomUUID()}`,
+    actorId: "demo-admin",
+    actorLabel: "演示管理员",
+    action,
+    title: patch.title || item.title,
+    caseId: patch.caseId,
+    mutationId: item.mutationId,
+    uploadBatchId: item.uploadBatchId,
+    imageCount: patch.imageCount ?? item.imageCount,
+    status: patch.status,
+    createdAt: new Date().toISOString(),
+  };
+  localStorage.setItem(
+    ACTIVITY_FEED_KEY,
+    JSON.stringify([activity, ...readActivityFeed()].slice(0, 200)),
+  );
+}
+
+function appendCaseActivity(
+  action: Extract<
+    AdminActivityAction,
+    "case_moved_to_trash" | "case_restored" | "case_permanently_deleted"
+  >,
+  item: CaseRecord,
+): void {
+  const activity: AdminActivityItem = {
+    id: `mock-activity-${crypto.randomUUID()}`,
+    actorId: "demo-admin",
+    actorLabel: "演示管理员",
+    action,
+    title: item.title,
+    caseId: item.caseId,
+    createdAt: new Date().toISOString(),
+  };
+  localStorage.setItem(
+    ACTIVITY_FEED_KEY,
+    JSON.stringify([activity, ...readActivityFeed()].slice(0, 200)),
+  );
+}
+
+function getCaseFileIDs(item: CaseRecord): string[] {
+  return Array.from(
+    new Set(
+      [
+        item.coverImage,
+        item.coverThumbnail,
+        item.coverBanner,
+        ...item.sourceGalleryImages,
+        ...item.galleryImages,
+        ...item.galleryThumbnails,
+        ...item.galleryBanners,
+      ].filter(Boolean),
+    ),
+  );
+}
 
 function readCases(): CaseRecord[] {
   try {
@@ -170,6 +325,9 @@ export class MockAdminApi implements AdminApi {
     await delay();
     return {
       ...DEFAULT_CONFIG,
+      permanentDeleteEnabled: true,
+      activitySyncEnabled: true,
+      ...readConfigOverride(),
       homeSectionOrders: readOrders(),
     };
   }
@@ -395,6 +553,7 @@ export class MockAdminApi implements AdminApi {
       item.updatedAt = new Date().toISOString();
     });
     writeCases(cases);
+    selected.forEach((item) => appendCaseActivity("case_moved_to_trash", item));
     return { moved: selected.length };
   }
 
@@ -415,7 +574,194 @@ export class MockAdminApi implements AdminApi {
       item.updatedAt = new Date().toISOString();
     });
     writeCases(cases);
+    selected.forEach((item) => appendCaseActivity("case_restored", item));
     return { restored: selected.length };
+  }
+
+  async permanentlyDeleteCases(
+    ids: string[],
+    expectedVersions: Record<string, number>,
+    clientMutationId: string,
+  ): Promise<MockPurgeResult> {
+    const session = ensureSession();
+    await delay(280);
+    const purgeJobs = readPurgeJobs();
+    if (purgeJobs[clientMutationId]) {
+      return structuredClone(toMockPurgeResult(purgeJobs[clientMutationId]));
+    }
+    if (!ids.length || ids.length > DEFAULT_CONFIG.limits.batch) {
+      throw new AdminApiError("INVALID_BATCH", `每次请选择 1–${DEFAULT_CONFIG.limits.batch} 个案例`);
+    }
+
+    const cases = readCases();
+    const idSet = new Set(ids);
+    const selected = cases.filter((item) => idSet.has(item._id) && item.deletedAt);
+    if (selected.length !== idSet.size) {
+      throw new AdminApiError("CASE_NOT_FOUND", "部分案例不在回收站，请刷新后重试");
+    }
+    checkVersions(selected, expectedVersions);
+
+    const candidates = new Set(selected.flatMap(getCaseFileIDs));
+    const remaining = cases.filter((item) => !idSet.has(item._id));
+    const remainingReferences = new Set(remaining.flatMap(getCaseFileIDs));
+    const retainedReferencedCount = Array.from(candidates).filter((fileID) =>
+      remainingReferences.has(fileID),
+    ).length;
+    const cleanupJobId = `mock-purge-${clientMutationId}`;
+    const result: MockPurgeResult = {
+      deleted: selected.length,
+      cleanupJobId,
+      deletedFileCount: candidates.size - retainedReferencedCount,
+      retainedReferencedCount,
+      pendingFileCount: 0,
+    };
+    const now = new Date().toISOString();
+    const job: MockPurgeJob = {
+      ...result,
+      clientMutationId,
+      ownerUid: session.user.id,
+      status: result.pendingFileCount ? "cleanup_pending" : "completed",
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    writeCases(remaining);
+    purgeJobs[clientMutationId] = job;
+    writePurgeJobs(purgeJobs);
+    selected.forEach((item) => appendCaseActivity("case_permanently_deleted", item));
+    return structuredClone(result);
+  }
+
+  async retryPurgeCleanup(jobId: string): Promise<MockPurgeResult> {
+    const session = ensureSession();
+    await delay(220);
+    const jobs = readPurgeJobs();
+    const entry = Object.entries(jobs).find(([, candidate]) => candidate.cleanupJobId === jobId);
+    if (!entry) throw new AdminApiError("PURGE_JOB_NOT_FOUND", "清理作业不存在或已过期");
+    const [mutationId, job] = entry;
+    if (job.ownerUid && job.ownerUid !== session.user.id) {
+      throw new AdminApiError("FORBIDDEN", "无权处理其他管理员的清理任务");
+    }
+    const next: MockPurgeJob = {
+      ...job,
+      pendingFileCount: 0,
+      status: "completed",
+      updatedAt: new Date().toISOString(),
+    };
+    jobs[mutationId] = next;
+    writePurgeJobs(jobs);
+    return structuredClone(toMockPurgeResult(next));
+  }
+
+  async listPendingPurgeJobs(
+    request: ListPendingPurgeJobsRequest = {},
+  ): Promise<PendingPurgeJob[]> {
+    const session = ensureSession();
+    await delay(80);
+    return Object.entries(readPurgeJobs())
+      .filter(([mutationId, job]) =>
+        (!request.clientMutationId || mutationId === request.clientMutationId)
+        && (!job.ownerUid || job.ownerUid === session.user.id)
+        && Number(job.pendingFileCount || 0) > 0,
+      )
+      .map(([mutationId, job]) => ({
+        ...toMockPurgeResult(job),
+        clientMutationId: job.clientMutationId || mutationId,
+        status: job.status || "cleanup_pending",
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+      }))
+      .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+  }
+
+  async registerUploadItems(items: RegisterUploadItemInput[]): Promise<void> {
+    ensureSession();
+    await delay(100);
+    if (!items.length || items.length > DEFAULT_CONFIG.limits.batch) {
+      throw new AdminApiError("INVALID_BATCH", `每次请选择 1–${DEFAULT_CONFIG.limits.batch} 个案例`);
+    }
+    const jobs = readUploadJobs();
+    const byMutationId = new Map(jobs.map((item) => [item.mutationId, item]));
+    items.forEach((input) => {
+      if (byMutationId.has(input.mutationId)) return;
+      const job: SharedUploadItem = {
+        ...input,
+        id: `mock-upload-${input.mutationId}`,
+        ownerUid: "demo-admin",
+        ownerLabel: "演示管理员",
+        updatedAt: new Date().toISOString(),
+      };
+      jobs.push(job);
+      byMutationId.set(job.mutationId, job);
+      appendActivity("upload_queued", job);
+    });
+    writeUploadJobs(jobs);
+  }
+
+  async updateUploadItemStatus(
+    mutationId: string,
+    patch: UploadItemStatusPatch,
+  ): Promise<void> {
+    ensureSession();
+    await delay(80);
+    const jobs = readUploadJobs();
+    const index = jobs.findIndex((item) => item.mutationId === mutationId);
+    if (index < 0) throw new AdminApiError("UPLOAD_JOB_NOT_FOUND", "同步任务不存在");
+    const previous = jobs[index];
+    const next: SharedUploadItem = {
+      ...previous,
+      title: patch.title ?? previous.title,
+      imageCount: patch.imageCount ?? previous.imageCount,
+      packageTypes: patch.packageTypes ?? previous.packageTypes,
+      scenes: patch.scenes ?? previous.scenes,
+      status: patch.status,
+      updatedAt: new Date().toISOString(),
+    };
+    jobs[index] = next;
+    writeUploadJobs(jobs);
+    if (previous.status === patch.status) return;
+    const actionByStatus: Partial<Record<UploadItemStatusPatch["status"], AdminActivityAction>> = {
+      uploading: "upload_started",
+      processing: "upload_processing",
+      needs_tags: "case_created",
+      done: "case_created",
+      failed: "upload_failed",
+    };
+    const action = actionByStatus[patch.status];
+    if (action) appendActivity(action, next, patch);
+  }
+
+  async removeUploadItem(mutationId: string): Promise<void> {
+    ensureSession();
+    await delay(80);
+    const jobs = readUploadJobs();
+    const item = jobs.find((candidate) => candidate.mutationId === mutationId);
+    if (!item) return;
+    if (!["waiting", "failed"].includes(item.status)) {
+      throw new AdminApiError("UPLOAD_JOB_ACTIVE", "处理中或已建档任务不能从共享动态移除");
+    }
+    writeUploadJobs(jobs.filter((candidate) => candidate.mutationId !== mutationId));
+    appendActivity("upload_removed", item);
+  }
+
+  async listSharedUploadItems(limit = 50): Promise<SharedUploadItem[]> {
+    ensureSession();
+    await delay(60);
+    return structuredClone(
+      readUploadJobs()
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+        .slice(0, Math.max(1, Math.min(limit, 50))),
+    );
+  }
+
+  async listAdminActivity(limit = 50): Promise<AdminActivityItem[]> {
+    ensureSession();
+    await delay(60);
+    return structuredClone(
+      readActivityFeed()
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+        .slice(0, Math.max(1, Math.min(limit, 50))),
+    );
   }
 
   async reorderCases(

@@ -27,11 +27,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useBlocker } from "react-router-dom";
 import { HOME_SECTION_META } from "../constants";
 import { useAdminConfig } from "../context/AdminConfigContext";
+import { getSceneOptions } from "../lib/sceneOptions";
 import { adminApi } from "../lib/api";
 import { canAddGalleryImages, isSupportedImage, moveItem } from "../lib/caseLogic";
 import { AdminApiError, getErrorMessage } from "../lib/errors";
 import { appendUploadedGallery, type GalleryState } from "../lib/galleryLogic";
-import { getSceneOptions } from "../lib/sceneOptions";
 import type { CaseDraft, CaseRecord, HomeSection, UploadedCaseImages } from "../types";
 import { OrderMoveButtons } from "./OrderMoveButtons";
 import { PageError } from "./PageStates";
@@ -598,9 +598,9 @@ export function CaseEditorDrawer({
               </Form.Item>
               <Form.Item name="scenes" label="场景" className="form-grid-span-two">
                 <Select
+                  aria-label="适用场景"
                   mode="multiple"
                   maxTagCount="responsive"
-                  aria-label="适用场景"
                   placeholder="选择适用场景"
                   options={getSceneOptions(config.options.scenes)}
                 />

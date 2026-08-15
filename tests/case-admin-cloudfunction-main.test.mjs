@@ -46,6 +46,9 @@ function matchesCondition(record, condition = {}) {
     if (expected && expected.__op === "gte") {
       return new Date(record[field]).getTime() >= new Date(expected.value).getTime();
     }
+    if (expected && expected.__op === "gt") {
+      return record[field] > expected.value;
+    }
     return record[field] === expected;
   });
 }
@@ -55,11 +58,14 @@ function createQuery(
   records,
   calls,
   condition = {},
-  queryGetError = null
+  queryGetError = null,
+  queryGetHook = null
 ) {
   const query = {
     limitValue: null,
     skipValue: 0,
+    orderField: "",
+    orderDirection: "asc",
     where(nextCondition) {
       calls.push({ collectionName, type: "where", condition: nextCondition });
       return createQuery(
@@ -67,7 +73,8 @@ function createQuery(
         records,
         calls,
         nextCondition,
-        queryGetError
+        queryGetError,
+        queryGetHook
       );
     },
     field(fields) {
@@ -80,6 +87,8 @@ function createQuery(
       return this;
     },
     orderBy(field, direction) {
+      this.orderField = field;
+      this.orderDirection = direction;
       calls.push({ collectionName, type: "orderBy", field, direction });
       return this;
     },
@@ -97,8 +106,19 @@ function createQuery(
         throw new Error(queryGetError.message || "database unavailable");
       }
       let data = records.filter((record) => matchesCondition(record, condition));
+      if (this.orderField) {
+        const multiplier = this.orderDirection === "desc" ? -1 : 1;
+        data = data.slice().sort((left, right) =>
+          String(left[this.orderField] || "").localeCompare(
+            String(right[this.orderField] || "")
+          ) * multiplier
+        );
+      }
       data = data.slice(this.skipValue);
       if (this.limitValue !== null) data = data.slice(0, this.limitValue);
+      if (queryGetHook) {
+        await queryGetHook({ collectionName, condition, records, data, calls });
+      }
       return { data: clone(data) };
     },
   };
@@ -110,10 +130,14 @@ function loadCaseAdminFunction(options = {}) {
   const deletedFiles = [];
   const tempFileRequests = [];
   let transactionCount = 0;
+  let deleteFileCallCount = 0;
   const collections = {
     wine_packaging: clone(options.cases || []),
     home_banners: clone(options.banners || []),
     catalog_meta: clone(options.catalogMeta || []),
+    case_admin_purge_jobs: clone(options.purgeJobs || []),
+    case_admin_upload_jobs: clone(options.uploadJobs || []),
+    case_admin_activity_feed: clone(options.activityFeed || []),
   };
 
   const mockCloud = {
@@ -128,8 +152,30 @@ function loadCaseAdminFunction(options = {}) {
       };
     },
     async deleteFile({ fileList }) {
+      deleteFileCallCount += 1;
+      if (options.deleteFileHook) {
+        await options.deleteFileHook({
+          fileList: clone(fileList),
+          callCount: deleteFileCallCount,
+          collections,
+          calls,
+        });
+      }
+      if (deleteFileCallCount === options.deleteFileFailureAt) {
+        throw new Error(options.deleteFileFailureMessage || "storage unavailable");
+      }
+      if (options.deleteFileResponseHook) {
+        return options.deleteFileResponseHook({
+          fileList: clone(fileList),
+          callCount: deleteFileCallCount,
+          collections,
+          calls,
+        });
+      }
       deletedFiles.push(...fileList);
-      return { fileList };
+      return {
+        fileList: fileList.map((fileID) => ({ fileID, status: 0 })),
+      };
     },
     async getTempFileURL({ fileList }) {
       tempFileRequests.push(...fileList);
@@ -149,19 +195,24 @@ function loadCaseAdminFunction(options = {}) {
           gte(value) {
             return { __op: "gte", value };
           },
+          gt(value) {
+            return { __op: "gt", value };
+          },
         },
         serverDate() {
           return "server-date";
         },
         collection(collectionName) {
-          const records = collections[collectionName] || [];
+          if (!collections[collectionName]) collections[collectionName] = [];
+          const records = collections[collectionName];
           return {
             ...createQuery(
               collectionName,
               records,
               calls,
               {},
-              options.queryGetError
+              options.queryGetError,
+              options.queryGetHook
             ),
             async add(payload) {
               const id = `created_${records.length + 1}`;
@@ -174,7 +225,17 @@ function loadCaseAdminFunction(options = {}) {
                 async get() {
                   const record = records.find((item) => item._id === id);
                   if (!record) throw new Error("document not found");
-                  return { data: clone(record) };
+                  const data = clone(record);
+                  if (options.documentGetHook) {
+                    await options.documentGetHook({
+                      collectionName,
+                      id,
+                      records,
+                      data,
+                      calls,
+                    });
+                  }
+                  return { data };
                 },
                 async remove() {
                   const index = records.findIndex((item) => item._id === id);
@@ -192,6 +253,15 @@ function loadCaseAdminFunction(options = {}) {
                   return {};
                 },
                 async set(payload) {
+                  if (options.documentSetHook) {
+                    await options.documentSetHook({
+                      collectionName,
+                      id,
+                      payload,
+                      records,
+                      calls,
+                    });
+                  }
                   const index = records.findIndex((item) => item._id === id);
                   const value = { _id: id, ...clone(payload.data || {}) };
                   if (index === -1) records.push(value);
@@ -208,6 +278,13 @@ function loadCaseAdminFunction(options = {}) {
         databaseApi.runTransaction = async (callback) => {
           transactionCount += 1;
           calls.push({ type: "transaction" });
+          if (options.transactionHook) {
+            await options.transactionHook({
+              transactionCount,
+              collections,
+              calls,
+            });
+          }
           if (transactionCount === options.transactionFailureAt) {
             throw new Error(options.transactionFailureMessage || "transaction connection lost");
           }
@@ -221,6 +298,23 @@ function loadCaseAdminFunction(options = {}) {
   const sandbox = {
     module: { exports: {} },
     exports: {},
+    setTimeout(callback, delay) {
+      if (options.immediatePurgeDeleteTimeout) {
+        const handle = { fakeTimeout: true, active: true, delay };
+        queueMicrotask(() => {
+          if (handle.active) callback();
+        });
+        return handle;
+      }
+      return setTimeout(callback, delay);
+    },
+    clearTimeout(handle) {
+      if (handle && handle.fakeTimeout) {
+        handle.active = false;
+        return;
+      }
+      clearTimeout(handle);
+    },
     console: {
       ...console,
       error() {},
@@ -231,6 +325,9 @@ function loadCaseAdminFunction(options = {}) {
         ADMIN_OPENIDS: options.adminOpenids || "admin_openid",
         CASE_ADMIN_UIDS: options.adminUids || "",
         ADMIN_WEB_WRITE_ENABLED: options.webWriteEnabled || "",
+        ADMIN_ACTIVITY_SYNC_ENABLED: options.activitySyncEnabled || "",
+        ADMIN_PERMANENT_DELETE_ENABLED: options.permanentDeleteEnabled || "",
+        CASE_ADMIN_DISPLAY_NAMES: options.adminDisplayNames || "",
       },
     },
     require(moduleName) {
@@ -548,19 +645,6 @@ await test("CloudBase UID access uses the official server SDK and honors the web
   assert.equal(access.actor.type, "cloudbase_uid");
   assert.equal(list.ok, true);
   assert.equal(config.config.options.wineTypes.includes("白酒"), true);
-  assert.deepEqual(clone(config.config.options.scenes), [
-    "婚宴",
-    "百日/满月",
-    "生日宴",
-    "寿宴",
-    "乔迁宴",
-    "送礼",
-    "商务招待",
-    "节庆礼赠",
-    "企业纪念",
-    "商超陈列",
-    "电商展示",
-  ]);
   assert.equal(config.config.limits.gallery, 9);
   assert.equal(config.config.limits.homepage.latest, 6);
   assert.equal(config.config.writeEnabled, false);
@@ -892,6 +976,102 @@ await test("web update preserves unchanged legacy sources and rejects newly adde
   assert.equal(bad.code, "INVALID_UPLOAD_PATH");
 });
 
+await test("updateCase recomputes image changes from the transaction snapshot", async () => {
+  const oldImage = "cloud://env/wine-packaging/cases/old.jpg";
+  const currentImage = "cloud://env/wine-packaging/cases/current.jpg";
+  let firstCaseRead = true;
+  const loaded = loadCaseAdminFunction({
+    purgeJobs: [{
+      _id: "purge_guard_current",
+      status: "active",
+      activeJobId: `purge_${"e".repeat(40)}`,
+      activeRunToken: "active-run",
+      leaseExpiresAt: "2099-01-01T00:00:00.000Z",
+    }],
+    cases: [{
+      _id: "stale-mini-update",
+      title: "旧标题",
+      caseId: "case_901",
+      coverImage: oldImage,
+      galleryImages: [oldImage],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+    }],
+    documentGetHook({ collectionName, id, records }) {
+      if (
+        firstCaseRead
+        && collectionName === "wine_packaging"
+        && id === "stale-mini-update"
+      ) {
+        firstCaseRead = false;
+        const current = records.find((item) => item._id === id);
+        current.coverImage = currentImage;
+        current.galleryImages = [currentImage];
+        current.version = 2;
+      }
+    },
+  });
+  const result = await loaded.main({
+    action: "updateCase",
+    id: "stale-mini-update",
+    case: {
+      title: "陈旧全量保存",
+      coverImage: oldImage,
+      galleryImages: [oldImage],
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "PURGE_CLEANUP_IN_PROGRESS");
+  const stored = loaded.collections.wine_packaging.find(
+    (item) => item._id === "stale-mini-update"
+  );
+  assert.equal(stored.coverImage, currentImage);
+  assert.deepEqual(stored.galleryImages, [currentImage]);
+});
+
+await test("updateCase cleans removed images from the committed transaction snapshot", async () => {
+  const outerImage = "cloud://env/wine-packaging/cases/outer.jpg";
+  const currentImage = "cloud://env/wine-packaging/cases/transaction-current.jpg";
+  const nextImage = "cloud://env/wine-packaging/cases/transaction-next.jpg";
+  const sourceImage = "cloud://env/wine-packaging/admin/source.jpg";
+  let firstCaseRead = true;
+  const loaded = loadCaseAdminFunction({
+    cases: [{
+      _id: "transaction-cleanup",
+      title: "事务废图清理",
+      caseId: "case_904",
+      coverImage: outerImage,
+      galleryImages: [outerImage],
+      sourceGalleryImages: [sourceImage],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+    }],
+    documentGetHook({ collectionName, id, records }) {
+      if (
+        firstCaseRead
+        && collectionName === "wine_packaging"
+        && id === "transaction-cleanup"
+      ) {
+        firstCaseRead = false;
+        const current = records.find((item) => item._id === id);
+        current.coverImage = currentImage;
+        current.galleryImages = [currentImage];
+        current.version = 2;
+      }
+    },
+  });
+  const result = await loaded.main({
+    action: "updateCase",
+    id: "transaction-cleanup",
+    case: { coverImage: nextImage, galleryImages: [nextImage] },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(loaded.deletedFiles, [currentImage]);
+  assert.equal(loaded.deletedFiles.includes(outerImage), false);
+});
+
 await test("trash cases cannot be edited or published outside restoreCases", async () => {
   const item = {
     _id: "trashed",
@@ -1176,4 +1356,1370 @@ await test("reorderCases rolls back committed chunks after an unclassified trans
     ).length,
     0
   );
+});
+
+await test("admin config exposes independent activity and permanent-delete feature gates", async () => {
+  const uid = "web-admin-1";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: `${uid},web-admin-2`,
+    webWriteEnabled: "true",
+    activitySyncEnabled: "true",
+    permanentDeleteEnabled: "true",
+    adminDisplayNames: '{"web-admin-1":"administrator","web-admin-2":"sharky"}',
+  });
+  const result = await loaded.main({ action: "getAdminConfig" });
+  assert.equal(result.ok, true);
+  assert.equal(result.config.activitySyncEnabled, true);
+  assert.equal(result.config.permanentDeleteEnabled, true);
+  assert.equal(result.config.actorDisplayName, "administrator");
+  assert.deepEqual(result.config.options.scenes, [
+    "婚宴",
+    "百日/满月",
+    "生日宴",
+    "寿宴",
+    "乔迁宴",
+    "送礼",
+    "商务招待",
+    "节庆礼赠",
+    "企业纪念",
+    "商超陈列",
+    "电商展示",
+  ]);
+});
+
+await test("upload synchronization fans out sanitized activity and remains owner-operated", async () => {
+  const uid = "web-admin-1";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: `${uid},web-admin-2`,
+    webWriteEnabled: "true",
+    activitySyncEnabled: "true",
+    adminDisplayNames: '{"web-admin-1":"administrator","web-admin-2":"sharky"}',
+  });
+  const registered = await loaded.main({
+    action: "registerUploadItems",
+    items: [
+      {
+        mutationId: "upload-one",
+        uploadBatchId: "batch-one",
+        title: "婚宴案例",
+        imageCount: 2,
+        packageTypes: ["礼盒"],
+        scenes: ["婚宴"],
+        status: "waiting",
+      },
+      {
+        mutationId: "upload-two",
+        uploadBatchId: "batch-one",
+        title: "待移除案例",
+        imageCount: 1,
+        packageTypes: [],
+        scenes: [],
+        status: "waiting",
+      },
+    ],
+  });
+  assert.equal(registered.ok, true);
+  assert.equal(registered.registered, 2);
+  assert.equal(loaded.collections.case_admin_upload_jobs.length, 2);
+  assert.equal(loaded.collections.case_admin_activity_feed.length, 4);
+  assert.equal(
+    loaded.collections.case_admin_activity_feed.every(
+      (item) => !Object.keys(item).some((key) => /file|blob|url/i.test(key))
+    ),
+    true
+  );
+  assert.deepEqual(
+    loaded.collections.case_admin_upload_jobs[0].scenes,
+    ["婚宴"]
+  );
+
+  const replay = await loaded.main({
+    action: "registerUploadItems",
+    items: [{
+      mutationId: "upload-one",
+      uploadBatchId: "batch-one",
+      title: "婚宴案例",
+      imageCount: 2,
+      packageTypes: ["礼盒"],
+      scenes: ["婚宴"],
+      status: "waiting",
+    }],
+  });
+  assert.equal(replay.registered, 0);
+  assert.equal(replay.existing, 1);
+  assert.equal(loaded.collections.case_admin_activity_feed.length, 4);
+
+  const updated = await loaded.main({
+    action: "updateUploadItemStatus",
+    mutationId: "upload-one",
+    status: "uploading",
+  });
+  assert.equal(updated.ok, true);
+  assert.equal(updated.item.status, "uploading");
+  assert.equal(loaded.collections.case_admin_activity_feed.length, 6);
+
+  const busyRemoval = await loaded.main({
+    action: "removeUploadItem",
+    mutationId: "upload-one",
+  });
+  assert.equal(busyRemoval.code, "UPLOAD_JOB_BUSY");
+  const removed = await loaded.main({
+    action: "removeUploadItem",
+    mutationId: "upload-two",
+  });
+  assert.equal(removed.ok, true);
+  assert.equal(loaded.collections.case_admin_upload_jobs.length, 2);
+  assert.equal(
+    loaded.collections.case_admin_upload_jobs.find(
+      (item) => item.mutationId === "upload-two"
+    ).tombstone,
+    true
+  );
+
+  const lateRegister = await loaded.main({
+    action: "registerUploadItems",
+    items: [{
+      mutationId: "upload-two",
+      uploadBatchId: "batch-one",
+      title: "迟到的登记",
+      imageCount: 1,
+      packageTypes: [],
+      scenes: [],
+      status: "waiting",
+    }],
+  });
+  assert.equal(lateRegister.registered, 0);
+  assert.equal(lateRegister.existing, 0);
+  assert.equal(lateRegister.removed, 1);
+
+  const removeBeforeRegister = await loaded.main({
+    action: "removeUploadItem",
+    mutationId: "remove-before-register",
+  });
+  assert.equal(removeBeforeRegister.ok, true);
+  const blockedLateRegister = await loaded.main({
+    action: "registerUploadItems",
+    items: [{
+      mutationId: "remove-before-register",
+      uploadBatchId: "batch-one",
+      title: "不应重建",
+      imageCount: 1,
+      packageTypes: [],
+      scenes: [],
+      status: "waiting",
+    }],
+  });
+  assert.equal(blockedLateRegister.removed, 1);
+  assert.equal((await loaded.main({
+    action: "updateUploadItemStatus",
+    mutationId: "remove-before-register",
+    status: "uploading",
+  })).code, "UPLOAD_JOB_REMOVED");
+
+  assert.equal((await loaded.main({
+    action: "updateUploadItemStatus",
+    mutationId: "upload-one",
+    status: "creating",
+  })).ok, true);
+  assert.equal((await loaded.main({
+    action: "updateUploadItemStatus",
+    mutationId: "upload-one",
+    status: "processing",
+  })).code, "INVALID_UPLOAD_STATUS_TRANSITION");
+  assert.equal((await loaded.main({
+    action: "updateUploadItemStatus",
+    mutationId: "upload-one",
+    status: "failed",
+  })).ok, true);
+  assert.equal((await loaded.main({
+    action: "updateUploadItemStatus",
+    mutationId: "upload-one",
+    status: "processing",
+  })).ok, true);
+  assert.equal((await loaded.main({
+    action: "updateUploadItemStatus",
+    mutationId: "upload-one",
+    status: "done",
+  })).ok, true);
+  assert.equal((await loaded.main({
+    action: "updateUploadItemStatus",
+    mutationId: "upload-one",
+    status: "failed",
+  })).code, "INVALID_UPLOAD_STATUS_TRANSITION");
+
+  const shared = await loaded.main({ action: "listSharedUploadItems", limit: 50 });
+  const activity = await loaded.main({ action: "listAdminActivity", limit: 50 });
+  assert.equal(shared.items.length, 1);
+  assert.equal(activity.items.every((item) => item.viewerUid === uid), true);
+  assert.equal(activity.items.some((item) => item.action === "upload_removed"), true);
+});
+
+await test("shared upload listing scans past tombstones without returning them", async () => {
+  const uid = "web-admin-1";
+  const tombstones = Array.from({ length: 120 }, (_, index) => ({
+    _id: `upload-0${String(index).padStart(3, "0")}`,
+    mutationId: `removed-${index}`,
+    ownerUid: uid,
+    status: "removed",
+    tombstone: true,
+    updatedAt: "2099-01-01T00:00:00.000Z",
+  }));
+  const active = Array.from({ length: 60 }, (_, index) => ({
+    // The ten newest rows deliberately sort after the old rows by _id. A hash
+    // cursor that fills the limit first would miss them.
+    _id: index >= 50
+      ? `upload-z${String(index).padStart(3, "0")}`
+      : `upload-b${String(index).padStart(3, "0")}`,
+    mutationId: `active-${index}`,
+    ownerUid: uid,
+    status: index % 2 ? "processing" : "waiting",
+    updatedAt: new Date(Date.UTC(
+      2026,
+      index >= 50 ? 7 : 0,
+      1,
+      0,
+      index
+    )).toISOString(),
+  }));
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    activitySyncEnabled: "true",
+    uploadJobs: tombstones.concat(active),
+  });
+  const result = await loaded.main({ action: "listSharedUploadItems", limit: 50 });
+  assert.equal(result.ok, true);
+  assert.equal(result.items.length, 50);
+  assert.equal(result.items[0].mutationId, "active-59");
+  assert.equal(result.items.some((item) => item.mutationId === "active-50"), true);
+  assert.equal(result.items.some((item) => item.mutationId === "active-0"), false);
+  assert.equal(
+    result.items.some((item) => item.tombstone === true || item.status === "removed"),
+    false
+  );
+  assert.equal(
+    loaded.calls.some(
+      (call) => call.collectionName === "case_admin_upload_jobs"
+        && call.type === "skip"
+        && call.value === 100
+    ),
+    true
+  );
+});
+
+await test("activity fanout repairs missing viewer copies on idempotent replays", async () => {
+  const uid = "web-admin-1";
+  let failSecondViewerOnce = true;
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: `${uid},web-admin-2`,
+    webWriteEnabled: "true",
+    activitySyncEnabled: "true",
+    documentSetHook({ collectionName, payload }) {
+      if (
+        failSecondViewerOnce
+        && collectionName === "case_admin_activity_feed"
+        && payload.data.viewerUid === "web-admin-2"
+      ) {
+        failSecondViewerOnce = false;
+        throw new Error("single viewer write failed");
+      }
+    },
+  });
+  const registration = {
+    action: "registerUploadItems",
+    items: [{
+      mutationId: "fanout-repair",
+      uploadBatchId: "batch-fanout",
+      title: "动态修复",
+      imageCount: 1,
+      packageTypes: [],
+      scenes: [],
+      status: "waiting",
+    }],
+  };
+  assert.equal((await loaded.main(registration)).ok, true);
+  assert.equal(loaded.collections.case_admin_activity_feed.length, 2);
+  assert.equal(
+    loaded.collections.case_admin_activity_feed.some(
+      (item) => item.viewerUid === "__server_outbox__" && item.serverOutbox === true
+    ),
+    true
+  );
+  const replay = await loaded.main(registration);
+  assert.equal(replay.ok, true);
+  assert.equal(replay.existing, 1);
+  assert.equal(loaded.collections.case_admin_activity_feed.length, 2);
+
+  const statusEvent = {
+    action: "updateUploadItemStatus",
+    mutationId: "fanout-repair",
+    status: "uploading",
+  };
+  assert.equal((await loaded.main(statusEvent)).ok, true);
+  const missingIndex = loaded.collections.case_admin_activity_feed.findIndex(
+    (item) => item.action === "upload_started" && item.viewerUid === "web-admin-2"
+  );
+  assert.notEqual(missingIndex, -1);
+  loaded.collections.case_admin_activity_feed.splice(missingIndex, 1);
+  assert.equal((await loaded.main(statusEvent)).ok, true);
+  const uploadStarted = loaded.collections.case_admin_activity_feed.filter(
+    (item) => item.action === "upload_started"
+  );
+  assert.equal(uploadStarted.length, 2);
+  assert.equal(new Set(uploadStarted.map((item) => item.viewerUid)).size, 2);
+});
+
+await test("server case mutations create deterministic shared activities", async () => {
+  const uid = "web-admin-1";
+  const source = `cloud://env/wine-packaging/admin-web/${uid}/batch-live/source.jpg`;
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: `${uid},web-admin-2`,
+    webWriteEnabled: "true",
+    activitySyncEnabled: "true",
+    catalogMeta: [{ _id: "current", revision: 1, nextCaseNumber: 1 }],
+  });
+  await loaded.main({
+    action: "registerUploadItems",
+    items: [{
+      mutationId: "live-task",
+      uploadBatchId: "batch-live",
+      title: "同步案例",
+      imageCount: 1,
+      packageTypes: [],
+      scenes: ["送礼"],
+      status: "waiting",
+    }],
+  });
+  const created = await loaded.main({
+    action: "createCase",
+    clientMutationId: "live-task",
+    uploadBatchId: "batch-live",
+    case: {
+      title: "同步案例",
+      packageTypes: [],
+      scenes: ["送礼"],
+      ...buildVariantSet(source),
+      isVisible: false,
+    },
+  });
+  assert.equal(created.ok, true);
+  assert.equal(loaded.collections.case_admin_upload_jobs[0].status, "needs_tags");
+  assert.equal(
+    loaded.collections.case_admin_activity_feed.filter(
+      (item) => item.action === "case_created"
+    ).length,
+    2
+  );
+
+  const moved = await loaded.main({
+    action: "moveCasesToTrash",
+    ids: [created.id],
+    expectedVersions: { [created.id]: 1 },
+  });
+  const restored = await loaded.main({
+    action: "restoreCases",
+    ids: [created.id],
+    expectedVersions: { [created.id]: moved.versions[created.id] },
+  });
+  assert.equal(restored.ok, true);
+  const actions = loaded.collections.case_admin_activity_feed.map((item) => item.action);
+  assert.equal(actions.includes("case_moved_to_trash"), true);
+  assert.equal(actions.includes("case_restored"), true);
+});
+
+await test("case activity outbox repairs partial fanout from both polling endpoints", async () => {
+  const uid = "web-admin-1";
+  let failAction = "case_moved_to_trash";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: `${uid},web-admin-2`,
+    webWriteEnabled: "true",
+    activitySyncEnabled: "true",
+    cases: [{
+      _id: "case-outbox",
+      title: "案例动态补偿",
+      caseId: "case_906",
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+    }],
+    documentSetHook({ collectionName, payload }) {
+      if (
+        failAction
+        && collectionName === "case_admin_activity_feed"
+        && payload.data.viewerUid === "web-admin-2"
+        && payload.data.action === failAction
+      ) {
+        failAction = "";
+        throw new Error("viewer copy temporarily unavailable");
+      }
+    },
+  });
+  const moved = await loaded.main({
+    action: "moveCasesToTrash",
+    ids: ["case-outbox"],
+    expectedVersions: { "case-outbox": 1 },
+  });
+  assert.equal(moved.ok, true);
+  const firstOutbox = loaded.collections.case_admin_activity_feed.find(
+    (item) => item.viewerUid === "__server_outbox__"
+  );
+  assert.equal(firstOutbox.serverOutbox, true);
+  assert.equal(
+    Object.keys(firstOutbox).some((key) => /file|blob|url/i.test(key)),
+    false
+  );
+  assert.equal(JSON.stringify(firstOutbox).includes("cloud://"), false);
+
+  assert.equal((await loaded.main({
+    action: "listSharedUploadItems",
+    limit: 50,
+  })).ok, true);
+  assert.equal(
+    loaded.collections.case_admin_activity_feed.some(
+      (item) => item.viewerUid === "__server_outbox__"
+    ),
+    false
+  );
+  assert.equal(
+    loaded.collections.case_admin_activity_feed.filter(
+      (item) => item.action === "case_moved_to_trash"
+    ).length,
+    2
+  );
+
+  failAction = "case_restored";
+  const restored = await loaded.main({
+    action: "restoreCases",
+    ids: ["case-outbox"],
+    expectedVersions: { "case-outbox": moved.versions["case-outbox"] },
+  });
+  assert.equal(restored.ok, true);
+  assert.equal(
+    loaded.collections.case_admin_activity_feed.some(
+      (item) => item.viewerUid === "__server_outbox__"
+    ),
+    true
+  );
+  const activity = await loaded.main({ action: "listAdminActivity", limit: 50 });
+  assert.equal(activity.ok, true);
+  assert.equal(
+    loaded.collections.case_admin_activity_feed.some(
+      (item) => item.viewerUid === "__server_outbox__"
+    ),
+    false
+  );
+  for (const action of ["case_moved_to_trash", "case_restored"]) {
+    const copies = loaded.collections.case_admin_activity_feed.filter(
+      (item) => item.action === action
+    );
+    assert.equal(copies.length, 2);
+    assert.equal(new Set(copies.map((item) => item.viewerUid)).size, 2);
+  }
+  await loaded.main({ action: "listSharedUploadItems", limit: 50 });
+  await loaded.main({ action: "listAdminActivity", limit: 50 });
+  assert.equal(loaded.collections.case_admin_activity_feed.length, 4);
+});
+
+await test("permanent delete prevalidates the full batch and safely removes only unreferenced files", async () => {
+  const uid = "web-admin-1";
+  const unused = "cloud://env/wine-packaging/admin-web/old/batch/unused.jpg";
+  const shared = "cloud://env/wine-packaging/admin-web/old/batch/shared.jpg";
+  const bannerShared = "cloud://env/wine-packaging/variants/v2/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/banner.jpg";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: `${uid},web-admin-2`,
+    webWriteEnabled: "true",
+    activitySyncEnabled: "true",
+    permanentDeleteEnabled: "true",
+    cases: [
+      {
+        _id: "trash-one",
+        title: "永久删除案例",
+        caseId: "case_001",
+        coverImage: unused,
+        galleryImages: [unused, shared],
+        sourceGalleryImages: [shared],
+        galleryBanners: [bannerShared],
+        deletedAt: "2026-08-01",
+        version: 3,
+      },
+      {
+        _id: "active-one",
+        title: "保留引用",
+        coverImage: shared,
+        galleryImages: [shared],
+        isVisible: true,
+        version: 1,
+      },
+    ],
+    banners: [{ _id: "banner-one", image: bannerShared, isVisible: false }],
+  });
+  const event = {
+    action: "permanentlyDeleteCases",
+    ids: ["trash-one"],
+    expectedVersions: { "trash-one": 3 },
+    clientMutationId: "purge-task-one",
+  };
+  const result = await loaded.main(event);
+  assert.equal(result.ok, true);
+  assert.equal(result.deleted, 1);
+  assert.equal(result.deletedFileCount, 1);
+  assert.equal(result.retainedReferencedCount, 2);
+  assert.equal(result.pendingFileCount, 0);
+  assert.deepEqual(loaded.deletedFiles, [unused]);
+  assert.equal(
+    loaded.collections.wine_packaging.some((item) => item._id === "trash-one"),
+    false
+  );
+  assert.equal(
+    loaded.collections.case_admin_purge_jobs.filter(
+      (item) => item._id !== "purge_guard_current"
+    ).length,
+    1
+  );
+  assert.equal(
+    loaded.collections.case_admin_purge_jobs.find(
+      (item) => item._id === "purge_guard_current"
+    ).status,
+    "idle"
+  );
+  assert.equal(
+    loaded.collections.case_admin_activity_feed.filter(
+      (item) => item.action === "case_permanently_deleted"
+    ).length,
+    2
+  );
+
+  const replay = await loaded.main(event);
+  assert.equal(replay.ok, true);
+  assert.equal(replay.deletedFileCount, 1);
+  assert.deepEqual(loaded.deletedFiles, [unused]);
+});
+
+await test("permanent delete leaves every case untouched on validation failure", async () => {
+  const uid = "web-admin-1";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    cases: [
+      { _id: "trash", deletedAt: "2026-08-01", version: 2 },
+      { _id: "active", deletedAt: null, version: 1 },
+    ],
+  });
+  const mixed = await loaded.main({
+    action: "permanentlyDeleteCases",
+    ids: ["trash", "active"],
+    expectedVersions: { trash: 2, active: 1 },
+    clientMutationId: "purge-mixed",
+  });
+  assert.equal(mixed.code, "CASE_NOT_IN_TRASH");
+  assert.equal(loaded.collections.wine_packaging.length, 2);
+  assert.equal(loaded.collections.case_admin_purge_jobs.length, 0);
+
+  const conflict = await loaded.main({
+    action: "permanentlyDeleteCases",
+    ids: ["trash"],
+    expectedVersions: { trash: 1 },
+    clientMutationId: "purge-conflict",
+  });
+  assert.equal(conflict.code, "VERSION_CONFLICT");
+  assert.equal(loaded.collections.wine_packaging.length, 2);
+});
+
+await test("permanent delete never removes files outside approved case namespaces", async () => {
+  const uid = "web-admin-1";
+  const allowed = "cloud://env/wine-packaging/cases/case_902.jpg";
+  const external = "cloud://env/customer-uploads/invoice.jpg";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    cases: [{
+      _id: "trash-path-whitelist",
+      title: "路径白名单",
+      caseId: "case_902",
+      coverImage: allowed,
+      galleryImages: [allowed, external],
+      deletedAt: "2026-08-01",
+      version: 2,
+    }],
+  });
+  const result = await loaded.main({
+    action: "permanentlyDeleteCases",
+    ids: ["trash-path-whitelist"],
+    expectedVersions: { "trash-path-whitelist": 2 },
+    clientMutationId: "purge-path-whitelist",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.deletedFileCount, 1);
+  assert.equal(result.retainedReferencedCount, 1);
+  assert.equal(result.pendingFileCount, 0);
+  assert.deepEqual(loaded.deletedFiles, [allowed]);
+  assert.equal(loaded.deletedFiles.includes(external), false);
+});
+
+await test("failed purge cleanup remains retryable without recreating the deleted case", async () => {
+  const uid = "web-admin-1";
+  const fileID = "cloud://env/wine-packaging/admin-web/old/batch/retry.jpg";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    deleteFileFailureAt: 1,
+    cases: [{
+      _id: "trash-retry",
+      title: "待重试",
+      caseId: "case_009",
+      coverImage: fileID,
+      deletedAt: "2026-08-01",
+      version: 4,
+    }],
+  });
+  const first = await loaded.main({
+    action: "permanentlyDeleteCases",
+    ids: ["trash-retry"],
+    expectedVersions: { "trash-retry": 4 },
+    clientMutationId: "purge-retry",
+  });
+  assert.equal(first.ok, true);
+  assert.equal(first.status, "cleanup_release_pending");
+  assert.equal(first.pendingFileCount, 1);
+  assert.equal(first.deletedFileCount, 0);
+  assert.deepEqual(loaded.deletedFiles, []);
+  assert.equal(loaded.collections.wine_packaging.length, 0);
+  const heldGuard = loaded.collections.case_admin_purge_jobs.find(
+    (item) => item._id === "purge_guard_current"
+  );
+  assert.equal(heldGuard.status, "active");
+  heldGuard.leaseExpiresAt = "2000-01-01T00:00:00.000Z";
+  const retried = await loaded.main({
+    action: "retryPurgeCleanup",
+    jobId: first.cleanupJobId,
+  });
+  assert.equal(retried.ok, true);
+  assert.equal(retried.pendingFileCount, 0);
+  assert.equal(retried.deletedFileCount, 1);
+  assert.deepEqual(loaded.deletedFiles, [fileID]);
+});
+
+await test("the same purge job cannot run two cleanup attempts concurrently", async () => {
+  const uid = "web-admin-1";
+  const jobId = `purge_${"c".repeat(40)}`;
+  const fileID = "cloud://env/wine-packaging/admin-web/old/batch/concurrent.jpg";
+  let signalDeleteStarted;
+  const deleteStarted = new Promise((resolveStarted) => {
+    signalDeleteStarted = resolveStarted;
+  });
+  let unblockDelete;
+  const deleteBlocked = new Promise((resolveBlocked) => {
+    unblockDelete = resolveBlocked;
+  });
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    purgeJobs: [{
+      _id: jobId,
+      actor: { type: "cloudbase_uid", id: uid },
+      deletedCaseCount: 1,
+      candidateFileIds: [fileID],
+      pendingFileIds: [fileID],
+      deletedFileIds: [],
+      retainedReferencedFileIds: [],
+      status: "cleanup_pending",
+    }],
+    async deleteFileHook({ callCount }) {
+      if (callCount !== 1) return;
+      signalDeleteStarted();
+      await deleteBlocked;
+    },
+  });
+
+  const firstAttempt = loaded.main({
+    action: "retryPurgeCleanup",
+    jobId,
+  });
+  await deleteStarted;
+  const concurrentAttempt = await loaded.main({
+    action: "retryPurgeCleanup",
+    jobId,
+  });
+  assert.equal(concurrentAttempt.ok, false);
+  assert.equal(concurrentAttempt.code, "PURGE_CLEANUP_BUSY");
+  assert.deepEqual(loaded.deletedFiles, []);
+
+  unblockDelete();
+  const completed = await firstAttempt;
+  assert.equal(completed.ok, true);
+  assert.equal(completed.pendingFileCount, 0);
+  assert.deepEqual(loaded.deletedFiles, [fileID]);
+  const guard = loaded.collections.case_admin_purge_jobs.find(
+    (item) => item._id === "purge_guard_current"
+  );
+  assert.equal(guard.status, "idle");
+  assert.equal(guard.activeRunToken, "");
+});
+
+await test("a failed token-matched guard release stays pending and recovers after lease expiry", async () => {
+  const uid = "web-admin-1";
+  const jobId = `purge_${"d".repeat(40)}`;
+  const fileID = "cloud://env/wine-packaging/admin-web/old/batch/release.jpg";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    transactionFailureAt: 3,
+    purgeJobs: [{
+      _id: jobId,
+      actor: { type: "cloudbase_uid", id: uid },
+      deletedCaseCount: 1,
+      candidateFileIds: [fileID],
+      pendingFileIds: [fileID],
+      deletedFileIds: [],
+      retainedReferencedFileIds: [],
+      status: "cleanup_pending",
+    }],
+  });
+
+  const releaseFailed = await loaded.main({
+    action: "retryPurgeCleanup",
+    jobId,
+  });
+  assert.equal(releaseFailed.ok, true);
+  assert.equal(releaseFailed.pendingFileCount, 1);
+  assert.equal(releaseFailed.status, "cleanup_release_pending");
+  assert.equal(releaseFailed.cleanupDeferred, true);
+  assert.equal(releaseFailed.guardReleasePending, true);
+  assert.deepEqual(loaded.deletedFiles, [fileID]);
+  const pendingJob = loaded.collections.case_admin_purge_jobs.find(
+    (item) => item._id === jobId
+  );
+  assert.equal(pendingJob.status, "cleanup_release_pending");
+  assert.equal(pendingJob.guardReleasePending, true);
+  const guard = loaded.collections.case_admin_purge_jobs.find(
+    (item) => item._id === "purge_guard_current"
+  );
+  assert.equal(guard.status, "active");
+  assert.equal(typeof guard.activeRunToken, "string");
+  assert.equal(guard.activeRunToken.length > 0, true);
+
+  const beforeExpiry = await loaded.main({
+    action: "retryPurgeCleanup",
+    jobId,
+  });
+  assert.equal(beforeExpiry.ok, false);
+  assert.equal(beforeExpiry.code, "PURGE_CLEANUP_BUSY");
+
+  guard.leaseExpiresAt = "2000-01-01T00:00:00.000Z";
+  const recovered = await loaded.main({
+    action: "retryPurgeCleanup",
+    jobId,
+  });
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.pendingFileCount, 0);
+  assert.equal(recovered.status, "completed");
+  assert.deepEqual(loaded.deletedFiles, [fileID]);
+  const releasedGuard = loaded.collections.case_admin_purge_jobs.find(
+    (item) => item._id === "purge_guard_current"
+  );
+  assert.equal(releasedGuard.status, "idle");
+  assert.equal(releasedGuard.activeRunToken, "");
+});
+
+await test("pending purge jobs can be recovered without exposing cloud file ids", async () => {
+  const uid = "web-admin-1";
+  const fileID = "cloud://env/wine-packaging/admin-web/old/batch/lost-response.jpg";
+  const mutationId = "purge-lost-response";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: `${uid},web-admin-2`,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    deleteFileFailureAt: 1,
+    cases: [{
+      _id: "trash-lost-response",
+      title: "响应丢失测试",
+      caseId: "case_812",
+      coverImage: fileID,
+      deletedAt: "2026-08-01",
+      version: 7,
+    }],
+  });
+
+  // Treat this response as lost: recovery only knows the original mutation id.
+  await loaded.main({
+    action: "permanentlyDeleteCases",
+    ids: ["trash-lost-response"],
+    expectedVersions: { "trash-lost-response": 7 },
+    clientMutationId: mutationId,
+  });
+  const recoveredList = await loaded.main({
+    action: "listPendingPurgeJobs",
+    clientMutationId: mutationId,
+  });
+  assert.equal(recoveredList.ok, true);
+  assert.equal(recoveredList.items.length, 1);
+  const recoveredJob = recoveredList.items[0];
+  assert.match(recoveredJob.cleanupJobId, /^purge_[a-f0-9]{40}$/);
+  assert.equal(recoveredJob.pendingFileCount, 1);
+  assert.equal(recoveredJob.caseSummaries[0].title, "响应丢失测试");
+  assert.equal(JSON.stringify(recoveredJob).includes("cloud://"), false);
+  for (const key of [
+    "candidateFileIds",
+    "pendingFileIds",
+    "deletedFileIds",
+    "retainedReferencedFileIds",
+  ]) {
+    assert.equal(Object.prototype.hasOwnProperty.call(recoveredJob, key), false);
+  }
+
+  const otherAdmin = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid: "web-admin-2", openId: "", isAnonymous: false },
+    adminUids: `${uid},web-admin-2`,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    purgeJobs: loaded.collections.case_admin_purge_jobs,
+  });
+  const sharedRecoveryList = await otherAdmin.main({
+    action: "listPendingPurgeJobs",
+  });
+  assert.equal(sharedRecoveryList.ok, true);
+  assert.equal(sharedRecoveryList.items.length, 1);
+  assert.equal(sharedRecoveryList.items[0].cleanupJobId, recoveredJob.cleanupJobId);
+  assert.equal(JSON.stringify(sharedRecoveryList.items[0]).includes("cloud://"), false);
+
+  loaded.collections.case_admin_purge_jobs.find(
+    (item) => item._id === "purge_guard_current"
+  ).leaseExpiresAt = "2000-01-01T00:00:00.000Z";
+  const retried = await loaded.main({
+    action: "retryPurgeCleanup",
+    jobId: recoveredJob.cleanupJobId,
+  });
+  assert.equal(retried.ok, true);
+  assert.equal(retried.pendingFileCount, 0);
+  const completedList = await loaded.main({
+    action: "listPendingPurgeJobs",
+    clientMutationId: mutationId,
+  });
+  assert.equal(completedList.ok, true);
+  assert.equal(completedList.items.length, 0);
+});
+
+await test("stable cursor reference scans do not skip a shared file when rows disappear between pages", async () => {
+  const uid = "web-admin-1";
+  const shared = "cloud://env/wine-packaging/admin-web/old/batch/cursor-shared.jpg";
+  const activeCases = Array.from({ length: 101 }, (_, index) => ({
+    _id: `active-${String(index).padStart(3, "0")}`,
+    title: `活动案例 ${index}`,
+    coverImage: index === 100 ? shared : `cloud://env/active-${index}.jpg`,
+    galleryImages: index === 100 ? [shared] : [`cloud://env/active-${index}.jpg`],
+    version: 1,
+  }));
+  let mutated = false;
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    cases: [{
+      _id: "trash-cursor",
+      title: "游标删除",
+      caseId: "case_700",
+      coverImage: shared,
+      galleryImages: [shared],
+      deletedAt: "2026-08-01",
+      version: 2,
+    }, ...activeCases],
+    queryGetHook({ collectionName, condition, records, data }) {
+      if (
+        !mutated
+        && collectionName === "wine_packaging"
+        && !condition._id
+        && data.length === 100
+      ) {
+        mutated = true;
+        const index = records.findIndex((item) => item._id === "active-000");
+        records.splice(index, 1);
+      }
+    },
+  });
+  const result = await loaded.main({
+    action: "permanentlyDeleteCases",
+    ids: ["trash-cursor"],
+    expectedVersions: { "trash-cursor": 2 },
+    clientMutationId: "purge-cursor",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.retainedReferencedCount, 1);
+  assert.equal(result.deletedFileCount, 0);
+  assert.deepEqual(loaded.deletedFiles, []);
+  assert.equal(mutated, true);
+});
+
+await test("purge performs a guarded second reference scan immediately before storage deletion", async () => {
+  const uid = "web-admin-1";
+  const lateReference = "cloud://env/wine-packaging/admin-web/old/batch/late-ref.jpg";
+  let inserted = false;
+  let caseScanCount = 0;
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    cases: [{
+      _id: "trash-late-ref",
+      title: "二次核验",
+      caseId: "case_701",
+      coverImage: lateReference,
+      galleryImages: [lateReference],
+      deletedAt: "2026-08-01",
+      version: 5,
+    }],
+    queryGetHook({ collectionName, condition, records }) {
+      if (collectionName !== "wine_packaging" || condition._id) return;
+      caseScanCount += 1;
+      if (caseScanCount === 1) {
+        inserted = true;
+        records.push({
+          _id: "late-reference",
+          title: "后出现的引用",
+          coverImage: lateReference,
+          galleryImages: [lateReference],
+          version: 1,
+        });
+      }
+    },
+  });
+  const result = await loaded.main({
+    action: "permanentlyDeleteCases",
+    ids: ["trash-late-ref"],
+    expectedVersions: { "trash-late-ref": 5 },
+    clientMutationId: "purge-late-ref",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(inserted, true);
+  assert.equal(caseScanCount >= 2, true);
+  assert.equal(result.retainedReferencedCount, 1);
+  assert.deepEqual(loaded.deletedFiles, []);
+});
+
+await test("purge fences every storage batch when lease ownership is lost", async () => {
+  const uid = "web-admin-1";
+  const jobId = `purge_${"f".repeat(40)}`;
+  const fileID = "cloud://env/wine-packaging/admin-web/old/batch/fenced.jpg";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    purgeJobs: [{
+      _id: jobId,
+      actor: { type: "cloudbase_uid", id: uid },
+      deletedCaseCount: 1,
+      candidateFileIds: [fileID],
+      pendingFileIds: [fileID],
+      deletedFileIds: [],
+      retainedReferencedFileIds: [],
+      status: "cleanup_pending",
+    }],
+    transactionHook({ transactionCount, collections }) {
+      if (transactionCount !== 2) return;
+      const guard = collections.case_admin_purge_jobs.find(
+        (item) => item._id === "purge_guard_current"
+      );
+      guard.activeRunToken = "new-owner-token";
+      guard.leaseExpiresAt = "2099-01-01T00:00:00.000Z";
+    },
+  });
+  const result = await loaded.main({ action: "retryPurgeCleanup", jobId });
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "cleanup_release_pending");
+  assert.equal(result.pendingFileCount >= 1, true);
+  assert.deepEqual(loaded.deletedFiles, []);
+});
+
+await test("purge delete hard timeout keeps its long lease active and returns pending", async () => {
+  const uid = "web-admin-1";
+  const jobId = `purge_${"7".repeat(40)}`;
+  const fileID = "cloud://env/wine-packaging/admin-web/old/batch/timeout.jpg";
+  let leaseRemainingMs = 0;
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    immediatePurgeDeleteTimeout: true,
+    purgeJobs: [{
+      _id: jobId,
+      actor: { type: "cloudbase_uid", id: uid },
+      deletedCaseCount: 1,
+      candidateFileIds: [fileID],
+      pendingFileIds: [fileID],
+      deletedFileIds: [],
+      retainedReferencedFileIds: [],
+      status: "cleanup_pending",
+    }],
+    async deleteFileHook({ collections }) {
+      const guard = collections.case_admin_purge_jobs.find(
+        (item) => item._id === "purge_guard_current"
+      );
+      leaseRemainingMs = Date.parse(guard.leaseExpiresAt) - Date.now();
+      await new Promise(() => {});
+    },
+  });
+  const result = await loaded.main({ action: "retryPurgeCleanup", jobId });
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "cleanup_release_pending");
+  assert.equal(result.pendingFileCount, 1);
+  assert.equal(result.cleanupDeferred, true);
+  assert.equal(leaseRemainingMs > 29 * 60 * 1000, true);
+  assert.deepEqual(loaded.deletedFiles, []);
+  const guard = loaded.collections.case_admin_purge_jobs.find(
+    (item) => item._id === "purge_guard_current"
+  );
+  assert.equal(guard.status, "active");
+  assert.equal(typeof guard.activeRunToken, "string");
+  assert.equal(guard.activeRunToken.length > 0, true);
+});
+
+await test("purge keeps its guard when storage returns an ambiguous response", async () => {
+  const uid = "web-admin-1";
+  const jobId = `purge_${"4".repeat(40)}`;
+  const fileID = "cloud://env/wine-packaging/admin-web/old/batch/ambiguous.jpg";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    purgeJobs: [{
+      _id: jobId,
+      actor: { type: "cloudbase_uid", id: uid },
+      deletedCaseCount: 1,
+      candidateFileIds: [fileID],
+      pendingFileIds: [fileID],
+      deletedFileIds: [],
+      retainedReferencedFileIds: [],
+      status: "cleanup_pending",
+    }],
+    deleteFileResponseHook() {
+      return { fileList: [] };
+    },
+  });
+  const result = await loaded.main({ action: "retryPurgeCleanup", jobId });
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "cleanup_release_pending");
+  assert.equal(result.deletedFileCount, 0);
+  assert.equal(result.pendingFileCount, 1);
+  assert.deepEqual(loaded.deletedFiles, []);
+  assert.equal(
+    loaded.collections.case_admin_purge_jobs.find(
+      (item) => item._id === "purge_guard_current"
+    ).status,
+    "active"
+  );
+});
+
+await test("invalid purge lease is fenced and no longer blocks an image update", async () => {
+  const oldImage = "cloud://env/wine-packaging/cases/expired-old.jpg";
+  const nextImage = "cloud://env/wine-packaging/cases/expired-next.jpg";
+  const loaded = loadCaseAdminFunction({
+    purgeJobs: [{
+      _id: "purge_guard_current",
+      status: "active",
+      activeJobId: `purge_${"9".repeat(40)}`,
+      activeRunToken: "invalid-owner",
+      leaseExpiresAt: "not-a-date",
+    }],
+    cases: [{
+      _id: "expired-guard-update",
+      title: "过期锁案例",
+      caseId: "case_903",
+      coverImage: oldImage,
+      galleryImages: [oldImage],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+    }],
+  });
+  const result = await loaded.main({
+    action: "updateCase",
+    id: "expired-guard-update",
+    case: { coverImage: nextImage, galleryImages: [nextImage] },
+  });
+  assert.equal(result.ok, true);
+  const guard = loaded.collections.case_admin_purge_jobs.find(
+    (item) => item._id === "purge_guard_current"
+  );
+  assert.equal(guard.status, "idle");
+  assert.equal(guard.activeRunToken, "");
+});
+
+await test("a missing purge lease can be atomically taken over for recovery", async () => {
+  const uid = "web-admin-1";
+  const jobId = `purge_${"6".repeat(40)}`;
+  const fileID = "cloud://env/wine-packaging/admin-web/old/batch/missing-lease.jpg";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    purgeJobs: [{
+      _id: "purge_guard_current",
+      status: "active",
+      activeJobId: `purge_${"5".repeat(40)}`,
+      activeRunToken: "legacy-owner",
+    }, {
+      _id: jobId,
+      actor: { type: "cloudbase_uid", id: uid },
+      deletedCaseCount: 1,
+      candidateFileIds: [fileID],
+      pendingFileIds: [fileID],
+      deletedFileIds: [],
+      retainedReferencedFileIds: [],
+      status: "cleanup_pending",
+    }],
+  });
+  const result = await loaded.main({ action: "retryPurgeCleanup", jobId });
+  assert.equal(result.ok, true);
+  assert.equal(result.pendingFileCount, 0);
+  assert.deepEqual(loaded.deletedFiles, [fileID]);
+  const guard = loaded.collections.case_admin_purge_jobs.find(
+    (item) => item._id === "purge_guard_current"
+  );
+  assert.equal(guard.status, "idle");
+});
+
+await test("a stale guard without a lease does not block a new permanent delete", async () => {
+  const uid = "web-admin-1";
+  const fileID = "cloud://env/wine-packaging/cases/stale-new-purge.jpg";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    purgeJobs: [{
+      _id: "purge_guard_current",
+      status: "active",
+      activeJobId: `purge_${"3".repeat(40)}`,
+      activeRunToken: "legacy-no-lease",
+    }],
+    cases: [{
+      _id: "trash-stale-guard",
+      title: "旧锁永久删除",
+      caseId: "case_905",
+      coverImage: fileID,
+      deletedAt: "2026-08-01",
+      version: 2,
+    }],
+  });
+  const result = await loaded.main({
+    action: "permanentlyDeleteCases",
+    ids: ["trash-stale-guard"],
+    expectedVersions: { "trash-stale-guard": 2 },
+    clientMutationId: "stale-guard-new-purge",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.pendingFileCount, 0);
+  assert.deepEqual(loaded.deletedFiles, [fileID]);
+});
+
+await test("active purge guard blocks new image references but permits metadata-only edits", async () => {
+  const uid = "web-admin-1";
+  const existingSource =
+    `cloud://env/wine-packaging/admin-web/${uid}/existing/source.jpg`;
+  const existingVariants = buildVariantSet(existingSource);
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    purgeJobs: [{
+      _id: "purge_guard_current",
+      status: "active",
+      activeJobId: `purge_${"a".repeat(40)}`,
+      activeRunToken: "active-owner",
+      leaseExpiresAt: "2099-01-01T00:00:00.000Z",
+    }],
+    cases: [{
+      _id: "editable",
+      title: "原标题",
+      caseId: "case_702",
+      packageTypes: { values: ["礼盒"] },
+      ...existingVariants,
+      isVisible: false,
+      version: 3,
+    }],
+  });
+  const createSource =
+    `cloud://env/wine-packaging/admin-web/${uid}/new-batch/source.jpg`;
+  const blockedCreate = await loaded.main({
+    action: "createCase",
+    clientMutationId: "blocked-create",
+    uploadBatchId: "new-batch",
+    case: {
+      title: "不应新增引用",
+      packageTypes: [],
+      ...buildVariantSet(createSource),
+      isVisible: false,
+    },
+  });
+  assert.equal(blockedCreate.code, "PURGE_CLEANUP_IN_PROGRESS");
+
+  const metadataUpdate = await loaded.main({
+    action: "updateCase",
+    id: "editable",
+    expectedVersion: 3,
+    case: { title: "仅改标题" },
+  });
+  assert.equal(metadataUpdate.ok, true);
+  assert.equal(loaded.collections.wine_packaging[0].title, "仅改标题");
+});
+
+await test("a cleanup retry fails closed when another purge owns the global guard", async () => {
+  const uid = "web-admin-1";
+  const targetJobId = `purge_${"b".repeat(40)}`;
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    purgeJobs: [{
+      _id: "purge_guard_current",
+      status: "active",
+      activeJobId: `purge_${"a".repeat(40)}`,
+      activeRunToken: "other-active-owner",
+      leaseExpiresAt: "2099-01-01T00:00:00.000Z",
+    }, {
+      _id: targetJobId,
+      actor: { type: "cloudbase_uid", id: uid },
+      deletedCaseCount: 1,
+      candidateFileIds: ["cloud://env/wine-packaging/admin-web/old/batch/pending.jpg"],
+      pendingFileIds: ["cloud://env/wine-packaging/admin-web/old/batch/pending.jpg"],
+      deletedFileIds: [],
+      retainedReferencedFileIds: [],
+      status: "cleanup_pending",
+    }],
+  });
+  const result = await loaded.main({
+    action: "retryPurgeCleanup",
+    jobId: targetJobId,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "PURGE_CLEANUP_BUSY");
+  assert.deepEqual(loaded.deletedFiles, []);
+  assert.equal(
+    loaded.collections.case_admin_purge_jobs.find(
+      (item) => item._id === "purge_guard_current"
+    ).activeJobId,
+    `purge_${"a".repeat(40)}`
+  );
+});
+
+await test("new feature actions honor web-only access, write gate and their independent switches", async () => {
+  const uid = "web-admin-1";
+  const disabled = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+  });
+  assert.equal((await disabled.main({ action: "listAdminActivity" })).code, "ACTIVITY_SYNC_DISABLED");
+  assert.equal((await disabled.main({
+    action: "permanentlyDeleteCases",
+    ids: ["x"],
+    clientMutationId: "disabled",
+  })).code, "PERMANENT_DELETE_DISABLED");
+  assert.equal((await disabled.main({
+    action: "listPendingPurgeJobs",
+  })).ok, true);
+
+  const readOnly = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    activitySyncEnabled: "true",
+    permanentDeleteEnabled: "true",
+  });
+  assert.equal((await readOnly.main({
+    action: "registerUploadItems",
+    items: [],
+  })).code, "WEB_WRITE_DISABLED");
+  assert.equal((await readOnly.main({
+    action: "retryPurgeCleanup",
+    jobId: `purge_${"a".repeat(40)}`,
+  })).code, "PURGE_JOB_NOT_FOUND");
+
+  const mini = loadCaseAdminFunction({
+    openid: "admin_openid",
+    permanentDeleteEnabled: "true",
+  });
+  assert.equal((await mini.main({
+    action: "permanentlyDeleteCases",
+    ids: ["x"],
+    clientMutationId: "mini-purge",
+  })).code, "WEB_ADMIN_REQUIRED");
+  assert.equal((await mini.main({
+    action: "listPendingPurgeJobs",
+  })).code, "WEB_ADMIN_REQUIRED");
+});
+
+await test("committed purge recovery remains available while new purge is disabled", async () => {
+  const uid = "web-admin-1";
+  const jobId = `purge_${"8".repeat(40)}`;
+  const fileID = "cloud://env/wine-packaging/admin-web/old/batch/recover-disabled.jpg";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    purgeJobs: [{
+      _id: jobId,
+      clientMutationId: "recover-disabled",
+      actor: { type: "cloudbase_uid", id: uid },
+      deletedCaseCount: 1,
+      candidateFileIds: [fileID],
+      pendingFileIds: [fileID],
+      deletedFileIds: [],
+      retainedReferencedFileIds: [],
+      status: "cleanup_pending",
+    }],
+  });
+  const pending = await loaded.main({ action: "listPendingPurgeJobs" });
+  assert.equal(pending.ok, true);
+  assert.equal(pending.items.length, 1);
+  const retried = await loaded.main({ action: "retryPurgeCleanup", jobId });
+  assert.equal(retried.ok, true);
+  assert.equal(retried.pendingFileCount, 0);
+  assert.deepEqual(loaded.deletedFiles, [fileID]);
+  assert.equal((await loaded.main({
+    action: "permanentlyDeleteCases",
+    ids: ["new-purge-still-disabled"],
+    clientMutationId: "new-purge-still-disabled",
+  })).code, "WEB_WRITE_DISABLED");
 });

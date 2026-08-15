@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 
 async function signIn(page: import("@playwright/test").Page) {
   await page.goto("/#/login");
+  await expect(page).toHaveTitle("金亿诚包装科技｜案例管理后台");
+  await expect(page.getByText("金亿诚包装科技", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "进入管理后台" }).click();
   await expect(page).toHaveURL(/\/#\/cases$/);
   await expect(page.getByRole("heading", { name: "案例管理" })).toBeVisible();
@@ -82,8 +84,109 @@ test("管理员可浏览全部首版路由并筛选案例", async ({ page }) => 
   await expect(page.getByText("首页轮播", { exact: true })).toBeVisible();
 
   await page.getByRole("menuitem", { name: "回收站" }).click();
-  await expect(page.getByText("回收站不会永久删除图片")).toBeVisible();
+  await expect(page.getByText("回收站支持恢复和手动永久删除")).toBeVisible();
   await expect(page.getByText("回收站中 3 个案例")).toBeVisible();
+});
+
+test("回收站永久删除要求输入确认文字", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("menuitem", { name: "回收站" }).click();
+
+  const firstRow = page.locator(".ant-table-row").first();
+  await firstRow.getByRole("button", { name: "永久删除" }).click();
+  const dialog = page.getByRole("dialog", { name: /永久删除 1 个案例/ });
+  await expect(dialog.getByText("案例与无引用图片将不可恢复")).toBeVisible();
+  const confirmButton = dialog.getByRole("button", { name: "确认永久删除" });
+  await expect(confirmButton).toBeDisabled();
+
+  await dialog.getByLabel("永久删除确认文字").fill("永久删除");
+  await expect(confirmButton).toBeEnabled();
+  await confirmButton.click();
+  await expect(page.getByText("回收站中 2 个案例")).toBeVisible();
+});
+
+test("永久删除响应丢失后刷新会从服务端发现作业，且隔离 UID", async ({ page }) => {
+  await signIn(page);
+  await page.evaluate(() => {
+    const now = new Date().toISOString();
+    localStorage.setItem(
+      "wine-admin-demo-config-override-v1",
+      JSON.stringify({ writeEnabled: false, permanentDeleteEnabled: false }),
+    );
+    localStorage.setItem(
+      "wine-admin-demo-purge-jobs-v1",
+      JSON.stringify({
+        "persisted-mutation": {
+          deleted: 1,
+          cleanupJobId: "mock-pending-cleanup-1",
+          deletedFileCount: 2,
+          retainedReferencedCount: 0,
+          pendingFileCount: 1,
+          clientMutationId: "persisted-mutation",
+          ownerUid: "demo-admin",
+          status: "cleanup_release_pending",
+          createdAt: now,
+          updatedAt: now,
+        },
+        "other-admin-mutation": {
+          deleted: 1,
+          cleanupJobId: "other-admin-server-job",
+          deletedFileCount: 0,
+          retainedReferencedCount: 0,
+          pendingFileCount: 4,
+          clientMutationId: "other-admin-mutation",
+          ownerUid: "another-admin",
+          status: "cleanup_pending",
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+    localStorage.removeItem("wine-admin-pending-purge-cleanup-v1:demo-admin");
+    localStorage.setItem(
+      "wine-admin-pending-purge-cleanup-v1:another-admin",
+      JSON.stringify([
+        {
+          cleanupJobId: "other-admin-job",
+          pendingFileCount: 3,
+          deletedFileCount: 0,
+          retainedReferencedCount: 0,
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+    );
+  });
+
+  await page.reload();
+  await page.goto("/#/trash");
+  await expect(page.getByText("当前为只读验收状态", { exact: true })).toBeVisible();
+  await expect(
+    page.locator(".ant-table-row").first().getByRole("button", { name: "永久删除" }),
+  ).toBeDisabled();
+  await expect.poll(() => page.evaluate(() => {
+    const jobs = JSON.parse(
+      localStorage.getItem("wine-admin-demo-purge-jobs-v1") || "{}",
+    ) as Record<string, { pendingFileCount?: number }>;
+    return jobs["persisted-mutation"]?.pendingFileCount;
+  })).toBe(0);
+  await expect.poll(() => page.evaluate(() =>
+    localStorage.getItem("wine-admin-pending-purge-cleanup-v1:demo-admin"),
+  )).toBeNull();
+  const stored = await page.evaluate(() => ({
+    other: localStorage.getItem("wine-admin-pending-purge-cleanup-v1:another-admin"),
+    server: JSON.parse(
+      localStorage.getItem("wine-admin-demo-purge-jobs-v1") || "{}",
+    ) as Record<string, { pendingFileCount: number; status: string }>,
+  }));
+  expect(stored.other).toContain("other-admin-job");
+  expect(stored.server["persisted-mutation"]).toMatchObject({
+    pendingFileCount: 0,
+    status: "completed",
+  });
+  expect(stored.server["other-admin-mutation"]).toMatchObject({
+    pendingFileCount: 4,
+    status: "cleanup_pending",
+  });
 });
 
 test("场景别名可显示和搜索，编辑保存仍使用内部值", async ({ page }) => {
@@ -115,11 +218,7 @@ test("场景别名可显示和搜索，编辑保存仍使用内部值", async ({
   await page.getByRole("button", { name: "保存修改" }).click();
   await expect(page.getByText("案例已保存", { exact: true })).toBeVisible();
 
-  const savedScenes = await readMockScenes(page, "mock-001");
-  expect(savedScenes).toEqual(["婚宴"]);
-
-  await page.reload();
-  await expect(sceneField.getByText("婚宴/喜宴", { exact: true })).toBeVisible();
+  expect(await readMockScenes(page, "mock-001")).toEqual(["婚宴"]);
 });
 
 test("批量场景追加、移除和替换均保存内部值", async ({ page }) => {

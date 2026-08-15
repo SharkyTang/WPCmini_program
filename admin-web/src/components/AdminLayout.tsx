@@ -12,6 +12,7 @@ import {
 import { Avatar, Badge, Button, Dropdown, Layout, Menu, Space, Tooltip, Typography } from "antd";
 import { useMemo, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { ADMIN_BRAND_NAME } from "../constants";
 import { useAuth } from "../context/AuthContext";
 import { adminApi } from "../lib/api";
 
@@ -70,7 +71,7 @@ export function AdminLayout() {
           </span>
           {!collapsed ? (
             <span>
-              <strong>酿艺案例库</strong>
+              <strong>{ADMIN_BRAND_NAME}</strong>
               <small>MERCHANT STUDIO</small>
             </span>
           ) : null}
