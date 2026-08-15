@@ -7,6 +7,7 @@ import {
   buildExportRecord,
   buildKeywords,
   createEmptyRecord,
+  getSceneLabel,
   imageSignature,
   isSupportedImageFile,
   isComplete,
@@ -17,7 +18,7 @@ import {
   summarizeRecords,
   toggleMultiValue,
   validateRecord
-} from "./classifierLogic.mjs?v=20260623-style-crafts";
+} from "./classifierLogic.mjs?v=20260815-scene-labels";
 import {
   AI_STYLE_SESSION_STORAGE_KEY,
   DEFAULT_AI_COST_LIMIT_USD,
@@ -407,10 +408,10 @@ function renderTaxonomyGroups() {
   elements.taxonomyGroups.innerHTML = Object.entries(CLASSIFICATION_CONFIG)
     .map(([field, config]) => {
       const buttons = config.options
-        .map(
-          (option) =>
-            `<button type="button" class="tax-option" data-field="${field}" data-type="${config.type}" data-required="${config.required}" data-value="${option}">${option}</button>`
-        )
+        .map((option) => {
+          const label = field === "scenes" ? getSceneLabel(option) : option;
+          return `<button type="button" class="tax-option" data-field="${escapeHtml(field)}" data-type="${escapeHtml(config.type)}" data-required="${config.required}" data-value="${escapeHtml(option)}">${escapeHtml(label)}</button>`;
+        })
         .join("");
       return `<section class="tax-group" data-group="${field}">
         <h3>${config.label}</h3>

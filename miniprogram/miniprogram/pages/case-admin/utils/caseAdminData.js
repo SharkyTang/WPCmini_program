@@ -1,6 +1,7 @@
 const {
   DEFAULT_FILTERS,
   HOME_SECTION_OPTIONS,
+  getSceneLabel,
   normalizeCaseRecord,
   normalizeValues,
 } = require("../../../utils/caseData");
@@ -63,8 +64,9 @@ function optionValue(option) {
   return typeof option === "object" && option ? option.value : option;
 }
 
-function optionLabel(option) {
-  return typeof option === "object" && option ? option.label || option.value : option;
+function optionLabel(option, field) {
+  const label = typeof option === "object" && option ? option.label || option.value : option;
+  return field === "scenes" ? getSceneLabel(label) : label;
 }
 
 function isCloudFileId(value) {
@@ -120,7 +122,7 @@ function buildCaseAdminOptionViews(form = {}, formOptions = CASE_ADMIN_FORM_OPTI
     const options = formOptions[field] && formOptions[field].options;
     views[field] = (options || []).map((option) => ({
       value: optionValue(option),
-      label: optionLabel(option),
+      label: optionLabel(option, field),
       selected: isCaseAdminOptionSelected(form, field, optionValue(option)),
     }));
     return views;
@@ -265,6 +267,12 @@ function getHomeSectionSummary(caseItem = {}) {
     .join(" / ");
 }
 
+function getSceneSummary(caseItem = {}) {
+  return normalizeStringList(caseItem.scenes)
+    .map(getSceneLabel)
+    .join(" / ");
+}
+
 function normalizeCaseAdminItem(record = {}) {
   const item = normalizeCaseRecord(record || {});
   const visible = item.isVisible !== false;
@@ -274,6 +282,7 @@ function normalizeCaseAdminItem(record = {}) {
     visibilityStatus: visible ? "visible" : "hidden",
     visibilityLabel: visible ? "显示中" : "已隐藏",
     tagSummary: getTagSummary(item),
+    sceneSummary: getSceneSummary(item),
     homeSectionSummary: getHomeSectionSummary(item),
     pinnedLabel: item.isPinned ? "默认排序置顶" : "",
     source: "case",
@@ -340,6 +349,8 @@ module.exports = {
   buildCaseKeywords,
   createEmptyCaseForm,
   getHomeSectionSummary,
+  getSceneLabel,
+  getSceneSummary,
   isCloudFileId,
   isCaseAdminOptionSelected,
   normalizeCaseAdminForm,

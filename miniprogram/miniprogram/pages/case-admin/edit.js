@@ -5,6 +5,7 @@ const {
   buildCaseAdminPayload,
   createEmptyCaseForm,
   CASE_ADMIN_GALLERY_MAX,
+  getSceneLabel = (value) => value || "",
   validateCaseAdminForm,
 } = require("./utils/caseAdminData");
 const {
@@ -27,7 +28,7 @@ function buildProductNotificationDraft(form = {}) {
   const summary = [
     ...(form.packageTypes || []).slice(0, 2),
     ...(form.styles || []).slice(0, 1),
-    ...(form.scenes || []).slice(0, 1),
+    ...(form.scenes || []).slice(0, 1).map(getSceneLabel),
   ].filter(Boolean).join(" / ");
   return {
     title: `新品案例上新｜${String(form.title || "").trim() || "新案例"}`,

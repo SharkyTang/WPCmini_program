@@ -22,7 +22,9 @@ const {
   normalizeCaseRecord,
   filterCases,
   buildFallbackBanners,
+  getSceneLabel,
   HOME_SECTION_VALUES,
+  SCENE_VALUES,
 } = sandbox.module.exports;
 
 function test(name, fn) {
@@ -70,6 +72,43 @@ test("normalizes CloudBase CMS case records into display-ready fields", () => {
   assert.equal(normalized.searchText.includes("国潮"), false);
   assert.equal(normalized.searchText.includes("烫金"), false);
   assert.equal(normalized.tags.includes("烫金"), false);
+});
+
+test("keeps scene values stable while exposing the complete ordered label catalog", () => {
+  assert.deepEqual(plain(SCENE_VALUES), [
+    "婚宴",
+    "百日/满月",
+    "生日宴",
+    "寿宴",
+    "乔迁宴",
+    "送礼",
+    "商务招待",
+    "节庆礼赠",
+    "企业纪念",
+    "商超陈列",
+    "电商展示",
+  ]);
+  assert.equal(getSceneLabel("婚宴"), "婚宴/喜宴");
+  assert.equal(getSceneLabel("送礼"), "送礼");
+});
+
+test("indexes the wedding display alias without rewriting legacy scene data", () => {
+  const weddingCase = normalizeCaseRecord({
+    _id: "wedding",
+    title: "婚庆礼盒",
+    scenes: { values: ["婚宴"] },
+    isVisible: true,
+  });
+
+  assert.deepEqual(plain(weddingCase.scenes), ["婚宴"]);
+  assert.deepEqual(
+    plain(filterCases([weddingCase], { query: "喜宴" }).map((item) => item.id)),
+    ["wedding"]
+  );
+  assert.deepEqual(
+    plain(filterCases([weddingCase], { query: "婚宴/喜宴" }).map((item) => item.id)),
+    ["wedding"]
+  );
 });
 
 test("filters visible cases by text, single-value fields, and multi-value fields", () => {

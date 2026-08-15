@@ -54,6 +54,7 @@
         <view wx:else class="case-placeholder">暂无图片</view>
         <view class="case-title">{{item.title}}</view>
         <view class="case-tags">{{item.tagSummary}}</view>
+        <view wx:if="{{item.sceneSummary}}" class="case-tags">场景 · {{item.sceneSummary}}</view>
       </view>
     </view>
 

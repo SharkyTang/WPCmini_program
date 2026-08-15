@@ -24,12 +24,28 @@ const HOME_DISPLAY_LABELS = {
   popular: "热门产品",
   latest: "最新产品",
 };
+const SCENE_VALUES = [
+  "婚宴",
+  "百日/满月",
+  "生日宴",
+  "寿宴",
+  "乔迁宴",
+  "送礼",
+  "商务招待",
+  "节庆礼赠",
+  "企业纪念",
+  "商超陈列",
+  "电商展示",
+];
+const SCENE_LABELS = {
+  "婚宴": "婚宴/喜宴",
+};
 const CASE_ADMIN_OPTIONS = {
   wineType: ["白酒"],
   packageTypes: ["整套包装", "瓶标", "瓶子", "礼盒", "桶盒", "卡盒", "手提袋", "外箱"],
   styles: ["轻奢", "国风", "新中式", "复古", "简约", "商务", "时尚", "喜庆"],
   priceLevel: ["基础款", "品质款", "高端款", "珍藏款"],
-  scenes: ["婚宴", "送礼", "商务招待", "节庆礼赠", "商超陈列", "电商展示", "企业纪念"],
+  scenes: SCENE_VALUES,
   statuses: ["热门产品", "最新产品"],
   homeSections: [
     { value: "banner", label: "首页轮播" },
@@ -114,6 +130,11 @@ const ALLOWED_CASE_FIELDS = [
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function getSceneLabel(value) {
+  const normalizedValue = trimText(value);
+  return SCENE_LABELS[normalizedValue] || normalizedValue;
 }
 
 function getAdminOpenidsFromEnv(value) {
@@ -585,6 +606,7 @@ function sanitizeCasePayload(input = {}, options = {}) {
 }
 
 function buildCaseSearchText(item = {}) {
+  const scenes = normalizeValues(item.scenes);
   return [
     item.title,
     item.caseId,
@@ -593,7 +615,8 @@ function buildCaseSearchText(item = {}) {
     item.notes,
     ...normalizeValues(item.packageTypes),
     ...normalizeValues(item.styles),
-    ...normalizeValues(item.scenes),
+    ...scenes,
+    ...scenes.map((scene) => getSceneLabel(scene)),
     ...normalizeValues(item.statuses),
     ...normalizeValues(item.keywords),
   ]
@@ -1292,6 +1315,7 @@ module.exports = {
   generateSequentialCaseId,
   getCloudFilePath,
   getEnvList,
+  getSceneLabel,
   getHomeSectionOrder,
   getActivatedHomepageSlots,
   getActiveHomepageSlots,

@@ -1,8 +1,10 @@
+const caseData = require("../../utils/caseData");
 const {
   DEFAULT_FILTERS,
   filterCases,
   selectedFilterCount,
-} = require("../../utils/caseData");
+} = caseData;
+const getSceneLabel = caseData.getSceneLabel || ((value) => value || "");
 const { attachCaseImageUrls, fetchVisibleCases, refreshImageUrl } = require("../../utils/cloudData");
 const {
   fetchCatalogImageUrls,
@@ -131,6 +133,7 @@ function createFilters() {
     selectedValues: [],
     optionItems: filter.options.map((value) => ({
       value,
+      label: filter.key === "scenes" ? getSceneLabel(value) : value,
       selected: false,
     })),
   }));
@@ -153,6 +156,7 @@ function syncOptionItems(filter) {
     ...filter,
     optionItems: filter.options.map((value) => ({
       value,
+      label: filter.key === "scenes" ? getSceneLabel(value) : value,
       selected: filter.selectedValues.includes(value),
     })),
   };
@@ -189,7 +193,7 @@ function buildSelectedPills(filters, selectedSort) {
         id: `${filter.key}:${value}`,
         key: filter.key,
         value,
-        label: value,
+        label: filter.key === "scenes" ? getSceneLabel(value) : value,
         title: filter.title,
       });
     });
@@ -368,12 +372,15 @@ function buildActivePanel(filters, activeNavKey, selectedSort, focusedFilterValu
   }
   const activeFilter = filters.find((filter) => filter.key === activeNavKey) || filters[0];
   const focusedTitle = resolveFocusedValue(activeFilter, focusedFilterValue);
+  const displayFocusedTitle = activeFilter.key === "scenes"
+    ? getSceneLabel(focusedTitle)
+    : focusedTitle;
   const showPackageNote = activeFilter.key === "packageTypes" && focusedTitle === "整套包装";
   const selectedPackageSubtitle = showPackageNote ? `(${PANEL_SUBTITLES.packageTypes})` : "";
 
   return {
     ...activeFilter,
-    displayTitle: focusedTitle || activeFilter.title,
+    displayTitle: displayFocusedTitle || activeFilter.title,
     showPackageNote,
     displaySubtitle: focusedTitle
       ? activeFilter.key === "packageTypes"
@@ -381,6 +388,14 @@ function buildActivePanel(filters, activeNavKey, selectedSort, focusedFilterValu
         : PANEL_SUBTITLES[activeFilter.key] || `按${activeFilter.title}查看产品与案例`
       : `按${activeFilter.title}查看产品与案例`,
   };
+}
+
+function buildEmptyMessage(activePanel, query) {
+  const keyword = String(query || "").trim();
+  if (keyword) return `没有找到与“${keyword}”匹配的案例，换个关键词试试`;
+  const displayTitle = activePanel && activePanel.displayTitle;
+  if (!displayTitle || activePanel.key === "sort") return "暂无匹配案例，换个条件试试";
+  return `暂无“${displayTitle}”案例，换个条件试试`;
 }
 
 function buildNavItems(filters, selectedSort, expandedNavKey) {
@@ -423,6 +438,7 @@ Page({
     filters: createFilters(),
     navItems: [],
     activePanel: null,
+    emptyMessage: "暂无匹配案例，换个条件试试",
     selectedPills: [],
     selectedCount: 0,
     focusedFilterValue: null,
@@ -727,6 +743,12 @@ Page({
 
   refreshPanels() {
     if (!isPageAlive(this)) return false;
+    const activePanel = buildActivePanel(
+      this.data.filters,
+      this.data.activeNavKey,
+      this.data.selectedSort,
+      this.data.focusedFilterValue
+    );
     return safeSetData(this, {
       selectedPills: buildSelectedPills(
         this.data.filters,
@@ -737,12 +759,8 @@ Page({
         this.data.selectedSort,
         this.data.expandedNavKey
       ),
-      activePanel: buildActivePanel(
-        this.data.filters,
-        this.data.activeNavKey,
-        this.data.selectedSort,
-        this.data.focusedFilterValue
-      ),
+      activePanel,
+      emptyMessage: buildEmptyMessage(activePanel, this.data.query),
     }, {
       stage: "refresh_panels",
     });

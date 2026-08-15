@@ -12,6 +12,7 @@ const logic = require(resolve(
 
 const {
   ALLOWED_CASE_FIELDS,
+  CASE_ADMIN_OPTIONS,
   CASE_GALLERY_MAX,
   HOME_DISPLAY_LIMITS,
   VALID_CASE_ADMIN_ACTIONS,
@@ -505,6 +506,98 @@ test("filters and stably sorts more than the legacy search window", () => {
   assert.equal(filtered.length > 50, true);
   const sorted = sortCaseItemsV2(filtered, { field: "sortOrder", direction: "asc" });
   assert.equal(sorted[0].sortOrder <= sorted.at(-1).sortOrder, true);
+});
+
+test("keeps canonical scene values while wedding search accepts the display label", () => {
+  assert.deepEqual(plain(CASE_ADMIN_OPTIONS.scenes), [
+    "婚宴",
+    "百日/满月",
+    "生日宴",
+    "寿宴",
+    "乔迁宴",
+    "送礼",
+    "商务招待",
+    "节庆礼赠",
+    "企业纪念",
+    "商超陈列",
+    "电商展示",
+  ]);
+
+  const weddingCase = {
+    _id: "wedding_case",
+    caseId: "case_888",
+    title: "红色礼盒",
+    scenes: { values: ["婚宴"] },
+    isVisible: true,
+  };
+  assert.equal(buildCaseSearchText(weddingCase).includes("婚宴/喜宴"), true);
+  assert.deepEqual(
+    plain(filterCaseItemsV2([weddingCase], { keyword: "喜宴" }).map((item) => item._id)),
+    ["wedding_case"]
+  );
+  assert.equal(filterCaseItemsV2([weddingCase], { scenes: ["婚宴"] }).length, 1);
+  assert.equal(filterCaseItemsV2([weddingCase], { scenes: ["婚宴/喜宴"] }).length, 0);
+
+  const sanitized = sanitizeCasePayload(
+    {
+      title: "婚宴礼盒",
+      coverImage: "cloud://cloud1/wedding.jpg",
+      packageTypes: ["礼盒"],
+      scenes: ["婚宴"],
+    },
+    { isCreate: true, defaultCaseId: "case_888" }
+  );
+  assert.equal(sanitized.valid, true);
+  assert.deepEqual(plain(sanitized.data.scenes), { values: ["婚宴"] });
+  assert.equal(sanitized.data.keywords.values.includes("婚宴"), true);
+  assert.equal(sanitized.data.keywords.values.includes("婚宴/喜宴"), false);
+});
+
+test("saves and batch patches the four added scene values", () => {
+  const addedSceneValues = ["百日/满月", "生日宴", "寿宴", "乔迁宴"];
+  const created = sanitizeCasePayload(
+    {
+      title: "新增宴席场景",
+      coverImage: "cloud://cloud1/banquet.jpg",
+      packageTypes: ["礼盒"],
+      scenes: addedSceneValues,
+    },
+    { isCreate: true, defaultCaseId: "case_889" }
+  );
+  assert.equal(created.valid, true);
+  assert.deepEqual(plain(created.data.scenes), { values: addedSceneValues });
+  addedSceneValues.forEach((scene) => {
+    assert.equal(
+      filterCaseItemsV2(
+        [{ _id: `scene_${scene}`, ...created.data, isVisible: true }],
+        { scenes: [scene] }
+      ).length,
+      1
+    );
+  });
+
+  const existing = { scenes: { values: ["送礼", "百日/满月"] } };
+  assert.deepEqual(
+    plain(buildBatchCasePatch(existing, {
+      tags: { scenes: ["生日宴", "寿宴"] },
+      tagMode: "append",
+    }).data.scenes),
+    { values: ["送礼", "百日/满月", "生日宴", "寿宴"] }
+  );
+  assert.deepEqual(
+    plain(buildBatchCasePatch(existing, {
+      tags: { scenes: ["百日/满月"] },
+      tagMode: "remove",
+    }).data.scenes),
+    { values: ["送礼"] }
+  );
+  assert.deepEqual(
+    plain(buildBatchCasePatch(existing, {
+      tags: { scenes: ["乔迁宴"] },
+      tagMode: "replace",
+    }).data.scenes),
+    { values: ["乔迁宴"] }
+  );
 });
 
 test("applies append, remove and replace tag patches without losing other fields", () => {

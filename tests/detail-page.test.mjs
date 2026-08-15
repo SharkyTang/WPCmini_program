@@ -177,6 +177,8 @@ function loadDetailInteractionPage(options = {}) {
         return {
           formatJoined: (values, fallback = "") =>
             (Array.isArray(values) ? values : [values]).filter(Boolean).join("/") || fallback,
+          getSceneLabels: (values) =>
+            (values || []).map((value) => (value === "婚宴" ? "婚宴/喜宴" : value)),
         };
       }
       if (moduleName === "../../utils/customerServiceData") {
@@ -360,6 +362,23 @@ await asyncTest("detail case reads avoid the native loading overlay on success a
   assert.equal(failure.page.data.loading, false);
   assert.match(failure.page.data.errorMessage, /暂时读取不到/);
   assert.deepEqual(JSON.parse(JSON.stringify(failure.nativeLoadingEvents)), []);
+});
+
+await asyncTest("detail shows the wedding label without rewriting the case scene", async () => {
+  const context = loadDetailInteractionPage({
+    caseItem: {
+      id: "wedding_case",
+      title: "婚礼礼盒",
+      packageTypes: ["礼盒"],
+      styles: [],
+      scenes: ["婚宴"],
+    },
+  });
+
+  assert.equal(await context.page.loadCase("wedding_case"), true);
+  const sceneRow = context.page.data.infoRows.find((row) => row.label === "适用场景");
+  assert.equal(sceneRow.value, "婚宴/喜宴");
+  assert.deepEqual(JSON.parse(JSON.stringify(context.page.data.caseItem.scenes)), ["婚宴"]);
 });
 
 await asyncTest("detail case loading ignores stale requests and cleans up on unload", async () => {

@@ -1,3 +1,29 @@
+const SCENE_VALUES = Object.freeze([
+  "婚宴",
+  "百日/满月",
+  "生日宴",
+  "寿宴",
+  "乔迁宴",
+  "送礼",
+  "商务招待",
+  "节庆礼赠",
+  "企业纪念",
+  "商超陈列",
+  "电商展示",
+]);
+
+const SCENE_LABELS = Object.freeze({
+  婚宴: "婚宴/喜宴",
+});
+
+function getSceneLabel(value) {
+  return SCENE_LABELS[value] || value || "";
+}
+
+function getSceneLabels(values) {
+  return normalizeValues(values).map(getSceneLabel);
+}
+
 const DEFAULT_FILTERS = [
   {
     key: "statuses",
@@ -33,7 +59,7 @@ const DEFAULT_FILTERS = [
     key: "scenes",
     title: "使用场景",
     type: "multi",
-    options: ["婚宴", "送礼", "商务招待", "节庆礼赠", "商超陈列", "电商展示", "企业纪念"],
+    options: SCENE_VALUES.slice(),
   },
 ];
 
@@ -198,6 +224,7 @@ function normalizeCaseRecord(record = {}) {
     normalized.priceLevel,
     normalized.notes,
     ...normalized.tags,
+    ...getSceneLabels(normalized.scenes),
   ]
     .filter(Boolean)
     .join(" ")
@@ -289,12 +316,16 @@ function formatJoined(values, fallback = "未选择") {
 
 module.exports = {
   DEFAULT_FILTERS,
+  SCENE_LABELS,
+  SCENE_VALUES,
   HOME_SECTION_OPTIONS,
   HOME_SECTION_VALUES,
   MULTI_FIELDS,
   normalizeValues,
   normalizeDisplayValue,
   normalizeDisplayValues,
+  getSceneLabel,
+  getSceneLabels,
   firstImage,
   normalizeGalleryImages,
   normalizeCaseRecord,

@@ -4,7 +4,9 @@ const {
   fetchCaseDetailPatch,
   isLegacyCatalogFallbackAllowed,
 } = require("../../utils/caseCatalogService");
-const { formatJoined } = require("../../utils/caseData");
+const caseData = require("../../utils/caseData");
+const { formatJoined } = caseData;
+const getSceneLabels = caseData.getSceneLabels || ((values) => values || []);
 const {
   CUSTOMER_SERVICE_SOURCE,
   buildCustomerMessageCard,
@@ -48,7 +50,7 @@ function buildInfoRows(caseItem) {
     },
     {
       label: "适用场景",
-      value: formatJoined(caseItem.scenes),
+      value: formatJoined(getSceneLabels(caseItem.scenes)),
     },
     {
       label: "价位感",

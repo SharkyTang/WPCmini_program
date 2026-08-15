@@ -1,3 +1,5 @@
+const { getSceneLabels } = require("../../../utils/caseData");
+
 const DEFAULT_INQUIRY_STATUS = "new";
 const ADMIN_NOTE_MAX_LENGTH = 500;
 
@@ -146,7 +148,7 @@ function normalizeInquiryAdminItem(item) {
     styleSummary: buildSummary(styles),
     priceLevel: trimText(source.priceLevel),
     scenes,
-    sceneSummary: buildSummary(scenes),
+    sceneSummary: buildSummary(getSceneLabels(scenes)),
     content,
     contentPreview: truncateText(content),
     contact: trimText(source.contact),

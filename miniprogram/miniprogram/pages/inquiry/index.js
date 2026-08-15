@@ -3,6 +3,7 @@ const {
   CONTACT_MAX_LENGTH,
   CONTENT_MAX_LENGTH,
   buildInquiryDraftFromCase,
+  getInquiryOptionLabel,
   getInquiryOptionGroups,
   normalizeInquiryDraft,
   validateInquiryDraft,
@@ -49,9 +50,10 @@ function buildOptionGroups(draft) {
 
     return {
       ...group,
-      options: group.options.map((label) => ({
-        label,
-        selected: selectedValues.includes(label),
+      options: group.options.map((value) => ({
+        value,
+        label: getInquiryOptionLabel(group.key, value),
+        selected: selectedValues.includes(value),
       })),
     };
   });

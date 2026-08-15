@@ -174,7 +174,7 @@ function loadCaseEditPage(options = {}) {
     packageTypes: ["礼盒"],
     styles: ["国风"],
     priceLevel: "",
-    scenes: ["送礼"],
+    scenes: options.scenes || ["送礼"],
     statuses: [],
     homeSections: [],
     sortOrder: "",
@@ -195,6 +195,7 @@ function loadCaseEditPage(options = {}) {
           buildCaseAdminPayload: (form) => form,
           createEmptyCaseForm: () => ({ ...emptyForm }),
           CASE_ADMIN_GALLERY_MAX: 9,
+          getSceneLabel: (value) => (value === "婚宴" ? "婚宴/喜宴" : value),
           validateCaseAdminForm: () => ({ valid: true }),
         };
       }
@@ -579,6 +580,17 @@ await test("new cases expose an opt-in product notification preview", () => {
   assert.equal(wxml.includes("productNotificationDraft.title"), true);
   assert.equal(wxml.includes("productNotificationDraft.content"), true);
   assert.equal(wxml.includes("wx:if=\"{{!isEdit}}\""), true);
+});
+
+await test("product notification preview uses the wedding display label", () => {
+  const { page } = loadCaseEditPage({ scenes: ["婚宴"] });
+
+  page.onPublishNotificationChange({ detail: { value: true } });
+  assert.equal(page.data.form.scenes[0], "婚宴");
+  assert.equal(
+    page.data.productNotificationDraft.content,
+    "新案例已上线：礼盒 / 国风 / 婚宴/喜宴"
+  );
 });
 
 await test("new cases publish a linked announcement only when explicitly enabled", async () => {

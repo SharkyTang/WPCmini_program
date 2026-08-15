@@ -6,11 +6,15 @@ import vm from "node:vm";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-function loadCommonJsModule(modulePath) {
+function loadCommonJsModule(modulePath, dependencies = {}) {
   const source = readFileSync(modulePath, "utf8");
   const sandbox = {
     module: { exports: {} },
     exports: {},
+    require(moduleName) {
+      if (dependencies[moduleName]) return dependencies[moduleName];
+      throw new Error(`Unexpected require: ${moduleName}`);
+    },
   };
   sandbox.exports = sandbox.module.exports;
   vm.runInNewContext(source, sandbox, { filename: modulePath });
@@ -21,7 +25,14 @@ const inquiryAdminDataPath = resolve(
   __dirname,
   "../miniprogram/miniprogram/pages/inquiry-admin/utils/inquiryAdminData.js"
 );
-const inquiryAdminData = loadCommonJsModule(inquiryAdminDataPath);
+const caseDataPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/utils/caseData.js"
+);
+const caseData = loadCommonJsModule(caseDataPath);
+const inquiryAdminData = loadCommonJsModule(inquiryAdminDataPath, {
+  "../../../utils/caseData": caseData,
+});
 
 const {
   ADMIN_NOTE_MAX_LENGTH,
@@ -82,6 +93,13 @@ test("maps inquiry admin status labels", () => {
 test("normalizes inquiry admin keyword", () => {
   assert.equal(normalizeInquiryKeyword("  case_001  "), "case_001");
   assert.equal(normalizeInquiryKeyword(null), "");
+});
+
+test("shows the wedding scene alias without changing the stored inquiry value", () => {
+  const item = normalizeInquiryAdminItem({ scenes: ["婚宴", "生日宴"] });
+
+  assert.deepEqual(plain(item.scenes), ["婚宴", "生日宴"]);
+  assert.equal(item.sceneSummary, "婚宴/喜宴 / 生日宴");
 });
 
 test("keeps legacy and invalid inquiry contact types safe", () => {

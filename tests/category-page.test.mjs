@@ -7,6 +7,7 @@ import vm from "node:vm";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pagePath = resolve(__dirname, "../miniprogram/miniprogram/pages/category/index.js");
 const wxmlPath = resolve(__dirname, "../miniprogram/miniprogram/pages/category/index.wxml");
+const wxssPath = resolve(__dirname, "../miniprogram/miniprogram/pages/category/index.wxss");
 
 function loadCategoryPage(
   cases = [],
@@ -36,7 +37,14 @@ function loadCategoryPage(
               options: ["礼盒"],
               type: "multiple",
             },
+            {
+              key: "scenes",
+              title: "使用场景",
+              options: ["婚宴", "百日/满月", "生日宴", "寿宴", "乔迁宴"],
+              type: "multi",
+            },
           ],
+          getSceneLabel: (value) => (value === "婚宴" ? "婚宴/喜宴" : value),
           filterCases(items, { selectedFilters = {} } = {}) {
             return items
               .filter((item) => item.isVisible)
@@ -217,6 +225,47 @@ await test("category sort options use recent and popular labels", () => {
   assert.equal(markup.includes('data-key="{{item.key}}"'), true);
   assert.equal(markup.includes('data-value="{{item.value}}"'), true);
   assert.equal(markup.includes("<text>{{item.label}}</text>"), true);
+});
+
+await test("category displays scene labels but keeps internal filter values", async () => {
+  const { page } = loadCategoryPage([
+    buildCase("case_1", { scenes: ["婚宴"] }),
+    buildCase("case_2", { scenes: ["生日宴"] }),
+  ]);
+  await page.onLoad({});
+
+  page.selectNav({ currentTarget: { dataset: { key: "scenes" } } });
+  const sceneNav = page.data.navItems.find((item) => item.key === "scenes");
+  assert.equal(sceneNav.optionItems[0].value, "婚宴");
+  assert.equal(sceneNav.optionItems[0].label, "婚宴/喜宴");
+
+  page.toggleFilterOption({
+    currentTarget: { dataset: { key: "scenes", value: "婚宴" } },
+  });
+  assert.deepEqual(plain(page.data.filters[1].selectedValues), ["婚宴"]);
+  assert.equal(page.data.selectedPills.at(-1).value, "婚宴");
+  assert.equal(page.data.selectedPills.at(-1).label, "婚宴/喜宴");
+  assert.equal(page.data.activePanel.displayTitle, "婚宴/喜宴");
+  assert.deepEqual(plain(page._filteredCases.map((item) => item.id)), ["case_1"]);
+});
+
+await test("category scene sidebar wraps long labels and uses the display label in empty states", async () => {
+  const markup = readFileSync(wxmlPath, "utf8");
+  const styles = readFileSync(wxssPath, "utf8");
+  const { page } = loadCategoryPage([
+    buildCase("case_1", { scenes: ["生日宴"] }),
+  ]);
+  await page.onLoad({});
+  page.selectNav({ currentTarget: { dataset: { key: "scenes" } } });
+  page.toggleFilterOption({
+    currentTarget: { dataset: { key: "scenes", value: "婚宴" } },
+  });
+
+  assert.equal(markup.includes("{{optionItem.label}}"), true);
+  assert.match(styles, /\.side-nav\s*\{[\s\S]*?overflow-y:\s*auto;/);
+  assert.match(styles, /\.sub-nav-label\s*\{[\s\S]*?-webkit-line-clamp:\s*2;/);
+  assert.equal(page.data.filteredCount, 0);
+  assert.equal(page.data.emptyMessage, "暂无“婚宴/喜宴”案例，换个条件试试");
 });
 
 await test("category page can be shared to friends and timeline", () => {

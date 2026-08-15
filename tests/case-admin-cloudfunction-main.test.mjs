@@ -548,6 +548,19 @@ await test("CloudBase UID access uses the official server SDK and honors the web
   assert.equal(access.actor.type, "cloudbase_uid");
   assert.equal(list.ok, true);
   assert.equal(config.config.options.wineTypes.includes("白酒"), true);
+  assert.deepEqual(clone(config.config.options.scenes), [
+    "婚宴",
+    "百日/满月",
+    "生日宴",
+    "寿宴",
+    "乔迁宴",
+    "送礼",
+    "商务招待",
+    "节庆礼赠",
+    "企业纪念",
+    "商超陈列",
+    "电商展示",
+  ]);
   assert.equal(config.config.limits.gallery, 9);
   assert.equal(config.config.limits.homepage.latest, 6);
   assert.equal(config.config.writeEnabled, false);

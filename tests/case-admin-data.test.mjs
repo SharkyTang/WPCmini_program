@@ -39,6 +39,13 @@ const appJsonPath = resolve(__dirname, "../miniprogram/miniprogram/app.json");
 const caseAdminData = loadCommonJsModule(caseAdminDataPath, {
   "../../../utils/caseData": caseData,
 });
+const notificationCaseAdminDataPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/notification-cases/utils/caseAdminData.js"
+);
+const notificationCaseAdminData = loadCommonJsModule(notificationCaseAdminDataPath, {
+  "../../../utils/caseData": caseData,
+});
 
 const {
   CASE_ADMIN_GALLERY_MAX,
@@ -74,6 +81,7 @@ test("creates hidden empty case form defaults", () => {
   assert.equal(form.isVisible, false);
   assert.equal(form.sortOrder, "");
   assert.deepEqual(plain(form.packageTypes), []);
+  assert.deepEqual(plain(form.scenes), []);
   assert.deepEqual(plain(form.statuses), []);
   assert.deepEqual(plain(form.homeSections), []);
   assert.deepEqual(plain(form.galleryImages), []);
@@ -93,7 +101,19 @@ test("exposes case admin form options by field key", () => {
   ]);
   assert.ok(CASE_ADMIN_FORM_OPTIONS.styles.options.includes("国风"));
   assert.ok(CASE_ADMIN_FORM_OPTIONS.priceLevel.options.includes("品质款"));
-  assert.ok(CASE_ADMIN_FORM_OPTIONS.scenes.options.includes("送礼"));
+  assert.deepEqual(plain(CASE_ADMIN_FORM_OPTIONS.scenes.options), [
+    "婚宴",
+    "百日/满月",
+    "生日宴",
+    "寿宴",
+    "乔迁宴",
+    "送礼",
+    "商务招待",
+    "节庆礼赠",
+    "企业纪念",
+    "商超陈列",
+    "电商展示",
+  ]);
   assert.deepEqual(plain(CASE_ADMIN_FORM_OPTIONS.statuses.options), ["热门产品", "最新产品"]);
   assert.equal(CASE_ADMIN_FORM_OPTIONS.statuses.options.includes("推荐"), false);
   assert.deepEqual(
@@ -145,6 +165,38 @@ test("builds selected option view models for case admin form chips", () => {
   assert.equal(findOption("statuses", "热门产品").selected, true);
   assert.equal(findOption("homeSections", "popular").selected, true);
   assert.equal(findOption("homeSections", "popular").label, "热门产品显示");
+});
+
+test("case admin scene chips use display labels and save internal values", () => {
+  const optionViews = buildCaseAdminOptionViews({ scenes: ["婚宴"] });
+  const wedding = optionViews.scenes.find((option) => option.value === "婚宴");
+  const payload = buildCaseAdminPayload({
+    title: "喜宴礼盒",
+    coverImage: "cloud://cloud1/file.jpg",
+    packageTypes: ["礼盒"],
+    scenes: ["婚宴"],
+  });
+
+  assert.deepEqual(plain(wedding), {
+    value: "婚宴",
+    label: "婚宴/喜宴",
+    selected: true,
+  });
+  assert.deepEqual(plain(payload.scenes), { values: ["婚宴"] });
+  assert.equal(payload.keywords.values.includes("婚宴"), true);
+  assert.equal(payload.keywords.values.includes("婚宴/喜宴"), false);
+});
+
+test("notification case admin duplicate uses the same scene catalog and labels", () => {
+  assert.deepEqual(
+    plain(notificationCaseAdminData.CASE_ADMIN_FORM_OPTIONS.scenes.options),
+    plain(CASE_ADMIN_FORM_OPTIONS.scenes.options)
+  );
+  const wedding = notificationCaseAdminData
+    .buildCaseAdminOptionViews({ scenes: ["婚宴"] })
+    .scenes.find((option) => option.value === "婚宴");
+  assert.equal(wedding.label, "婚宴/喜宴");
+  assert.equal(wedding.value, "婚宴");
 });
 
 test("keeps the database document id for editable homepage cases", () => {

@@ -1,4 +1,8 @@
-const { DEFAULT_FILTERS, normalizeValues } = require("../../../utils/caseData");
+const {
+  DEFAULT_FILTERS,
+  getSceneLabel,
+  normalizeValues,
+} = require("../../../utils/caseData");
 
 const INQUIRY_COLLECTION = "inquiries";
 const CONTENT_MIN_LENGTH = 5;
@@ -53,6 +57,10 @@ function getInquiryOptionGroups() {
       type: filter.type,
       options: filter.options.slice(),
     }));
+}
+
+function getInquiryOptionLabel(field, value) {
+  return field === "scenes" ? getSceneLabel(value) : value;
 }
 
 function normalizeInquiryDraft(draft = {}) {
@@ -198,6 +206,7 @@ module.exports = {
   CONTACT_TYPE_VALUES,
   buildInquiryDraftFromCase,
   buildInquiryRecord,
+  getInquiryOptionLabel,
   getInquiryOptionGroups,
   isValidEmail,
   isValidPhone,

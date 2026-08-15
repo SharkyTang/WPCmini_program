@@ -58,6 +58,7 @@ const {
   CONTACT_TYPES,
   buildInquiryDraftFromCase,
   buildInquiryRecord,
+  getInquiryOptionGroups,
   normalizeInquiryDraft,
   validateInquiryDraft,
 } = inquiryData;
@@ -222,6 +223,45 @@ test("inquiry page uses WeUI top tips and sectioned form layout", () => {
   assert.equal(wxml.includes("联系信息"), true);
   assert.equal(wxml.includes("仅用于就本次需求联系你"), true);
   assert.match(wxml, /bindtap="openPrivacyNotice"/);
+});
+
+test("inquiry scene chips display aliases and submit their internal values", () => {
+  const optionGroups = getInquiryOptionGroups();
+  const scenes = optionGroups.find((group) => group.key === "scenes");
+  const pageConfig = loadInquiryPageConfig();
+  const sceneView = pageConfig.data.optionGroups.find((group) => group.key === "scenes");
+  const wedding = sceneView.options[0];
+  const wxml = readFileSync(inquiryWxmlPath, "utf8");
+
+  assert.deepEqual(plain(scenes.options), [
+    "婚宴",
+    "百日/满月",
+    "生日宴",
+    "寿宴",
+    "乔迁宴",
+    "送礼",
+    "商务招待",
+    "节庆礼赠",
+    "企业纪念",
+    "商超陈列",
+    "电商展示",
+  ]);
+  assert.deepEqual(plain(wedding), {
+    value: "婚宴",
+    label: "婚宴/喜宴",
+    selected: false,
+  });
+  assert.equal(wxml.includes('data-value="{{option.value}}"'), true);
+
+  const { page } = loadInquiryPage();
+  page.toggleOption({
+    currentTarget: { dataset: { key: "scenes", type: "multi", value: "婚宴" } },
+  });
+  assert.deepEqual(plain(page.data.draft.scenes), ["婚宴"]);
+  assert.equal(
+    page.data.optionGroups.find((group) => group.key === "scenes").options[0].label,
+    "婚宴/喜宴"
+  );
 });
 
 test("inquiry privacy hint opens the privacy notice", () => {

@@ -30,12 +30,12 @@
       <view class="chip-list">
         <view
           wx:for="{{group.options}}"
-          wx:key="label"
+          wx:key="value"
           wx:for-item="option"
           class="option-chip {{option.selected ? 'option-chip-active' : ''}}"
           data-key="{{group.key}}"
           data-type="{{group.type}}"
-          data-value="{{option.label}}"
+          data-value="{{option.value}}"
           bindtap="toggleOption"
         >
           {{option.label}}
