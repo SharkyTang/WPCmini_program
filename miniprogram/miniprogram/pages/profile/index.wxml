@@ -6,7 +6,15 @@
 
   <view class="user-card" bindtap="openProfileEditor">
     <view class="avatar">
-      <image wx:if="{{profileInfo.avatarUrl}}" class="avatar-image" src="{{profileInfo.avatarUrl}}" mode="aspectFill" />
+      <image
+        wx:if="{{profileInfo.avatarUrl}}"
+        class="avatar-image"
+        src="{{profileInfo.avatarUrl}}"
+        mode="aspectFill"
+        data-url="{{profileInfo.avatarUrl}}"
+        bindload="onProfileAvatarLoad"
+        binderror="onProfileAvatarError"
+      />
       <block wx:else>
         <view class="avatar-head"></view>
         <view class="avatar-body"></view>

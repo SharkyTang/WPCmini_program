@@ -32,7 +32,7 @@ function test(name, fn) {
   }
 }
 
-test("detail page renders a skeleton without a blocking native overlay", () => {
+test("detail page keeps its skeleton and adds non-blocking native loading", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
   const source = readFileSync(pagePath, "utf8");
 
@@ -43,7 +43,9 @@ test("detail page renders a skeleton without a blocking native overlay", () => {
   assert.equal(wxml.includes("正在读取案例"), true);
   assert.equal(wxml.includes('bindtap="retryLoadCase"'), true);
   assert.equal(wxml.includes("重新加载"), true);
-  assert.equal(source.includes("wx.showLoading"), false);
+  assert.equal(source.includes('require("../../utils/nativePageLoading")'), true);
+  assert.equal(wxml.includes('bindload="onHeroImageLoad"'), true);
+  assert.equal(wxml.includes('binderror="onHeroImageError"'), true);
 });
 
 test("detail consult action opens official customer service", () => {
@@ -129,6 +131,7 @@ function loadDetailInteractionPage(options = {}) {
   const resumeSources = [];
   const toasts = [];
   const nativeLoadingEvents = [];
+  let nativeLoadingSequence = 0;
   const previewCalls = [];
   const clientFaults = [];
   const caseItem = options.caseItem || {
@@ -248,6 +251,23 @@ function loadDetailInteractionPage(options = {}) {
           reportPerformanceEvent: () => false,
         };
       }
+      if (moduleName === "../../utils/nativePageLoading") {
+        return options.nativePageLoading || {
+          beginPageLoading(payload) {
+            const token = { id: ++nativeLoadingSequence };
+            nativeLoadingEvents.push({ type: "begin", payload, token });
+            return token;
+          },
+          finishPageLoading(token) {
+            nativeLoadingEvents.push({ type: "finish", token });
+            return true;
+          },
+          cancelPageLoading(token) {
+            nativeLoadingEvents.push({ type: "cancel", token });
+            return true;
+          },
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     wx: {
@@ -341,11 +361,30 @@ test("detail image tap opens the selected image in the native gallery", () => {
   );
 });
 
-await asyncTest("detail case reads avoid the native loading overlay on success and failure", async () => {
+await asyncTest("detail case reads use one non-blocking loading session on success and failure", async () => {
   const success = loadDetailInteractionPage();
 
   assert.equal(await success.page.loadCase("case_1"), true);
-  assert.deepEqual(JSON.parse(JSON.stringify(success.nativeLoadingEvents)), []);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(success.nativeLoadingEvents.map((event) => event.type))),
+    ["begin", "finish"]
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(success.nativeLoadingEvents[0].payload)),
+    {
+      owner: "detail-entry",
+      title: "加载中",
+      mask: false,
+      delayMs: 120,
+      minVisibleMs: 300,
+      maxVisibleMs: 3000,
+    }
+  );
+  success.page.onHide();
+  assert.deepEqual(
+    success.nativeLoadingEvents.map((event) => event.type),
+    ["begin", "finish", "cancel"]
+  );
 
   const unavailable = new Error("catalog unavailable");
   unavailable.code = "FUNCTION_NOT_FOUND";
@@ -361,7 +400,69 @@ await asyncTest("detail case reads avoid the native loading overlay on success a
   assert.equal(await failure.page.loadCase("case_2"), false);
   assert.equal(failure.page.data.loading, false);
   assert.match(failure.page.data.errorMessage, /暂时读取不到/);
-  assert.deepEqual(JSON.parse(JSON.stringify(failure.nativeLoadingEvents)), []);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(failure.nativeLoadingEvents.map((event) => event.type))),
+    ["begin", "finish"]
+  );
+});
+
+await asyncTest("detail waits for the current Hero image and ignores stale image events", async () => {
+  const heroCase = {
+    id: "hero_case",
+    title: "Hero 案例",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+    gallery: [
+      {
+        index: 0,
+        fileID: "cloud://hero",
+        displayUrl: "https://hero",
+        thumbnailUrl: "https://thumb",
+      },
+    ],
+  };
+  const context = loadDetailInteractionPage({
+    caseItem: heroCase,
+    fetchCaseDetail: async () => heroCase,
+  });
+
+  assert.equal(await context.page.loadCase("hero_case"), true);
+  const staleRequestId = context.page.data.galleryItems[0].entryLoadRequestId;
+  assert.equal(await context.page.loadCase("hero_case_latest"), true);
+  const requestId = context.page.data.galleryItems[0].entryLoadRequestId;
+  assert.equal(requestId > staleRequestId, true);
+  assert.deepEqual(
+    context.nativeLoadingEvents.map((event) => event.type),
+    ["begin", "cancel", "begin"]
+  );
+  const currentRenderUrl = context.page.data.galleryItems[0].renderUrl;
+  context.page.onHeroImageLoad({
+    currentTarget: {
+      dataset: { index: 0, detailLoadRequestId: staleRequestId },
+    },
+  });
+  context.page.onHeroImageError({
+    currentTarget: {
+      dataset: { index: 0, detailLoadRequestId: staleRequestId },
+    },
+  });
+  assert.deepEqual(
+    context.nativeLoadingEvents.map((event) => event.type),
+    ["begin", "cancel", "begin"]
+  );
+  assert.equal(context.page.data.galleryItems[0].renderUrl, currentRenderUrl);
+  assert.equal(context.page.data.galleryItems[0].imageRetryCount, 0);
+
+  context.page.onHeroImageLoad({
+    currentTarget: {
+      dataset: { index: 0, detailLoadRequestId: requestId },
+    },
+  });
+  assert.deepEqual(
+    context.nativeLoadingEvents.map((event) => event.type),
+    ["begin", "cancel", "begin", "finish"]
+  );
 });
 
 await asyncTest("detail shows the wedding label without rewriting the case scene", async () => {
@@ -960,6 +1061,13 @@ await asyncTest("detail loads one display image and upgrades only the selected t
       if (moduleName === "../../utils/errorTelemetry") {
         return { reportPerformanceEvent: () => false };
       }
+      if (moduleName === "../../utils/nativePageLoading") {
+        return {
+          beginPageLoading: () => ({}),
+          finishPageLoading: () => true,
+          cancelPageLoading: () => true,
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     wx: {
@@ -1086,6 +1194,13 @@ await asyncTest("detail shares the selected case with a direct-entry path", asyn
       }
       if (moduleName === "../../utils/errorTelemetry") {
         return { reportPerformanceEvent: () => false };
+      }
+      if (moduleName === "../../utils/nativePageLoading") {
+        return {
+          beginPageLoading: () => ({}),
+          finishPageLoading: () => true,
+          cancelPageLoading: () => true,
+        };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
     },

@@ -27,6 +27,11 @@ const {
   reportClientFault,
   reportPerformanceEvent,
 } = require("../../utils/errorTelemetry");
+const {
+  beginPageLoading,
+  finishPageLoading,
+  cancelPageLoading,
+} = require("../../utils/nativePageLoading");
 
 function reportDetailFault(stage, error, options = {}) {
   return reportClientFault({
@@ -229,6 +234,8 @@ Page({
     this._favoriteStateVersion = 0;
     this._caseItem = null;
     this._caseId = "";
+    this._detailLoadingRecord = null;
+    this._detailAwaitingHeroRequestId = 0;
     this._detailStartedAt = Date.now();
     void this.loadCase(options.id);
   },
@@ -238,8 +245,13 @@ Page({
     return this.resumePendingFavoriteAction();
   },
 
+  onHide() {
+    this.cancelDetailEntryLoading();
+  },
+
   onUnload() {
     this._alive = false;
+    this.cancelDetailEntryLoading();
     cancelCaseLoading(this);
     this._favoriteStateVersion = (this._favoriteStateVersion || 0) + 1;
     this._galleryPatchPromises = new Map();
@@ -271,20 +283,20 @@ Page({
   },
 
   async loadCase(id) {
+    if (this._alive === undefined) this._alive = true;
+    if (!this._galleryPatchPromises) this._galleryPatchPromises = new Map();
+    const requestId = beginCaseLoading(this);
+    this.beginDetailEntryLoading(requestId);
     if (!id) {
-      cancelCaseLoading(this);
       safeSetData(this, {
         loading: false,
         renderPhase: "error",
         errorMessage: "没有找到这个案例的 ID。",
         errorCanRetry: false,
-      });
+      }, () => this.finishDetailEntryLoading(requestId));
       return false;
     }
 
-    if (this._alive === undefined) this._alive = true;
-    if (!this._galleryPatchPromises) this._galleryPatchPromises = new Map();
-    const requestId = beginCaseLoading(this);
     this._favoriteStateVersion = (this._favoriteStateVersion || 0) + 1;
     safeSetData(this, {
       loading: true,
@@ -315,6 +327,9 @@ Page({
       }
       if (!canCommitCase(this, requestId)) return false;
       const galleryItems = buildGalleryItems(caseItem);
+      if (galleryItems[0]) {
+        galleryItems[0].entryLoadRequestId = requestId;
+      }
       const customerServiceMessageCard = buildCustomerMessageCard({
         caseItem,
         imageUrl: galleryItems[0]
@@ -323,6 +338,9 @@ Page({
       });
       const caseView = buildCaseView(caseItem);
       this._caseItem = caseItem;
+      this._detailAwaitingHeroRequestId = galleryItems[0] && galleryItems[0].renderUrl
+        ? requestId
+        : 0;
       let deferredStarted = false;
       const startDeferredWork = () => {
         if (deferredStarted || !canCommitCase(this, requestId)) return;
@@ -355,7 +373,12 @@ Page({
           source: CUSTOMER_SERVICE_SOURCE.DETAIL,
           caseItem,
         }),
-      }, startDeferredWork);
+      }, () => {
+        startDeferredWork();
+        if (!this._detailAwaitingHeroRequestId) {
+          this.finishDetailEntryLoading(requestId);
+        }
+      });
       return true;
     } catch (error) {
       if (!canCommitCase(this, requestId)) return false;
@@ -369,10 +392,46 @@ Page({
         renderPhase: "error",
         errorMessage: "暂时读取不到这个案例，请返回后重试。",
         errorCanRetry: true,
-      });
+      }, () => this.finishDetailEntryLoading(requestId));
       this.reportDetailReady("error");
       return false;
     }
+  },
+
+  beginDetailEntryLoading(requestId) {
+    if (!isPageAlive(this)) return null;
+    this.cancelDetailEntryLoading();
+    const token = beginPageLoading({
+      owner: "detail-entry",
+      title: "加载中",
+      mask: false,
+      delayMs: 120,
+      minVisibleMs: 300,
+      maxVisibleMs: 3000,
+    });
+    this._detailLoadingRecord = { requestId, token, finished: false };
+    return token;
+  },
+
+  finishDetailEntryLoading(requestId) {
+    const record = this._detailLoadingRecord;
+    if (!record || record.requestId !== requestId) return false;
+    if (record.finished) return false;
+    record.finished = true;
+    if (this._detailAwaitingHeroRequestId === requestId) {
+      this._detailAwaitingHeroRequestId = 0;
+    }
+    return finishPageLoading(record.token);
+  },
+
+  cancelDetailEntryLoading() {
+    const record = this._detailLoadingRecord;
+    if (!record) return false;
+    this._detailLoadingRecord = null;
+    if (this._detailAwaitingHeroRequestId === record.requestId) {
+      this._detailAwaitingHeroRequestId = 0;
+    }
+    return cancelPageLoading(record.token);
   },
 
   retryLoadCase() {
@@ -759,7 +818,22 @@ Page({
 
   onHeroImageError(event) {
     const index = Number(event && event.currentTarget && event.currentTarget.dataset.index);
+    const detailLoadRequestId = Number(
+      event && event.currentTarget && event.currentTarget.dataset.detailLoadRequestId
+    );
     if (!Number.isInteger(index)) return;
+    if (
+      index === 0
+      && detailLoadRequestId
+      && detailLoadRequestId !== this._activeCaseLoadRequestId
+    ) return;
+    if (
+      index === 0
+      && detailLoadRequestId
+      && detailLoadRequestId === this._detailAwaitingHeroRequestId
+    ) {
+      this.finishDetailEntryLoading(detailLoadRequestId);
+    }
     const current = this.data.galleryItems[index];
     if (!current) return;
     const originalUrl = current.renderUrl;
@@ -790,6 +864,19 @@ Page({
         : item
     );
     safeSetData(this, { galleryItems: failedItems });
+  },
+
+  onHeroImageLoad(event) {
+    const index = Number(event && event.currentTarget && event.currentTarget.dataset.index);
+    const detailLoadRequestId = Number(
+      event && event.currentTarget && event.currentTarget.dataset.detailLoadRequestId
+    );
+    if (
+      index !== 0
+      || !detailLoadRequestId
+      || detailLoadRequestId !== this._detailAwaitingHeroRequestId
+    ) return;
+    this.finishDetailEntryLoading(detailLoadRequestId);
   },
 
   handleContact(event) {

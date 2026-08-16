@@ -27,7 +27,10 @@
           mode="aspectFill"
           src="{{item.renderImageUrl}}"
           bindload="onBannerImageLoad"
+          binderror="onBannerImageError"
           data-index="{{bannerIndex}}"
+          data-banner-id="{{item.id}}"
+          data-url="{{item.renderImageUrl}}"
           lazy-load
         ></image>
         <view wx:else class="banner-image banner-placeholder"></view>
@@ -126,6 +129,20 @@
           </view>
         </view>
         <view wx:else class="state-box">暂无最新产品</view>
+      </view>
+
+      <view
+        wx:if="{{!timelinePreview && (popularCases.length || latestCases.length)}}"
+        class="home-end-note"
+        bindtap="navigateToCategory"
+        data-sort=""
+        hover-class="home-end-note-active"
+        hover-stay-time="80"
+        aria-role="button"
+        aria-label="前往分类页查看更多案例"
+      >
+        <view class="home-end-title">已展示首页全部案例</view>
+        <view class="home-end-link">请前往分类页查看更多 ></view>
       </view>
     </block>
   </view>

@@ -17,6 +17,11 @@ const {
   CUSTOMER_SERVICE_SOURCE,
   buildCustomerSessionFrom,
 } = require("../../utils/customerServiceData");
+const {
+  beginPageLoading,
+  finishPageLoading,
+  cancelPageLoading,
+} = require("../../utils/nativePageLoading");
 const HOME_SHARE_TITLE = "金亿诚包装科技｜酒包装灵感库";
 const LIBRARY_QUICK_ACTIONS = {
   favorites: {
@@ -49,6 +54,31 @@ function toProfileInfo(profile = {}) {
 
 function wasPendingActionResumed(result) {
   return result === true || Boolean(result && result.resumed);
+}
+
+function isProfilePageAlive(page) {
+  return page._alive !== false;
+}
+
+function safeSetProfileData(page, patch, callback) {
+  if (!isProfilePageAlive(page)) return false;
+  try {
+    page.setData(patch, () => {
+      if (isProfilePageAlive(page) && typeof callback === "function") callback();
+    });
+    return true;
+  } catch (error) {
+    console.error("个人中心状态更新失败", error);
+    return false;
+  }
+}
+
+function runProfileNextTick(callback) {
+  if (typeof wx !== "undefined" && typeof wx.nextTick === "function") {
+    wx.nextTick(callback);
+    return;
+  }
+  Promise.resolve().then(callback);
 }
 
 Page({
@@ -91,16 +121,42 @@ Page({
   },
 
   onLoad() {
+    this._alive = true;
+    this._pageVisible = true;
+    this._profileRequestVersion = 0;
+    this._profileLoadingToken = null;
+    this._profileLoadingFinished = false;
+    this._profileInitialReady = false;
+    this._profileRenderedAvatarUrl = "";
+    this._profileAwaitingAvatarUrl = "";
+    this._profileSettledAvatarUrls = new Set();
     // 资料在 onShow 读取，保证从编辑页返回后立即同步最新头像和昵称。
   },
 
   onShow() {
+    this._pageVisible = true;
     this.loadProfileInfo();
     return this.resumePendingLibraryNavigation();
   },
 
   onPullDownRefresh() {
-    this.loadProfileInfo({ stopRefresh: true, forceRefresh: true });
+    this.loadProfileInfo({
+      stopRefresh: true,
+      forceRefresh: true,
+      suppressEntryLoading: true,
+    });
+  },
+
+  onHide() {
+    this._pageVisible = false;
+    this.cancelProfileEntryLoading();
+  },
+
+  onUnload() {
+    this._alive = false;
+    this._pageVisible = false;
+    this._profileRequestVersion = (this._profileRequestVersion || 0) + 1;
+    this.cancelProfileEntryLoading();
   },
 
   onShareAppMessage() {
@@ -117,23 +173,43 @@ Page({
   },
 
   async loadProfileInfo(options = {}) {
+    if (this._alive === undefined) this._alive = true;
+    const requestVersion = (this._profileRequestVersion || 0) + 1;
+    this._profileRequestVersion = requestVersion;
     const legacyProfile = getLegacyProfile();
-    this.setData({
-      profileInfo: toProfileInfo(legacyProfile),
+    const legacyProfileInfo = toProfileInfo(legacyProfile);
+    const avatarChanged = legacyProfileInfo.avatarUrl !== this._profileRenderedAvatarUrl;
+    const shouldStartEntryLoading = options.suppressEntryLoading !== true
+      && (!this._profileInitialReady || avatarChanged);
+    let localLoadingToken = this._profileLoadingToken;
+    if (shouldStartEntryLoading) {
+      localLoadingToken = this.beginProfileEntryLoading(legacyProfileInfo.avatarUrl);
+    }
+    safeSetProfileData(this, {
+      profileInfo: legacyProfileInfo,
       // 本机缓存只用于首屏和导航判断；云端请求仍会在完成后覆盖它。
       // 这样已完成资料的用户无需等请求结束，第一次点击即可进入编辑页。
       hasCompletedProfile: hasCompletedProfile(legacyProfile),
       isProfileLoading: true,
       profileLoadError: false,
+    }, () => {
+      if (requestVersion !== this._profileRequestVersion) return;
+      this._profileRenderedAvatarUrl = legacyProfileInfo.avatarUrl;
+      if (!legacyProfileInfo.avatarUrl && localLoadingToken) {
+        runProfileNextTick(() => this.finishProfileEntryLoading(localLoadingToken));
+      }
     });
 
     try {
       const summary = await fetchSessionSummary({
         forceRefresh: options.forceRefresh === true,
       });
+      if (!isProfilePageAlive(this) || requestVersion !== this._profileRequestVersion) {
+        return false;
+      }
       const profile = summary.profile;
       cacheOpenId(summary.openid);
-      this.setData({
+      safeSetProfileData(this, {
         hasInquiryAdminAccess: summary.roles.inquiryAdmin,
         hasCaseAdminAccess: summary.roles.caseAdmin,
         hasNotificationAdminAccess: summary.roles.notificationAdmin,
@@ -144,31 +220,139 @@ Page({
       if (profile && hasCompletedProfile(profile)) {
         cacheProfile(profile);
         cacheCompletedProfileIdentity(summary.openid, profile);
-        this.setData({
-          profileInfo: toProfileInfo(profile),
+        const profileInfo = toProfileInfo(profile);
+        const remoteAvatarChanged = profileInfo.avatarUrl !== this._profileRenderedAvatarUrl;
+        let remoteLoadingToken = this._profileLoadingToken;
+        if (remoteAvatarChanged && options.suppressEntryLoading !== true) {
+          remoteLoadingToken = this.beginProfileEntryLoading(profileInfo.avatarUrl);
+        }
+        safeSetProfileData(this, {
+          profileInfo,
           hasCompletedProfile: true,
+        }, () => {
+          if (requestVersion !== this._profileRequestVersion) return;
+          this._profileRenderedAvatarUrl = profileInfo.avatarUrl;
+          if (!profileInfo.avatarUrl && remoteLoadingToken) {
+            runProfileNextTick(() => this.finishProfileEntryLoading(remoteLoadingToken));
+          }
         });
       } else {
         const currentProfile = profile || {};
         cacheProfile(currentProfile);
-        this.setData({
-          profileInfo: toProfileInfo(currentProfile),
+        const profileInfo = toProfileInfo(currentProfile);
+        const remoteAvatarChanged = profileInfo.avatarUrl !== this._profileRenderedAvatarUrl;
+        let remoteLoadingToken = this._profileLoadingToken;
+        if (remoteAvatarChanged && options.suppressEntryLoading !== true) {
+          remoteLoadingToken = this.beginProfileEntryLoading(profileInfo.avatarUrl);
+        }
+        safeSetProfileData(this, {
+          profileInfo,
           hasCompletedProfile: false,
+        }, () => {
+          if (requestVersion !== this._profileRequestVersion) return;
+          this._profileRenderedAvatarUrl = profileInfo.avatarUrl;
+          if (!profileInfo.avatarUrl && remoteLoadingToken) {
+            runProfileNextTick(() => this.finishProfileEntryLoading(remoteLoadingToken));
+          }
         });
       }
+      return true;
     } catch (error) {
+      if (!isProfilePageAlive(this) || requestVersion !== this._profileRequestVersion) {
+        return false;
+      }
       console.error("读取个人资料失败", error);
-      this.setData({
+      safeSetProfileData(this, {
         profileLoadError: true,
       });
+      this.finishProfileEntryLoading();
+      return false;
     } finally {
-      this.setData({
-        isProfileLoading: false,
-      });
+      if (isProfilePageAlive(this) && requestVersion === this._profileRequestVersion) {
+        safeSetProfileData(this, {
+          isProfileLoading: false,
+        });
+      }
       if (options.stopRefresh && wx.stopPullDownRefresh) {
-        wx.stopPullDownRefresh();
+        try {
+          wx.stopPullDownRefresh();
+        } catch (error) {
+          // 系统下拉刷新指示器失败不影响资料读取。
+        }
       }
     }
+  },
+
+  beginProfileEntryLoading(avatarUrl = "") {
+    if (!isProfilePageAlive(this) || this._pageVisible === false) return null;
+    if (this._profileLoadingToken) {
+      cancelPageLoading(this._profileLoadingToken);
+    }
+    const token = beginPageLoading({
+      owner: "profile-entry",
+      title: "加载中",
+      mask: false,
+      delayMs: 120,
+      minVisibleMs: 300,
+      maxVisibleMs: 3000,
+    });
+    this._profileLoadingToken = token;
+    this._profileLoadingFinished = false;
+    this._profileAwaitingAvatarUrl = avatarUrl || "";
+    if (
+      avatarUrl
+      && this._profileSettledAvatarUrls instanceof Set
+      && this._profileSettledAvatarUrls.has(avatarUrl)
+    ) {
+      runProfileNextTick(() => this.finishProfileEntryLoading(token));
+    }
+    return token;
+  },
+
+  finishProfileEntryLoading(expectedToken) {
+    const token = this._profileLoadingToken;
+    if (!token) return false;
+    if (expectedToken && token !== expectedToken) return false;
+    if (this._profileLoadingFinished) return false;
+    this._profileLoadingFinished = true;
+    this._profileAwaitingAvatarUrl = "";
+    this._profileInitialReady = true;
+    return finishPageLoading(token);
+  },
+
+  cancelProfileEntryLoading() {
+    const token = this._profileLoadingToken;
+    if (!token) return false;
+    this._profileLoadingToken = null;
+    this._profileLoadingFinished = false;
+    this._profileAwaitingAvatarUrl = "";
+    return cancelPageLoading(token);
+  },
+
+  onProfileAvatarLoad(event) {
+    const loadedUrl = event && event.currentTarget && event.currentTarget.dataset
+      ? event.currentTarget.dataset.url || ""
+      : "";
+    if (loadedUrl) {
+      if (!(this._profileSettledAvatarUrls instanceof Set)) {
+        this._profileSettledAvatarUrls = new Set();
+      }
+      this._profileSettledAvatarUrls.add(loadedUrl);
+      while (this._profileSettledAvatarUrls.size > 8) {
+        const oldest = this._profileSettledAvatarUrls.values().next().value;
+        this._profileSettledAvatarUrls.delete(oldest);
+      }
+    }
+    if (
+      this._profileAwaitingAvatarUrl
+      && loadedUrl
+      && loadedUrl !== this._profileAwaitingAvatarUrl
+    ) return;
+    this.finishProfileEntryLoading();
+  },
+
+  onProfileAvatarError(event) {
+    this.onProfileAvatarLoad(event);
   },
 
   openProfileEditor() {

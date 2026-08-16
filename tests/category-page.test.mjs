@@ -16,6 +16,7 @@ function loadCategoryPage(
   dependencyOverrides = {}
 ) {
   let pageConfig;
+  let nativeLoadingSequence = 0;
   const app = {
     globalData: appGlobalData,
   };
@@ -130,6 +131,16 @@ function loadCategoryPage(
             dependencyOverrides.reportClientFault || (() => false),
         };
       }
+      if (moduleName === "../../utils/nativePageLoading") {
+        return dependencyOverrides.nativePageLoading || {
+          beginPageLoading() {
+            nativeLoadingSequence += 1;
+            return { id: nativeLoadingSequence };
+          },
+          finishPageLoading() {},
+          cancelPageLoading() {},
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     console,
@@ -151,17 +162,44 @@ function loadCategoryPage(
     filename: pagePath,
   });
   const setDataCalls = [];
-  pageConfig.setData = function setData(nextData) {
+  pageConfig.setData = function setData(nextData, callback) {
     setDataCalls.push(nextData);
     this.data = {
       ...this.data,
       ...nextData,
     };
+    if (typeof callback === "function") callback();
   };
   return {
     app,
     page: pageConfig,
     setDataCalls,
+  };
+}
+
+function createNativeLoadingRecorder(events) {
+  let sequence = 0;
+  let activeToken = null;
+  return {
+    beginPageLoading(options) {
+      sequence += 1;
+      const token = { id: sequence };
+      activeToken = token;
+      events.push(["begin", JSON.parse(JSON.stringify(options)), token.id]);
+      return token;
+    },
+    finishPageLoading(token) {
+      if (activeToken !== token) return false;
+      events.push(["finish", token && token.id]);
+      activeToken = null;
+      return true;
+    },
+    cancelPageLoading(token) {
+      if (activeToken !== token) return false;
+      events.push(["cancel", token && token.id]);
+      activeToken = null;
+      return true;
+    },
   };
 }
 
@@ -181,6 +219,9 @@ await test("category cards fill their frame with the aspect-preserving cover", (
   assert.match(caseImage, /mode="aspectFill"/);
   assert.match(caseImage, /\slazy-load(?:\s|>)/);
   assert.match(caseImage, /fade-in="{{true}}"/);
+  assert.match(caseImage, /bindload="onCardImageLoad"/);
+  assert.match(caseImage, /binderror="retryCardImage"/);
+  assert.match(caseImage, /data-url="{{item\.coverImageUrl}}"/);
 });
 
 await test("category no-cache error state exposes an in-place retry action", () => {
@@ -213,6 +254,238 @@ function buildCase(id, overrides = {}) {
     ...overrides,
   };
 }
+
+await test("category entry loading uses the shared controller and closes after an image-free first batch", async () => {
+  const events = [];
+  const { page } = loadCategoryPage(
+    [buildCase("case_1")],
+    {},
+    {},
+    { nativePageLoading: createNativeLoadingRecorder(events) }
+  );
+
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  assert.deepEqual(plain(events), [
+    ["begin", {
+      owner: "category-entry",
+      title: "加载中",
+      delayMs: 120,
+      minVisibleMs: 300,
+      maxVisibleMs: 3000,
+      mask: false,
+    }, 1],
+    ["finish", 1],
+  ]);
+});
+
+await test("category entry loading waits for the first visible card image load", async () => {
+  const events = [];
+  const cases = [
+    buildCase("case_1", { imageFileId: "cloud://env/first.jpg" }),
+    buildCase("case_2", { imageFileId: "cloud://env/second.jpg" }),
+  ];
+  const { page } = loadCategoryPage(cases, {}, {}, {
+    nativePageLoading: createNativeLoadingRecorder(events),
+    fetchCatalogImageUrls: async (ids) => ids.reduce((images, id) => {
+      images[id] = {
+        imageFileId: cases.find((item) => item.id === id).imageFileId,
+        thumbnailUrl: `https://temp/${id}.jpg`,
+      };
+      return images;
+    }, {}),
+  });
+
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  assert.deepEqual(events.map((event) => event[0]), ["begin"]);
+  assert.equal(page._categoryEntryAwaitingImageId, "case_1");
+  const imageRequestVersion = page._categoryEntryAwaitingImageRequestVersion;
+  assert.equal(
+    page.onCardImageLoad({
+      currentTarget: {
+        dataset: {
+          id: "case_2",
+          entryLoadRequestVersion: imageRequestVersion,
+        },
+      },
+    }),
+    false
+  );
+  assert.deepEqual(events.map((event) => event[0]), ["begin"]);
+  assert.equal(
+    page.onCardImageLoad({
+      currentTarget: {
+        dataset: {
+          id: "case_1",
+          entryLoadRequestVersion: imageRequestVersion + 1,
+        },
+      },
+    }),
+    false
+  );
+  assert.equal(
+    page.onCardImageLoad({
+      currentTarget: {
+        dataset: {
+          id: "case_1",
+          entryLoadRequestVersion: imageRequestVersion,
+        },
+      },
+    }),
+    true
+  );
+  assert.deepEqual(events.map((event) => event[0]), ["begin", "finish"]);
+});
+
+await test("category entry loading also closes when the first visible card image errors", async () => {
+  const events = [];
+  const firstCase = buildCase("case_1", {
+    imageFileId: "cloud://env/first.jpg",
+  });
+  const { page } = loadCategoryPage([firstCase], {}, {}, {
+    nativePageLoading: createNativeLoadingRecorder(events),
+    fetchCatalogImageUrls: async () => ({
+      case_1: {
+        imageFileId: firstCase.imageFileId,
+        thumbnailUrl: "https://temp/case_1.jpg",
+      },
+    }),
+  });
+
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  assert.deepEqual(events.map((event) => event[0]), ["begin"]);
+
+  await page.retryCardImage({
+    currentTarget: {
+      dataset: {
+        id: "case_1",
+        entryLoadRequestVersion: page._categoryEntryAwaitingImageRequestVersion,
+      },
+    },
+    detail: { errMsg: "image load failed" },
+  });
+
+  assert.deepEqual(events.map((event) => event[0]), ["begin", "finish"]);
+});
+
+await test("category hot cache waits only when its first image exceeds the delay", async () => {
+  const events = [];
+  const cachedItem = buildCase("case_cached", {
+    imageFileId: "cloud://env/cached.jpg",
+    coverImageUrl: "https://temp/cached.jpg",
+  });
+  const { page } = loadCategoryPage([], {}, {}, {
+    nativePageLoading: createNativeLoadingRecorder(events),
+    readCache: () => ({
+      revision: 7,
+      cachedAt: Date.now(),
+      fresh: true,
+      data: { items: [cachedItem] },
+    }),
+    fetchCatalogSnapshot: async () => ({
+      revision: 7,
+      notModified: true,
+    }),
+  });
+
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  assert.deepEqual(events.map((event) => event[0]), ["begin"]);
+  assert.equal(page.data.visibleCards[0].coverImageUrl, "https://temp/cached.jpg");
+  const imageRequestVersion = page._categoryEntryAwaitingImageRequestVersion;
+  assert.equal(page.onCardImageLoad({
+    currentTarget: {
+      dataset: {
+        id: "case_cached",
+        entryLoadRequestVersion: imageRequestVersion,
+      },
+    },
+  }), true);
+  assert.deepEqual(events.map((event) => event[0]), ["begin", "finish"]);
+});
+
+await test("category hot return settles an already loaded first image without waiting again", async () => {
+  const events = [];
+  const cachedItem = buildCase("case_cached", {
+    imageFileId: "cloud://env/cached.jpg",
+    coverImageUrl: "https://temp/cached.jpg",
+  });
+  const { page } = loadCategoryPage([], {}, {}, {
+    nativePageLoading: createNativeLoadingRecorder(events),
+    readCache: () => ({
+      revision: 7,
+      cachedAt: Date.now(),
+      fresh: true,
+      data: { items: [cachedItem] },
+    }),
+    fetchCatalogSnapshot: async () => ({ revision: 7, notModified: true }),
+  });
+
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  page.onCardImageLoad({
+    currentTarget: {
+      dataset: {
+        id: "case_cached",
+        url: "https://temp/cached.jpg",
+        entryLoadRequestVersion: page._categoryEntryAwaitingImageRequestVersion,
+      },
+    },
+  });
+  page.onHide();
+  page._loadPromise = Promise.resolve({ ok: true });
+  page.onShow();
+
+  assert.deepEqual(
+    events.map((event) => event[0]),
+    ["begin", "finish", "begin", "finish"]
+  );
+});
+
+await test("category pull-down refresh does not stack an entry loading indicator", async () => {
+  const events = [];
+  const { page } = loadCategoryPage(
+    [buildCase("case_1")],
+    {},
+    {},
+    { nativePageLoading: createNativeLoadingRecorder(events) }
+  );
+
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  events.length = 0;
+  await page.onPullDownRefresh();
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+
+  assert.deepEqual(events, []);
+});
+
+await test("category cancels a pending entry indicator when the tab is hidden", async () => {
+  const events = [];
+  const item = buildCase("case_1", {
+    imageFileId: "cloud://env/first.jpg",
+  });
+  const { page } = loadCategoryPage([item], {}, {}, {
+    nativePageLoading: createNativeLoadingRecorder(events),
+    fetchCatalogImageUrls: async () => ({
+      case_1: {
+        imageFileId: item.imageFileId,
+        thumbnailUrl: "https://temp/case_1.jpg",
+      },
+    }),
+  });
+
+  await page.onLoad({});
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  page.onHide();
+
+  assert.deepEqual(events.map((event) => event[0]), ["begin", "cancel"]);
+});
 
 await test("category sort options use recent and popular labels", () => {
   const source = readFileSync(pagePath, "utf8");
@@ -638,20 +911,23 @@ await test("category uses the native loading indicator only when another batch e
     buildCase(`case_${index + 1}`)
   );
   const nativeLoadingEvents = [];
-  const { page, setDataCalls } = loadCategoryPage(cases, {}, {
-    showLoading(options) {
-      nativeLoadingEvents.push(["show", options]);
-    },
-    hideLoading() {
-      nativeLoadingEvents.push(["hide"]);
-    },
+  const { page, setDataCalls } = loadCategoryPage(cases, {}, {}, {
+    nativePageLoading: createNativeLoadingRecorder(nativeLoadingEvents),
   });
   await page.onLoad({});
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  nativeLoadingEvents.length = 0;
 
   const loadPromise = page.loadMore();
   assert.deepEqual(plain(nativeLoadingEvents), [
-    ["show", { title: "加载更多", mask: false }],
+    ["begin", {
+      owner: "category-load-more",
+      title: "加载更多",
+      delayMs: 0,
+      minVisibleMs: 0,
+      maxVisibleMs: 3000,
+      mask: false,
+    }, 2],
   ]);
   assert.equal(await loadPromise, true);
   assert.ok(
@@ -660,8 +936,15 @@ await test("category uses the native loading indicator only when another batch e
     )
   );
   assert.deepEqual(plain(nativeLoadingEvents), [
-    ["show", { title: "加载更多", mask: false }],
-    ["hide"],
+    ["begin", {
+      owner: "category-load-more",
+      title: "加载更多",
+      delayMs: 0,
+      minVisibleMs: 0,
+      maxVisibleMs: 3000,
+      mask: false,
+    }, 2],
+    ["finish", 2],
   ]);
 
   page.data.visibleCards = cases;
@@ -678,14 +961,8 @@ await test("category clears a native load-more indicator when leaving the page",
   let resolveNextBatch;
   let requestCount = 0;
   const nativeLoadingEvents = [];
-  const { page } = loadCategoryPage(cases, {}, {
-    showLoading() {
-      nativeLoadingEvents.push("show");
-    },
-    hideLoading() {
-      nativeLoadingEvents.push("hide");
-    },
-  }, {
+  const { page } = loadCategoryPage(cases, {}, {}, {
+    nativePageLoading: createNativeLoadingRecorder(nativeLoadingEvents),
     fetchCatalogImageUrls: async (ids) => {
       requestCount += 1;
       if (requestCount === 2) {
@@ -704,14 +981,24 @@ await test("category clears a native load-more indicator when leaving the page",
   });
   await page.onLoad({});
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  page.onCardImageLoad({
+    currentTarget: {
+      dataset: {
+        id: "case_1",
+        entryLoadRequestVersion: page._categoryEntryAwaitingImageRequestVersion,
+      },
+    },
+  });
+  nativeLoadingEvents.length = 0;
 
   const loadPromise = page.loadMore();
-  assert.deepEqual(nativeLoadingEvents, ["show"]);
+  assert.equal(nativeLoadingEvents[0][0], "begin");
+  assert.equal(nativeLoadingEvents[0][1].owner, "category-load-more");
   page.onHide();
-  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+  assert.deepEqual(nativeLoadingEvents.map((event) => event[0]), ["begin", "cancel"]);
   resolveNextBatch();
   await loadPromise;
-  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+  assert.deepEqual(nativeLoadingEvents.map((event) => event[0]), ["begin", "cancel"]);
 });
 
 await test("an older append request cannot close the current native indicator", async () => {
@@ -731,14 +1018,8 @@ await test("an older append request cannot close the current native indicator", 
       };
       return images;
     }, {});
-  const { page } = loadCategoryPage(cases, {}, {
-    showLoading() {
-      nativeLoadingEvents.push("show");
-    },
-    hideLoading() {
-      nativeLoadingEvents.push("hide");
-    },
-  }, {
+  const { page } = loadCategoryPage(cases, {}, {}, {
+    nativePageLoading: createNativeLoadingRecorder(nativeLoadingEvents),
     fetchCatalogImageUrls: async (ids) => {
       requestCount += 1;
       if (requestCount === 1) return imageMapFor(ids);
@@ -749,24 +1030,33 @@ await test("an older append request cannot close the current native indicator", 
   });
   await page.onLoad({});
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  page.onCardImageLoad({
+    currentTarget: {
+      dataset: {
+        id: "case_1",
+        entryLoadRequestVersion: page._categoryEntryAwaitingImageRequestVersion,
+      },
+    },
+  });
+  nativeLoadingEvents.length = 0;
 
   const oldLoadPromise = page.loadMore();
   assert.equal(await page.loadMore(), false);
-  assert.deepEqual(nativeLoadingEvents, ["show"]);
+  assert.deepEqual(nativeLoadingEvents.map((event) => event[0]), ["begin"]);
 
   page.applyFilters();
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
-  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+  assert.deepEqual(nativeLoadingEvents.map((event) => event[0]), ["begin", "cancel"]);
 
   const currentLoadPromise = page.loadMore();
-  assert.deepEqual(nativeLoadingEvents, ["show", "hide", "show"]);
+  assert.deepEqual(nativeLoadingEvents.map((event) => event[0]), ["begin", "cancel", "begin"]);
   pendingRequests[0]();
   await oldLoadPromise;
-  assert.deepEqual(nativeLoadingEvents, ["show", "hide", "show"]);
+  assert.deepEqual(nativeLoadingEvents.map((event) => event[0]), ["begin", "cancel", "begin"]);
 
   pendingRequests[1]();
   await currentLoadPromise;
-  assert.deepEqual(nativeLoadingEvents, ["show", "hide", "show", "hide"]);
+  assert.deepEqual(nativeLoadingEvents.map((event) => event[0]), ["begin", "cancel", "begin", "finish"]);
 });
 
 await test("category ignores a pending appended image result after unload", async () => {
@@ -778,14 +1068,8 @@ await test("category ignores a pending appended image result after unload", asyn
   let resolveNextBatch;
   let requestCount = 0;
   const nativeLoadingEvents = [];
-  const { page, setDataCalls } = loadCategoryPage(cases, {}, {
-    showLoading() {
-      nativeLoadingEvents.push("show");
-    },
-    hideLoading() {
-      nativeLoadingEvents.push("hide");
-    },
-  }, {
+  const { page, setDataCalls } = loadCategoryPage(cases, {}, {}, {
+    nativePageLoading: createNativeLoadingRecorder(nativeLoadingEvents),
     fetchCatalogImageUrls: async (ids) => {
       requestCount += 1;
       if (requestCount === 2) {
@@ -804,15 +1088,24 @@ await test("category ignores a pending appended image result after unload", asyn
   });
   await page.onLoad({});
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  page.onCardImageLoad({
+    currentTarget: {
+      dataset: {
+        id: "case_1",
+        entryLoadRequestVersion: page._categoryEntryAwaitingImageRequestVersion,
+      },
+    },
+  });
+  nativeLoadingEvents.length = 0;
 
   const loadPromise = page.loadMore();
   page.onUnload();
   const callsAfterUnload = setDataCalls.length;
-  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+  assert.deepEqual(nativeLoadingEvents.map((event) => event[0]), ["begin", "cancel"]);
   resolveNextBatch();
   await loadPromise;
   assert.equal(setDataCalls.length, callsAfterUnload);
-  assert.deepEqual(nativeLoadingEvents, ["show", "hide"]);
+  assert.deepEqual(nativeLoadingEvents.map((event) => event[0]), ["begin", "cancel"]);
 });
 
 await test("category deduplicates an in-flight non-forced catalog request", async () => {

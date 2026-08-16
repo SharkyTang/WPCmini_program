@@ -244,6 +244,32 @@ page {
   text-overflow: ellipsis;
 }
 
+.home-end-note {
+  margin-top: 48rpx;
+  padding: 34rpx 24rpx 8rpx;
+  border-top: 2rpx solid #eadcca;
+  text-align: center;
+}
+
+.home-end-note-active {
+  background: rgba(154, 97, 37, 0.06);
+  opacity: 0.78;
+}
+
+.home-end-title {
+  color: #8c8176;
+  font-size: 23rpx;
+  line-height: 1.5;
+}
+
+.home-end-link {
+  margin-top: 8rpx;
+  color: #9a6125;
+  font-size: 24rpx;
+  line-height: 1.5;
+  font-weight: 700;
+}
+
 .state-box {
   margin-top: 24rpx;
   padding: 48rpx 24rpx;

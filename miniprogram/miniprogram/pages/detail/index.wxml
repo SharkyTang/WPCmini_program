@@ -35,6 +35,8 @@
             mode="aspectFill"
             src="{{item.renderUrl}}"
             data-index="{{index}}"
+            data-detail-load-request-id="{{item.entryLoadRequestId || 0}}"
+            bindload="onHeroImageLoad"
             binderror="onHeroImageError"
             bindtap="previewImage"
           ></image>

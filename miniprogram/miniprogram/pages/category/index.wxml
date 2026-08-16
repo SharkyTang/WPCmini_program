@@ -110,8 +110,11 @@
               src="{{item.coverImageUrl}}"
               lazy-load
               fade-in="{{true}}"
+              bindload="onCardImageLoad"
               binderror="retryCardImage"
               data-id="{{item.id}}"
+              data-url="{{item.coverImageUrl}}"
+              data-entry-load-request-version="{{item.entryLoadRequestVersion || 0}}"
             ></image>
             <view wx:else class="case-placeholder" bindtap="retryCardImage" data-id="{{item.id}}" data-manual="{{true}}">{{item.imageLoadState === 'failed' ? '图片加载失败，点击重试' : '图片加载中'}}</view>
             <view class="case-title">{{item.title}}</view>

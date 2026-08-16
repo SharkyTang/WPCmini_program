@@ -8,6 +8,11 @@ const {
   getCaseDataVersion,
   shouldRefreshCaseData,
 } = require("../../utils/caseRefresh");
+const {
+  beginPageLoading,
+  finishPageLoading,
+  cancelPageLoading,
+} = require("../../utils/nativePageLoading");
 let reportClientFault = null;
 let reportPerformanceEvent = null;
 try {
@@ -284,6 +289,10 @@ Page({
     };
     this._bootResult = "success";
     this._bootRequestKind = "network";
+    this._homeEntryContentCommitted = false;
+    this._homeEntrySettledBannerIdentities = new Set();
+    this._homeEntryLoadingToken = null;
+    this.beginHomeEntryLoading();
     this._bootTimer = setTimeout(() => {
       if (this.isAlive()) this.reportClientBoot("timeout", "network");
     }, CLIENT_BOOT_TIMEOUT_MS);
@@ -310,6 +319,7 @@ Page({
       if (this._timelinePreview) stagedData.timelinePreview = true;
       this.commitData(stagedData, () => {
         this.markBootMilestone("shell");
+        this.markHomeEntryContentCommitted();
         this._cacheStageCommitted = true;
         this.scheduleCachedHydration();
       });
@@ -329,6 +339,7 @@ Page({
         this.markBootMilestone("data");
         this.markBootMilestone("hero", "not_applicable");
         this.reportClientBoot(this._bootResult, this._bootRequestKind);
+        this.finishHomeEntryLoading();
       });
       return;
     }
@@ -355,15 +366,29 @@ Page({
     if (this._timelinePreview || !this._ready) {
       return Promise.resolve({ ok: true, skipped: true });
     }
+    if (
+      !this._homeEntryLoadingToken
+      && (this._loadPromise || this.data.loading)
+    ) {
+      this.beginHomeEntryLoading();
+      if (this._homeEntryContentCommitted) {
+        this.markHomeEntryContentCommitted();
+      }
+    }
     if (!this.data.loading && shouldRefreshCaseData(this.data.caseDataVersion)) {
       return this.loadData({ silent: true, forceRefresh: true });
     }
     return this._loadPromise || Promise.resolve({ ok: true, skipped: true });
   },
 
+  onHide() {
+    this.cancelHomeEntryLoading();
+  },
+
   onUnload() {
     if (!this._bootReported) this.reportClientBoot("unloaded", "lifecycle");
     this._alive = false;
+    this.cancelHomeEntryLoading();
     this._requestToken = (this._requestToken || 0) + 1;
     this._loadPromise = null;
     if (this._bootTimer) {
@@ -427,6 +452,80 @@ Page({
       console.error("首页状态更新失败", error);
       return false;
     }
+  },
+
+  finishHomeEntryLoading() {
+    const token = this._homeEntryLoadingToken;
+    if (!token) return false;
+    return finishPageLoading(token);
+  },
+
+  beginHomeEntryLoading() {
+    if (!this.isAlive() || this._homeEntryLoadingToken) {
+      return this._homeEntryLoadingToken || null;
+    }
+    this._homeEntryLoadingToken = beginPageLoading({
+      owner: "home-entry",
+      title: "加载中",
+      delayMs: 120,
+      minVisibleMs: 300,
+      maxVisibleMs: 3000,
+      mask: false,
+    });
+    return this._homeEntryLoadingToken;
+  },
+
+  cancelHomeEntryLoading() {
+    const token = this._homeEntryLoadingToken;
+    if (!token) return false;
+    this._homeEntryLoadingToken = null;
+    return cancelPageLoading(token);
+  },
+
+  markHomeEntryContentCommitted() {
+    this._homeEntryContentCommitted = true;
+    const activeIndex = Number(this.data.activeBannerIndex) || 0;
+    const activeIdentity = this.getHomeEntryBannerIdentity(activeIndex);
+    const settledBannerIdentities = this._homeEntrySettledBannerIdentities || new Set();
+    if (
+      !this.hasRenderableActiveBanner() ||
+      (activeIdentity && settledBannerIdentities.has(activeIdentity))
+    ) {
+      this.finishHomeEntryLoading();
+    }
+  },
+
+  getHomeEntryBannerIdentity(index, bannerId, imageUrl) {
+    if (!Number.isInteger(index) || index < 0) return "";
+    const currentBanner = Array.isArray(this.data.banners)
+      ? this.data.banners[index]
+      : null;
+    const resolvedId = bannerId || currentBanner && currentBanner.id || "";
+    const resolvedUrl = imageUrl || currentBanner && currentBanner.renderImageUrl || "";
+    return resolvedId && resolvedUrl
+      ? `${index}\n${resolvedId}\n${resolvedUrl}`
+      : "";
+  },
+
+  isCurrentHomeEntryBanner(index, bannerId, imageUrl) {
+    const eventIdentity = this.getHomeEntryBannerIdentity(index, bannerId, imageUrl);
+    const currentIdentity = this.getHomeEntryBannerIdentity(index);
+    return Boolean(eventIdentity && eventIdentity === currentIdentity);
+  },
+
+  settleHomeEntryBanner(index, bannerId, imageUrl) {
+    if (!Number.isInteger(index) || index < 0) return false;
+    const identity = this.getHomeEntryBannerIdentity(index, bannerId, imageUrl);
+    if (!identity) return false;
+    if (!this._homeEntrySettledBannerIdentities) {
+      this._homeEntrySettledBannerIdentities = new Set();
+    }
+    this._homeEntrySettledBannerIdentities.add(identity);
+    if (!this._homeEntryContentCommitted) return false;
+    const activeIndex = Number(this.data.activeBannerIndex) || 0;
+    if (index !== activeIndex) return false;
+    if (identity !== this.getHomeEntryBannerIdentity(activeIndex)) return false;
+    return this.finishHomeEntryLoading();
   },
 
   markBootMilestone(name, value) {
@@ -530,6 +629,7 @@ Page({
       errorMessage: "",
     }, () => {
       this.markBootMilestone("data");
+      this.markHomeEntryContentCommitted();
       if (typeof callback === "function") callback();
     });
   },
@@ -614,6 +714,7 @@ Page({
         this.markBootMilestone("data");
         this.markBootMilestone("hero", "not_applicable");
         this.reportClientBoot("error", "network");
+        this.finishHomeEntryLoading();
       });
       return { ok: false, error, status: "error" };
     } catch (recoveryError) {
@@ -780,15 +881,19 @@ Page({
   },
 
   navigateToCategory(event) {
-    const sort = event.currentTarget.dataset.sort;
+    const sort = event && event.currentTarget && event.currentTarget.dataset
+      ? event.currentTarget.dataset.sort
+      : "";
     const app = typeof getApp === "function" ? getApp() : null;
-    if (app && app.globalData) {
-      app.globalData[PENDING_CATEGORY_SORT_KEY] = sort || "";
-    }
-    try {
-      wx.setStorageSync(PENDING_CATEGORY_SORT_KEY, sort || "");
-    } catch (error) {
-      console.warn("首页分类排序暂存失败", error);
+    if (sort) {
+      if (app && app.globalData) {
+        app.globalData[PENDING_CATEGORY_SORT_KEY] = sort;
+      }
+      try {
+        wx.setStorageSync(PENDING_CATEGORY_SORT_KEY, sort);
+      } catch (error) {
+        console.warn("首页分类排序暂存失败", error);
+      }
     }
     wx.switchTab({
       url: "/pages/category/index",
@@ -804,16 +909,35 @@ Page({
   },
 
   onBannerImageLoad(event) {
-    const bannerIndex = Number(
-      event && event.currentTarget && event.currentTarget.dataset.index
+    const dataset = event && event.currentTarget && event.currentTarget.dataset || {};
+    const bannerIndex = Number(dataset.index);
+    if (!Number.isInteger(bannerIndex) || bannerIndex < 0) return false;
+    const bannerId = dataset.bannerId || "";
+    const imageUrl = dataset.url || "";
+    const isCurrentBanner = this.isCurrentHomeEntryBanner(
+      bannerIndex,
+      bannerId,
+      imageUrl
     );
-    if (!Number.isInteger(bannerIndex) || bannerIndex !== this.data.activeBannerIndex) {
-      return false;
+    const settled = this.settleHomeEntryBanner(bannerIndex, bannerId, imageUrl);
+    if (!isCurrentBanner) return false;
+    if (bannerIndex !== this.data.activeBannerIndex) {
+      return settled;
     }
     this.markBootMilestone("hero");
-    return this.reportClientBoot(
+    const reported = this.reportClientBoot(
       this._bootResult || "success",
       this._bootRequestKind || "network"
+    );
+    return reported;
+  },
+
+  onBannerImageError(event) {
+    const dataset = event && event.currentTarget && event.currentTarget.dataset || {};
+    return this.settleHomeEntryBanner(
+      Number(dataset.index),
+      dataset.bannerId || "",
+      dataset.url || ""
     );
   },
 
@@ -830,6 +954,10 @@ Page({
     this.commitData({
       activeBannerIndex: current,
       banners,
+    }, () => {
+      const settled = this._homeEntrySettledBannerIdentities || new Set();
+      const identity = this.getHomeEntryBannerIdentity(current);
+      if (identity && settled.has(identity)) this.finishHomeEntryLoading();
     });
   },
 });

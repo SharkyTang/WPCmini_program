@@ -11,6 +11,7 @@ const wxssPath = resolve(__dirname, "../miniprogram/miniprogram/pages/index/inde
 
 function loadHomePage(wxMock = {}, cases = [], options = {}) {
   let pageConfig;
+  let activePageLoadingToken = null;
   const app = {
     globalData: {},
   };
@@ -22,6 +23,7 @@ function loadHomePage(wxMock = {}, cases = [], options = {}) {
     fetchVisibleCases: [],
     clientFaults: [],
     performanceEvents: [],
+    pageLoading: [],
     requiredModules: [],
     reportEvents: [],
     setData: [],
@@ -120,6 +122,28 @@ function loadHomePage(wxMock = {}, cases = [], options = {}) {
             options.shouldRefreshCaseData
               ? options.shouldRefreshCaseData(...args)
               : false,
+        };
+      }
+      if (moduleName === "../../utils/nativePageLoading") {
+        return {
+          beginPageLoading(request) {
+            const token = `home-loading-${calls.pageLoading.length + 1}`;
+            activePageLoadingToken = token;
+            calls.pageLoading.push({ type: "begin", request, token });
+            return token;
+          },
+          finishPageLoading(token) {
+            if (activePageLoadingToken !== token) return false;
+            activePageLoadingToken = null;
+            calls.pageLoading.push({ type: "finish", token });
+            return true;
+          },
+          cancelPageLoading(token) {
+            if (activePageLoadingToken !== token) return false;
+            activePageLoadingToken = null;
+            calls.pageLoading.push({ type: "cancel", token });
+            return true;
+          },
         };
       }
       if (moduleName === "../../utils/caseData") {
@@ -249,14 +273,27 @@ function buildHomeFeed() {
 
 await test("home sections expose more links for popular and latest products", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
+  const wxss = readFileSync(wxssPath, "utf8");
 
-  assert.equal((wxml.match(/查看更多/g) || []).length, 2);
+  assert.equal((wxml.match(/class="section-more"/g) || []).length, 2);
   assert.equal(wxml.includes("&gt;"), false);
   assert.equal(wxml.includes("查看更多 >"), true);
   assert.equal(wxml.includes('data-sort="popular"'), true);
   assert.equal(wxml.includes('data-sort="latest"'), true);
   assert.equal(wxml.includes('bindtap="navigateToCategory"'), true);
   assert.equal((wxml.match(/class="product-image"\s+mode="aspectFill"/g) || []).length, 2);
+  assert.equal(wxml.includes("已展示首页全部案例"), true);
+  assert.equal(wxml.includes("请前往分类页查看更多 >"), true);
+  assert.equal(wxml.includes('hover-class="home-end-note-active"'), true);
+  assert.match(
+    wxml,
+    /wx:if="\{\{!timelinePreview && \(popularCases\.length \|\| latestCases\.length\)\}\}"/
+  );
+  assert.match(wxml, /class="home-end-note"[\s\S]*?bindtap="navigateToCategory"/);
+  assert.match(wxml, /class="home-end-note"[\s\S]*?data-sort=""/);
+  assert.match(wxss, /\.home-end-note\s*\{/);
+  assert.match(wxss, /\.home-end-title\s*\{/);
+  assert.match(wxss, /\.home-end-link\s*\{/);
 });
 
 await test("home carousel keeps one crop ratio across active and preview cards", () => {
@@ -278,7 +315,10 @@ await test("home carousel keeps one crop ratio across active and preview cards",
   assert.match(foregroundTag, /wx:if="{{item\.renderImageUrl}}"/);
   assert.match(foregroundTag, /src="{{item\.renderImageUrl}}"/);
   assert.match(foregroundTag, /bindload="onBannerImageLoad"/);
+  assert.match(foregroundTag, /binderror="onBannerImageError"/);
   assert.match(foregroundTag, /data-index="{{bannerIndex}}"/);
+  assert.match(foregroundTag, /data-banner-id="{{item\.id}}"/);
+  assert.match(foregroundTag, /data-url="{{item\.renderImageUrl}}"/);
   assert.match(foregroundTag, /\slazy-load(?:\s|>)/);
   assert.match(wxss, /\.banner-swiper\s*\{[^}]*height:\s*382rpx/s);
   assert.match(wxss, /\.banner-card\s*\{[^}]*height:\s*360rpx/s);
@@ -296,6 +336,205 @@ await test("home carousel keeps one crop ratio across active and preview cards",
   assert.match(titleTag, /item\.title && bannerIndex == activeBannerIndex/);
   assert.match(bannerCardTag, /bindtap="onBannerTap"/);
   assert.match(bannerCardTag, /data-id="{{item\.caseId}}"/);
+});
+
+await test("home entry loading waits for the active banner after content commits", async () => {
+  const feed = buildHomeFeed();
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => ({
+      revision: 12,
+      notModified: false,
+      ...feed,
+    }),
+  });
+
+  page.onLoad();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.pageLoading[0])),
+    {
+      type: "begin",
+      request: {
+        owner: "home-entry",
+        title: "加载中",
+        delayMs: 120,
+        minVisibleMs: 300,
+        maxVisibleMs: 3000,
+        mask: false,
+      },
+      token: "home-loading-1",
+    }
+  );
+
+  await page._loadPromise;
+  assert.equal(calls.pageLoading.some((event) => event.type === "finish"), false);
+
+  assert.equal(page.onBannerImageError({
+    currentTarget: { dataset: { index: 1 } },
+  }), false);
+  assert.equal(calls.pageLoading.some((event) => event.type === "finish"), false);
+
+  page.onBannerImageLoad({
+    currentTarget: { dataset: { index: 0 } },
+  });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.pageLoading.filter((event) => event.type === "finish"))),
+    [{ type: "finish", token: "home-loading-1" }]
+  );
+  assert.equal(
+    calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
+    1
+  );
+
+  page.onUnload();
+  assert.equal(calls.pageLoading.some((event) => event.type === "cancel"), false);
+});
+
+await test("home entry loading remembers a settled adjacent banner before activation", async () => {
+  const feed = buildHomeFeed();
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => ({
+      revision: 15,
+      notModified: false,
+      ...feed,
+    }),
+  });
+
+  page.onLoad();
+  await page._loadPromise;
+  page.onBannerImageLoad({
+    currentTarget: { dataset: { index: 1 } },
+  });
+  assert.equal(calls.pageLoading.some((event) => event.type === "finish"), false);
+
+  page.onBannerChange({ detail: { current: 1 } });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.pageLoading.filter((event) => event.type === "finish"))),
+    [{ type: "finish", token: "home-loading-1" }]
+  );
+  page.onUnload();
+});
+
+await test("a stale banner event at the same index cannot settle a replacement image", async () => {
+  const feed = buildHomeFeed();
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => ({
+      revision: 16,
+      notModified: false,
+      ...feed,
+    }),
+  });
+
+  page.onLoad();
+  await page._loadPromise;
+  const oldBanner = page.data.banners[0];
+  const replacement = {
+    ...oldBanner,
+    id: "banner_replacement",
+    imageUrl: "https://example.com/banner-replacement.jpg",
+    renderImageUrl: "https://example.com/banner-replacement.jpg",
+  };
+  page.setData({
+    banners: [replacement, ...page.data.banners.slice(1)],
+  });
+
+  assert.equal(page.onBannerImageLoad({
+    currentTarget: {
+      dataset: {
+        index: 0,
+        bannerId: oldBanner.id,
+        url: oldBanner.renderImageUrl,
+      },
+    },
+  }), false);
+  assert.equal(calls.pageLoading.some((event) => event.type === "finish"), false);
+
+  page.onBannerImageLoad({
+    currentTarget: {
+      dataset: {
+        index: 0,
+        bannerId: replacement.id,
+        url: replacement.renderImageUrl,
+      },
+    },
+  });
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.pageLoading.filter((event) => event.type === "finish"))),
+    [{ type: "finish", token: "home-loading-1" }]
+  );
+  page.onUnload();
+});
+
+await test("home entry loading closes without waiting for card images when no banner exists", async () => {
+  const feed = {
+    ...buildHomeFeed(),
+    banners: [],
+  };
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => ({
+      revision: 13,
+      notModified: false,
+      ...feed,
+    }),
+  });
+
+  page.onLoad();
+  await page._loadPromise;
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.pageLoading.filter((event) => event.type === "finish"))),
+    [{ type: "finish", token: "home-loading-1" }]
+  );
+  assert.equal(page.data.popularCases.length > 0, true);
+  assert.equal(page.data.latestCases.length > 0, true);
+  assert.equal(
+    calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
+    1
+  );
+  page.onUnload();
+});
+
+await test("home entry loading treats the active banner error as settled", async () => {
+  const feed = buildHomeFeed();
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => ({
+      revision: 14,
+      notModified: false,
+      ...feed,
+    }),
+  });
+
+  page.onLoad();
+  await page._loadPromise;
+  page.onBannerImageError({
+    currentTarget: { dataset: { index: 0 } },
+  });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.pageLoading.filter((event) => event.type === "finish"))),
+    [{ type: "finish", token: "home-loading-1" }]
+  );
+  assert.equal(
+    calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
+    0
+  );
+  page.onUnload();
+});
+
+await test("hiding home cancels only its unfinished entry loading", () => {
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: () => new Promise(() => {}),
+  });
+
+  page.onLoad();
+  page.onHide();
+  page.onUnload();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.pageLoading.filter((event) => event.type === "cancel"))),
+    [{ type: "cancel", token: "home-loading-1" }]
+  );
+  assert.equal(calls.pageLoading.some((event) => event.type === "finish"), false);
 });
 
 await test("home carousel tracks the active banner for its title state", () => {
@@ -389,6 +628,10 @@ await test("home page uses a softer fallback in timeline single page mode", asyn
   assert.equal(calls.fetchHomeFeed.length, 0);
   assert.equal(calls.fetchVisibleCases.length, 0);
   assert.equal(calls.fetchVisibleBanners.length, 0);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.pageLoading.filter((event) => event.type === "finish"))),
+    [{ type: "finish", token: "home-loading-1" }]
+  );
   assert.equal(
     calls.requiredModules.includes("../../utils/caseCatalogService"),
     false
@@ -435,6 +678,7 @@ await test("cached home renders one banner first, hydrates after ready, and reva
     calls.setData.some((entry) => entry.timelinePreview === false),
     false
   );
+  assert.equal(calls.pageLoading.some((event) => event.type === "finish"), false);
 
   page.onBannerImageLoad({
     currentTarget: { dataset: { index: 0 } },
@@ -442,6 +686,10 @@ await test("cached home renders one banner first, hydrates after ready, and reva
   assert.equal(
     calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
     1
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.pageLoading.filter((event) => event.type === "finish"))),
+    [{ type: "finish", token: "home-loading-1" }]
   );
 
   await page.onShow();
@@ -501,6 +749,9 @@ await test("timeline scene with cache hydrates locally and never contacts cloud"
   page.onLoad();
   assert.equal(page.data.timelinePreview, true);
   assert.equal(page.data.banners.length, 1);
+  page.onBannerImageError({
+    currentTarget: { dataset: { index: 0 } },
+  });
   page.onReady();
   await page.onShow();
   await page.onPullDownRefresh();
@@ -517,6 +768,30 @@ await test("timeline scene with cache hydrates locally and never contacts cloud"
   );
   assert.equal(calls.requiredModules.includes("../../utils/cloudData"), false);
   assert.equal(calls.stopPullDownRefresh, 1);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.pageLoading.filter((event) => event.type === "finish"))),
+    [{ type: "finish", token: "home-loading-1" }]
+  );
+  page.onUnload();
+});
+
+await test("home entry loading closes when the uncached request fails", async () => {
+  const { calls, page } = loadHomePage({}, [], {
+    isLegacyCatalogFallbackAllowed: () => false,
+    fetchHomeFeed: async () => {
+      throw new Error("catalog unavailable");
+    },
+  });
+
+  page.onLoad();
+  const result = await page._loadPromise;
+
+  assert.equal(result.status, "error");
+  assert.match(page.data.errorMessage, /暂时读取不到案例数据/);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.pageLoading.filter((event) => event.type === "finish"))),
+    [{ type: "finish", token: "home-loading-1" }]
+  );
   page.onUnload();
 });
 
@@ -924,6 +1199,27 @@ await test("home more links switch to category tab with selected sort", () => {
   assert.equal(switchedUrl, "/pages/category/index");
   assert.equal(app.globalData.pendingCategorySort, "popular");
   assert.equal(storedSort, "popular");
+});
+
+await test("home end note opens category without forcing a new sort", () => {
+  let switchedUrl = "";
+  let storedSort = "not-written";
+  const { app, page } = loadHomePage({
+    setStorageSync(key, value) {
+      if (key === "pendingCategorySort") storedSort = value;
+    },
+    switchTab(options) {
+      switchedUrl = options.url;
+    },
+  });
+
+  page.navigateToCategory({
+    currentTarget: { dataset: { sort: "" } },
+  });
+
+  assert.equal(switchedUrl, "/pages/category/index");
+  assert.equal(app.globalData.pendingCategorySort, undefined);
+  assert.equal(storedSort, "not-written");
 });
 
 await test("home contains storage and pull-down completion API failures", async () => {
