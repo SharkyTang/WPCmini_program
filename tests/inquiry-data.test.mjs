@@ -94,6 +94,17 @@ function loadInquiryPageConfig(options = {}) {
           async submitInquiry(data, context) {
             calls.submissions.push({ data: plain(data), context: plain(context) });
             if (options.submitError) throw options.submitError;
+            return {
+              id: "inquiry_1",
+              replySubscription: { enabled: false, templateId: "" },
+            };
+          },
+        };
+      }
+      if (moduleName === "../../utils/inquiryFollowupService") {
+        return {
+          async subscribeToInquiryReply() {
+            return { accepted: true, status: "granted" };
           },
         };
       }
@@ -176,6 +187,7 @@ test("normalizes inquiry draft text and array fields", () => {
   });
 
   assert.deepEqual(plain(draft), {
+    inquirySchemaVersion: 2,
     source: "detail",
     caseDocId: "doc_1",
     caseId: "case_001",
@@ -222,6 +234,8 @@ test("inquiry page uses WeUI top tips and sectioned form layout", () => {
   assert.equal(wxml.includes("需求说明"), true);
   assert.equal(wxml.includes("联系信息"), true);
   assert.equal(wxml.includes("仅用于就本次需求联系你"), true);
+  assert.equal(wxml.includes("管理员已收到提醒"), false);
+  assert.equal(wxml.includes("需求已记录，管理员可在需求管理中查看"), true);
   assert.match(wxml, /bindtap="openPrivacyNotice"/);
 });
 
@@ -317,12 +331,23 @@ test("changing inquiry contact type updates its UI without clearing the value", 
   assert.equal(page.data.draft.contactType, "email");
 });
 
-test("validates whitelisted inquiry contact types without breaking legacy drafts", () => {
+test("requires a whitelisted contact type in the current client schema", () => {
   const base = {
     packageTypes: ["礼盒"],
     content: "想做一套礼盒包装",
   };
-  assert.equal(validateInquiryDraft({ ...base, contact: "legacy-contact" }).valid, true);
+  assert.equal(
+    validateInquiryDraft({ ...base, contact: "missing-type" }).message,
+    "请选择联系方式类型"
+  );
+  assert.equal(
+    validateInquiryDraft({
+      ...base,
+      inquirySchemaVersion: 1,
+      contact: "legacy-contact",
+    }).valid,
+    true
+  );
   assert.equal(
     validateInquiryDraft({ ...base, contact: "wx-user", contactType: CONTACT_TYPES.WECHAT }).valid,
     true
@@ -384,6 +409,35 @@ await asyncTest("inquiry validation and submit failures use one error surface", 
   assert.deepEqual(failed.calls.toastMessages, []);
 });
 
+await asyncTest("inquiry submit keeps the notifier result separate from durable success", async () => {
+  const service = loadCommonJsModule(inquiryServicePath, {
+    "./inquiryData": inquiryData,
+    "../../../utils/userDataService": {
+      async callUserData() {
+        return {
+          id: "inquiry_durable_1",
+          alertStatus: "deferred",
+          replySubscription: { enabled: false, templateId: "" },
+        };
+      },
+    },
+  });
+  const result = await service.submitInquiry({
+    inquirySchemaVersion: 2,
+    packageTypes: ["礼盒"],
+    content: "想做一套礼盒包装",
+    contact: "wx-user",
+    contactType: "wechat",
+  }, {
+    route: "pages/inquiry/index",
+    source: "profile",
+    sourcePage: "pages/profile/index",
+    systemInfo: { platform: "ios" },
+  });
+  assert.equal(result.id, "inquiry_durable_1");
+  assert.equal(result.alertStatus, "deferred");
+});
+
 test("minimizes inquiry system information before upload", () => {
   assert.deepEqual(
     plain(normalizeInquirySystemInfo({
@@ -435,6 +489,7 @@ test("builds default inquiry draft from case item", () => {
   });
 
   assert.deepEqual(plain(draft), {
+    inquirySchemaVersion: 2,
     source: "detail",
     caseDocId: "doc_1",
     caseId: "case_001",
@@ -475,6 +530,7 @@ test("builds inquiry record with defaults and context", () => {
   );
 
   assert.deepEqual(plain(record), {
+    inquirySchemaVersion: 2,
     source: "detail",
     caseDocId: "doc_1",
     caseId: "case_001",

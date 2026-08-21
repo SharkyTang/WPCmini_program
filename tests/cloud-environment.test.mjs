@@ -55,23 +55,24 @@ test("cloud environments map develop, trial and release through a pure resolver"
   assert.equal(envConfig.resolveCloudEnvironment("release", configured), "cloud-release");
 });
 
-test("develop, trial and release use the same production environment", () => {
+test("authorized temporary mode maps every known runtime version to production", () => {
   assert.equal(envConfig.CLOUD_ENVIRONMENT_IDS.develop, envConfig.PRODUCTION_ENV_ID);
   assert.equal(envConfig.CLOUD_ENVIRONMENT_IDS.trial, envConfig.PRODUCTION_ENV_ID);
   assert.equal(envConfig.CLOUD_ENVIRONMENT_IDS.release, envConfig.PRODUCTION_ENV_ID);
   assert.notEqual(envConfig.STAGING_ENV_ID, envConfig.PRODUCTION_ENV_ID);
 });
 
-test("missing, blank and unknown environment values safely use the current production cloud", () => {
+test("blank known config uses its safe environment while unknown versions stay unresolved", () => {
   assert.equal(
     envConfig.resolveCloudEnvironment("develop", { develop: "   " }),
     envConfig.PRODUCTION_ENV_ID
   );
   assert.equal(
     envConfig.resolveCloudEnvironment("unknown", {}),
-    envConfig.PRODUCTION_ENV_ID
+    ""
   );
-  assert.equal(envConfig.normalizeEnvVersion(), "release");
+  assert.equal(envConfig.resolveCloudEnvironment(undefined, {}), "");
+  assert.equal(envConfig.normalizeEnvVersion(), "");
 });
 
 test("runtime environment detection is defensive", () => {
@@ -84,46 +85,117 @@ test("runtime environment detection is defensive", () => {
     getAccountInfoSync() {
       throw new Error("not ready");
     },
-  }), "release");
+  }), "");
+  assert.equal(envConfig.getMiniProgramEnvVersion({
+    getAccountInfoSync() {
+      return { miniProgram: { envVersion: "unexpected" } };
+    },
+  }), "");
+  assert.equal(envConfig.getMiniProgramEnvVersion({}), "");
 });
 
-test("the release app initializes the unchanged production environment", () => {
-  let appConfig;
-  let cloudInitOptions;
-  const sandbox = {
-    App(config) {
-      appConfig = config;
-    },
-    console,
-    require(moduleName) {
-      if (moduleName === "./envList") return envConfig;
-      if (moduleName === "./utils/errorTelemetry") {
-        return { reportClientFault() {} };
-      }
-      throw new Error(`Unexpected require: ${moduleName}`);
-    },
-    wx: {
-      getAccountInfoSync() {
-        return { miniProgram: { envVersion: "release" } };
+test("all known runtime versions initialize the shared production environment", () => {
+  ["develop", "trial", "release"].forEach((envVersion) => {
+    let appConfig;
+    let cloudInitOptions;
+    const sandbox = {
+      App(config) {
+        appConfig = config;
       },
-      cloud: {
-        init(options) {
-          cloudInitOptions = options;
+      console,
+      require(moduleName) {
+        if (moduleName === "./envList") return envConfig;
+        if (moduleName === "./utils/errorTelemetry") {
+          return { reportClientFault() {} };
+        }
+        throw new Error(`Unexpected require: ${moduleName}`);
+      },
+      wx: {
+        getAccountInfoSync() {
+          return { miniProgram: { envVersion } };
+        },
+        cloud: {
+          init(options) {
+            cloudInitOptions = options;
+          },
         },
       },
-    },
-  };
-  vm.runInNewContext(readFileSync(appPath, "utf8"), sandbox, {
-    filename: appPath,
+    };
+    vm.runInNewContext(readFileSync(appPath, "utf8"), sandbox, {
+      filename: appPath,
+    });
+    const app = {};
+    appConfig.onLaunch.call(app);
+    assert.equal(app.globalData.envVersion, envVersion);
+    assert.equal(app.globalData.env, envConfig.PRODUCTION_ENV_ID);
+    assert.equal(app.globalData.cloudReady, true);
+    assert.deepEqual(JSON.parse(JSON.stringify(cloudInitOptions)), {
+      env: envConfig.PRODUCTION_ENV_ID,
+      traceUser: true,
+    });
   });
-  const app = {};
-  appConfig.onLaunch.call(app);
-  assert.equal(app.globalData.envVersion, "release");
-  assert.equal(app.globalData.env, envConfig.PRODUCTION_ENV_ID);
-  assert.equal(app.globalData.cloudReady, true);
-  assert.deepEqual(JSON.parse(JSON.stringify(cloudInitOptions)), {
-    env: envConfig.PRODUCTION_ENV_ID,
-    traceUser: true,
+});
+
+test("unknown or unreadable runtime versions never initialize CloudBase", () => {
+  const scenarios = [
+    {
+      name: "unknown",
+      getAccountInfoSync() {
+        return { miniProgram: { envVersion: "unexpected" } };
+      },
+    },
+    {
+      name: "read failure",
+      getAccountInfoSync() {
+        throw new Error("account info unavailable");
+      },
+    },
+  ];
+
+  scenarios.forEach((scenario) => {
+    let appConfig;
+    let cloudInitCount = 0;
+    const reports = [];
+    const sandbox = {
+      App(config) {
+        appConfig = config;
+      },
+      console: {
+        ...console,
+        error() {},
+      },
+      require(moduleName) {
+        if (moduleName === "./envList") return envConfig;
+        if (moduleName === "./utils/errorTelemetry") {
+          return {
+            reportClientFault(payload) {
+              reports.push(payload);
+            },
+          };
+        }
+        throw new Error(`Unexpected require: ${moduleName}`);
+      },
+      wx: {
+        getAccountInfoSync: scenario.getAccountInfoSync,
+        cloud: {
+          init() {
+            cloudInitCount += 1;
+          },
+        },
+      },
+    };
+    vm.runInNewContext(readFileSync(appPath, "utf8"), sandbox, {
+      filename: appPath,
+    });
+    const app = {};
+    appConfig.onLaunch.call(app);
+    assert.equal(cloudInitCount, 0, scenario.name);
+    assert.equal(app.globalData.envVersion, "", scenario.name);
+    assert.equal(app.globalData.env, "", scenario.name);
+    assert.equal(app.globalData.cloudReady, false, scenario.name);
+    assert.equal(reports.length, 1, scenario.name);
+    assert.equal(reports[0].stage, "environment_detection", scenario.name);
+    assert.equal(reports[0].code, "UNKNOWN_ENV_VERSION", scenario.name);
   });
 });
 

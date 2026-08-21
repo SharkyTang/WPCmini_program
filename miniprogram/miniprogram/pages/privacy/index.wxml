@@ -17,7 +17,7 @@
       </view>
       <view class="data-row">
         <view class="data-name">需求、反馈与联系方式</view>
-        <view class="data-copy">仅在你主动提交时保存，用于回复反馈、沟通包装需求和跟进服务。</view>
+        <view class="data-copy">仅在你主动提交时保存，用于回复反馈、沟通包装需求、展示跟进记录和发送你主动授权的回复提醒。</view>
       </view>
       <view class="data-row">
         <view class="data-name">必要的运行信息</view>
@@ -47,6 +47,13 @@
         <view>
           <view class="action-title">管理浏览记录</view>
           <view class="action-copy">删除单条记录或清空全部记录</view>
+        </view>
+        <view class="action-arrow">›</view>
+      </view>
+      <view class="action-row" data-key="inquiries" bindtap="openDataAction">
+        <view>
+          <view class="action-title">查看我的需求</view>
+          <view class="action-copy">查看提交内容、处理状态和顾问回复</view>
         </view>
         <view class="action-arrow">›</view>
       </view>

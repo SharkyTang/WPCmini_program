@@ -60,6 +60,13 @@ page {
   margin-top: 4rpx;
 }
 
+.section-description {
+  margin-top: 10rpx;
+  color: var(--brand-muted);
+  font-size: 22rpx;
+  line-height: 1.5;
+}
+
 .section-head {
   display: flex;
   align-items: center;
@@ -102,7 +109,8 @@ page {
 
 .status-picker,
 .copy-button,
-.outline-button {
+.outline-button,
+.claim-button {
   min-height: 58rpx;
   padding: 0 22rpx;
   border: 2rpx solid var(--brand-line);
@@ -113,6 +121,49 @@ page {
   justify-content: center;
   font-size: 23rpx;
   font-weight: 800;
+}
+
+.claim-panel {
+  margin-top: 24rpx;
+  padding: 20rpx 22rpx;
+  border-radius: 8rpx;
+  background: #f3ece2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+}
+
+.claim-panel-mine {
+  background: var(--brand-green-soft);
+}
+
+.claim-label,
+.claim-time {
+  color: var(--brand-muted);
+  font-size: 20rpx;
+  line-height: 1.4;
+}
+
+.claim-value {
+  margin-top: 4rpx;
+  color: var(--brand-ink);
+  font-size: 25rpx;
+  font-weight: 800;
+}
+
+.claim-time {
+  margin-top: 4rpx;
+}
+
+.claim-button {
+  min-width: 188rpx;
+  border-color: var(--brand-green);
+  color: var(--brand-green);
+}
+
+.action-disabled {
+  opacity: 0.56;
 }
 
 .contact-card {
@@ -145,6 +196,34 @@ page {
   line-height: 1.4;
 }
 
+.contact-source {
+  margin-top: 8rpx;
+  color: var(--brand-green);
+  font-size: 21rpx;
+  font-weight: 700;
+}
+
+.contact-source-warning {
+  color: #a66018;
+}
+
+.contact-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14rpx;
+}
+
+.legacy-contact-warning {
+  margin-top: 16rpx;
+  padding: 16rpx 18rpx;
+  border-radius: 8rpx;
+  background: #fff3df;
+  color: #945a18;
+  font-size: 21rpx;
+  line-height: 1.5;
+}
+
 .info-row {
   margin-top: 20rpx;
   display: flex;
@@ -172,6 +251,10 @@ page {
 .copy-button,
 .outline-button {
   margin-top: 24rpx;
+  min-width: 230rpx;
+}
+
+.standalone-button {
   width: 230rpx;
 }
 
@@ -186,7 +269,8 @@ page {
   white-space: pre-wrap;
 }
 
-.note-input {
+.note-input,
+.reply-input {
   margin-top: 20rpx;
   width: 100%;
   min-height: 220rpx;
@@ -198,6 +282,107 @@ page {
   font-size: 24rpx;
   line-height: 1.5;
   box-sizing: border-box;
+}
+
+.reply-input {
+  min-height: 250rpx;
+}
+
+.quick-reply-scroll {
+  margin-top: 18rpx;
+  width: 100%;
+  white-space: nowrap;
+}
+
+.quick-reply-row {
+  display: inline-flex;
+  gap: 12rpx;
+  padding-bottom: 8rpx;
+}
+
+.quick-reply {
+  min-height: 54rpx;
+  padding: 0 20rpx;
+  border: 2rpx solid var(--brand-line);
+  border-radius: 27rpx;
+  background: #fffdf9;
+  color: var(--brand-gold);
+  display: flex;
+  align-items: center;
+  font-size: 21rpx;
+  font-weight: 800;
+}
+
+.quick-reply:active {
+  background: var(--brand-gold-soft);
+}
+
+.timeline {
+  margin-top: 24rpx;
+}
+
+.timeline-item {
+  position: relative;
+  padding: 0 0 28rpx 40rpx;
+}
+
+.timeline-item::before {
+  content: "";
+  position: absolute;
+  top: 18rpx;
+  bottom: -4rpx;
+  left: 10rpx;
+  width: 2rpx;
+  background: var(--brand-line);
+}
+
+.timeline-item:last-child::before {
+  display: none;
+}
+
+.timeline-dot {
+  position: absolute;
+  top: 8rpx;
+  left: 0;
+  width: 22rpx;
+  height: 22rpx;
+  border: 4rpx solid #fffdf9;
+  border-radius: 50%;
+  background: var(--brand-gold);
+  box-shadow: 0 0 0 2rpx var(--brand-line);
+  box-sizing: border-box;
+}
+
+.timeline-reply .timeline-dot {
+  background: var(--brand-green);
+}
+
+.timeline-title {
+  color: var(--brand-ink);
+  font-size: 24rpx;
+  line-height: 1.4;
+  font-weight: 800;
+}
+
+.timeline-content {
+  margin-top: 8rpx;
+  padding: 14rpx 16rpx;
+  border-radius: 6rpx;
+  background: var(--brand-bg);
+  color: var(--brand-ink);
+  font-size: 22rpx;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.timeline-time {
+  margin-top: 6rpx;
+  color: #a3978a;
+  font-size: 19rpx;
+}
+
+.admin-note-section {
+  border: 2rpx solid var(--brand-line);
 }
 
 .note-count {

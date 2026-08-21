@@ -82,6 +82,13 @@ function loadProfilePage(wxMock = {}, options = {}) {
             (async () => false),
         };
       }
+      if (moduleName === "../../utils/inquiryFollowupService") {
+        return {
+          fetchInquiryBadgeSummary:
+            options.fetchInquiryBadgeSummary
+            || (async () => ({ myUnreadCount: 0, adminNewCount: 0 })),
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     console,
@@ -694,4 +701,56 @@ await test("profile shows admin entries only when access is granted", async () =
   assert.equal(page.data.hasInquiryAdminAccess, true);
   assert.equal(page.data.hasNotificationAdminAccess, true);
   assert.equal(navigatedUrl, "/pages/case-admin/index");
+});
+
+await test("profile shows customer reply and admin new-inquiry badges", async () => {
+  const page = loadProfilePage({}, {
+    fetchInquiryBadgeSummary: async () => ({
+      myUnreadCount: 120,
+      adminNewCount: 3,
+    }),
+  });
+  page._alive = true;
+  page._pageVisible = true;
+  await page.loadInquiryBadges();
+  assert.equal(page.data.myInquiryUnreadCount, 120);
+  assert.equal(page.data.myInquiryUnreadLabel, "99+");
+  assert.equal(page.data.adminNewInquiryCount, 3);
+  assert.equal(page.data.adminNewInquiryLabel, "3");
+  const wxml = readFileSync(wxmlPath, "utf8");
+  assert.equal(wxml.includes("openMyInquiries"), true);
+  assert.equal(wxml.includes("adminNewInquiryLabel"), true);
+});
+
+await test("profile ignores stale inquiry badge responses after the page is hidden", async () => {
+  let resolveSummary;
+  const page = loadProfilePage({}, {
+    fetchInquiryBadgeSummary: () => new Promise((resolve) => {
+      resolveSummary = resolve;
+    }),
+  });
+  page.onLoad();
+  const pending = page.loadInquiryBadges();
+  page.onHide();
+  resolveSummary({ myUnreadCount: 8, adminNewCount: 5 });
+  await pending;
+  assert.equal(page.data.myInquiryUnreadCount, 0);
+  assert.equal(page.data.adminNewInquiryCount, 0);
+});
+
+await test("profile notice shortcut keeps opening the existing notification page", () => {
+  const navigations = [];
+  const page = loadProfilePage({
+    navigateTo(options) {
+      navigations.push(options.url);
+    },
+  });
+  page.data.myInquiryUnreadCount = 2;
+  page.handleQuickAction({ currentTarget: { dataset: { key: "notice" } } });
+  page.data.myInquiryUnreadCount = 0;
+  page.handleQuickAction({ currentTarget: { dataset: { key: "notice" } } });
+  assert.deepEqual(navigations, [
+    "/pages/notifications/index",
+    "/pages/notifications/index",
+  ]);
 });

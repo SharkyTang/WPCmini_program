@@ -1,4 +1,10 @@
+const crypto = require("crypto");
+
 const INQUIRY_COLLECTION = "inquiries";
+const INQUIRY_MESSAGE_COLLECTION = "inquiry_messages";
+const INQUIRY_ALERT_JOB_COLLECTION = "inquiry_alert_jobs";
+const INQUIRY_REPLY_SUBSCRIPTION_COLLECTION = "inquiry_reply_subscriptions";
+const INQUIRY_SCHEMA_VERSION = 2;
 const FEEDBACK_COLLECTION = "feedback";
 const NOTIFICATION_SUBSCRIPTION_COLLECTION = "notification_subscriptions";
 const USER_PROFILE_NICKNAME_MAX_LENGTH = 14;
@@ -80,7 +86,11 @@ function normalizeSystemInfo(value) {
 }
 
 function normalizeInquiryDraft(draft = {}) {
+  const schemaVersion = Number(draft.inquirySchemaVersion);
   return {
+    inquirySchemaVersion: Number.isInteger(schemaVersion) && schemaVersion > 0
+      ? schemaVersion
+      : 0,
     source: trimText(draft.source),
     caseDocId: trimText(draft.caseDocId || draft.id || draft._id),
     caseId: trimText(draft.caseId),
@@ -126,6 +136,12 @@ function validateInquiryDraft(draft = {}) {
   if (rawContactType && !normalized.contactType) {
     return { valid: false, code: "INVALID_INQUIRY", message: "联系方式类型无效" };
   }
+  if (
+    normalized.inquirySchemaVersion >= INQUIRY_SCHEMA_VERSION
+    && !normalized.contactType
+  ) {
+    return { valid: false, code: "INVALID_INQUIRY", message: "请选择联系方式类型" };
+  }
   if (normalized.contactType === CONTACT_TYPES.PHONE && !isValidPhone(normalized.contact)) {
     return { valid: false, code: "INVALID_INQUIRY", message: "请输入正确的手机号" };
   }
@@ -138,7 +154,9 @@ function validateInquiryDraft(draft = {}) {
 
 function buildInquiryRecord(draft = {}, context = {}) {
   const normalized = normalizeInquiryDraft(draft);
+  const isCurrentSchema = normalized.inquirySchemaVersion >= INQUIRY_SCHEMA_VERSION;
   return {
+    inquirySchemaVersion: isCurrentSchema ? INQUIRY_SCHEMA_VERSION : 1,
     source: trimText(context.source || normalized.source) || "profile",
     caseDocId: normalized.caseDocId,
     caseId: normalized.caseId,
@@ -151,13 +169,38 @@ function buildInquiryRecord(draft = {}, context = {}) {
     content: normalized.content,
     contact: normalized.contact,
     contactType: normalized.contactType,
+    contactTypeSource: normalized.contactType ? "customer_selected" : "legacy_missing",
     sourcePage: trimText(context.sourcePage),
     route: trimText(context.route),
     openid: trimText(context.openid),
     appVersion: trimText(context.appVersion) || "v2.8",
     systemInfo: normalizeSystemInfo(context.systemInfo),
     status: "new",
+    claimedByOpenid: "",
+    claimedBy: "",
+    claimedAt: null,
+    lastAdminReplyAt: null,
+    lastAdminReplyPreview: "",
+    replyCount: 0,
+    customerUnreadCount: 0,
+    customerLastReadAt: null,
+    // Durable notifier queue marker. This is stored even while email is off,
+    // so a later timer can recover a failed best-effort invocation.
+    alertTaskStatus: "pending",
+    alertTaskPlanVersion: "",
+    alertTaskStopReason: "",
+    alertTaskUpdatedAt: null,
   };
+}
+
+function buildInquiryReplySubscriptionId(inquiryId, openid) {
+  const digest = crypto
+    .createHash("sha256")
+    .update(`${trimText(inquiryId)}\n${trimText(openid)}`)
+    .digest("hex")
+    .slice(0, 28);
+  // Keep the complete custom document ID at 32 characters for CloudBase.
+  return `irs_${digest}`;
 }
 
 function normalizeFeedbackDraft(draft = {}) {
@@ -316,13 +359,18 @@ function pickPreferenceRecord(records = []) {
 
 module.exports = {
   FEEDBACK_COLLECTION,
+  INQUIRY_ALERT_JOB_COLLECTION,
   INQUIRY_COLLECTION,
+  INQUIRY_MESSAGE_COLLECTION,
+  INQUIRY_REPLY_SUBSCRIPTION_COLLECTION,
+  INQUIRY_SCHEMA_VERSION,
   NOTIFICATION_SUBSCRIPTION_COLLECTION,
   NOTIFICATION_TYPE_KEYS,
   CONTACT_TYPES,
   CONTACT_TYPE_VALUES,
   buildFeedbackRecord,
   buildInquiryRecord,
+  buildInquiryReplySubscriptionId,
   USER_PROFILE_NICKNAME_MAX_LENGTH,
   normalizeNotificationType,
   normalizeSubscriptionStatus,

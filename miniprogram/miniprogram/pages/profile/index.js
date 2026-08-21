@@ -22,6 +22,7 @@ const {
   finishPageLoading,
   cancelPageLoading,
 } = require("../../utils/nativePageLoading");
+const { fetchInquiryBadgeSummary } = require("../../utils/inquiryFollowupService");
 const HOME_SHARE_TITLE = "金亿诚包装科技｜酒包装灵感库";
 const LIBRARY_QUICK_ACTIONS = {
   favorites: {
@@ -95,6 +96,10 @@ Page({
     checkingCaseAdminAccess: false,
     hasNotificationAdminAccess: false,
     checkingNotificationAdminAccess: false,
+    myInquiryUnreadCount: 0,
+    myInquiryUnreadLabel: "",
+    adminNewInquiryCount: 0,
+    adminNewInquiryLabel: "",
     quickActions: [
       { key: "favorites", iconSrc: "/assets/profile/icon-favorite.png", title: "我的收藏" },
       { key: "history", iconSrc: "/assets/profile/icon-history.png", title: "浏览记录" },
@@ -123,6 +128,7 @@ Page({
   onLoad() {
     this._alive = true;
     this._pageVisible = true;
+    this._inquiryBadgeRequestVersion = 0;
     this._profileRequestVersion = 0;
     this._profileLoadingToken = null;
     this._profileLoadingFinished = false;
@@ -136,6 +142,7 @@ Page({
   onShow() {
     this._pageVisible = true;
     this.loadProfileInfo();
+    this.loadInquiryBadges();
     return this.resumePendingLibraryNavigation();
   },
 
@@ -145,16 +152,47 @@ Page({
       forceRefresh: true,
       suppressEntryLoading: true,
     });
+    this.loadInquiryBadges();
+  },
+
+  async loadInquiryBadges() {
+    const requestVersion = (this._inquiryBadgeRequestVersion || 0) + 1;
+    this._inquiryBadgeRequestVersion = requestVersion;
+    try {
+      const summary = await fetchInquiryBadgeSummary();
+      if (
+        !isProfilePageAlive(this)
+        || this._pageVisible === false
+        || requestVersion !== this._inquiryBadgeRequestVersion
+      ) return;
+      const myCount = summary.myUnreadCount;
+      const adminCount = summary.adminNewCount;
+      safeSetProfileData(this, {
+        myInquiryUnreadCount: myCount,
+        myInquiryUnreadLabel: myCount > 99 ? "99+" : String(myCount || ""),
+        adminNewInquiryCount: adminCount,
+        adminNewInquiryLabel: adminCount > 99 ? "99+" : String(adminCount || ""),
+      });
+    } catch (error) {
+      if (
+        !isProfilePageAlive(this)
+        || this._pageVisible === false
+        || requestVersion !== this._inquiryBadgeRequestVersion
+      ) return;
+      console.warn("需求红点读取失败", error);
+    }
   },
 
   onHide() {
     this._pageVisible = false;
+    this._inquiryBadgeRequestVersion = (this._inquiryBadgeRequestVersion || 0) + 1;
     this.cancelProfileEntryLoading();
   },
 
   onUnload() {
     this._alive = false;
     this._pageVisible = false;
+    this._inquiryBadgeRequestVersion = (this._inquiryBadgeRequestVersion || 0) + 1;
     this._profileRequestVersion = (this._profileRequestVersion || 0) + 1;
     this.cancelProfileEntryLoading();
   },
@@ -463,6 +501,10 @@ Page({
 
   openInquiryForm() {
     wx.navigateTo({ url: "/pages/inquiry/index?source=profile" });
+  },
+
+  openMyInquiries() {
+    wx.navigateTo({ url: "/pages/my-inquiries/index" });
   },
 
   openPrivacyCenter() {

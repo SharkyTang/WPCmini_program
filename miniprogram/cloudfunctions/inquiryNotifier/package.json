@@ -1,0 +1,13 @@
+{
+  "name": "inquiryNotifier",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "nodemailer": "6.10.1",
+    "wx-server-sdk": "~2.6.3"
+  }
+}

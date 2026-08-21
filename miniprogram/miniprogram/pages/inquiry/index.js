@@ -9,6 +9,7 @@ const {
   validateInquiryDraft,
 } = require("./utils/inquiryData");
 const { submitInquiry } = require("./utils/inquiryService");
+const { subscribeToInquiryReply } = require("../../utils/inquiryFollowupService");
 
 const SOURCE_PAGE_MAP = {
   profile: "pages/profile/index",
@@ -83,6 +84,14 @@ Page({
     selectedContactType: CONTACT_TYPE_OPTIONS[0].label,
     contactPlaceholder: CONTACT_TYPE_OPTIONS[0].placeholder,
     submitting: false,
+    submitSucceeded: false,
+    submittedInquiryId: "",
+    alertStatus: "deferred",
+    replySubscription: {
+      enabled: false,
+      templateId: "",
+    },
+    subscribing: false,
     topTips: {
       show: false,
       message: "",
@@ -235,25 +244,16 @@ Page({
     });
 
     try {
-      await submitInquiry(validation.data, {
+      const result = await submitInquiry(validation.data, {
         source: this.data.source,
         sourcePage: this.data.sourcePage,
       });
-
-      wx.showToast({
-        title: "已收到需求，我们会尽快联系你",
-        icon: "none",
+      this.setData({
+        submitSucceeded: true,
+        submittedInquiryId: result.id,
+        alertStatus: result.alertStatus || "deferred",
+        replySubscription: result.replySubscription,
       });
-
-      setTimeout(() => {
-        wx.navigateBack({
-          fail() {
-            wx.switchTab({
-              url: "/pages/profile/index",
-            });
-          },
-        });
-      }, 800);
     } catch (error) {
       console.error("需求提交失败", error);
       this.showTopTips(error.code === "INVALID_INQUIRY" ? error.message : "提交失败，请稍后重试");
@@ -262,5 +262,49 @@ Page({
         submitting: false,
       });
     }
+  },
+
+  async subscribeReply() {
+    if (this.data.subscribing) return;
+    const { enabled, templateId } = this.data.replySubscription || {};
+    if (!enabled || !templateId) {
+      wx.showToast({
+        title: "微信提醒尚未启用，回复仍会保存在“我的需求”",
+        icon: "none",
+      });
+      return;
+    }
+    this.setData({ subscribing: true });
+    try {
+      const result = await subscribeToInquiryReply(
+        this.data.submittedInquiryId,
+        templateId
+      );
+      wx.showToast({
+        title: result.accepted ? "已开启回复提醒" : "未开启提醒，可稍后再试",
+        icon: "none",
+      });
+    } catch (error) {
+      console.error("需求回复订阅失败", error);
+      wx.showToast({ title: error.message || "订阅失败，请稍后再试", icon: "none" });
+    } finally {
+      this.setData({ subscribing: false });
+    }
+  },
+
+  openMyInquiry() {
+    const id = this.data.submittedInquiryId;
+    const url = id
+      ? `/pages/my-inquiries/detail?id=${encodeURIComponent(id)}`
+      : "/pages/my-inquiries/index";
+    wx.redirectTo({ url });
+  },
+
+  finishSubmission() {
+    wx.navigateBack({
+      fail() {
+        wx.switchTab({ url: "/pages/profile/index" });
+      },
+    });
   },
 });

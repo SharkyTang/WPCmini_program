@@ -1,0 +1,9 @@
+{
+  "triggers": [
+    {
+      "name": "inquiry-notifier-scan",
+      "type": "timer",
+      "config": "0 * * * * * *"
+    }
+  ]
+}

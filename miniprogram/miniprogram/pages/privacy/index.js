@@ -2,6 +2,7 @@ const DATA_ACTIONS = {
   profile: "/pages/profile/edit/index?mode=edit",
   favorites: "/pages/favorites/index",
   history: "/pages/history/index",
+  inquiries: "/pages/my-inquiries/index",
 };
 
 Page({

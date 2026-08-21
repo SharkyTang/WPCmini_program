@@ -11,6 +11,23 @@
     <view class="page-subtitle">告诉我们你想做哪类酒包装，方便后续沟通。</view>
   </view>
 
+  <view wx:if="{{submitSucceeded}}" class="success-card">
+    <view class="success-mark">✓</view>
+    <view class="success-title">需求提交成功</view>
+    <view class="success-text">需求已记录，管理员可在需求管理中查看；后续回复会保存在“我的需求”。</view>
+    <view
+      wx:if="{{replySubscription.enabled}}"
+      class="subscribe-button {{subscribing ? 'submit-button-disabled' : ''}}"
+      bindtap="subscribeReply"
+    >{{subscribing ? '正在开启...' : '接收本次需求回复提醒'}}</view>
+    <view wx:else class="subscription-tip">微信提醒模板启用前，你仍可在“我的需求”查看回复。</view>
+    <view class="success-actions">
+      <view class="success-primary" bindtap="openMyInquiry">查看我的需求</view>
+      <view class="success-secondary" bindtap="finishSubmission">返回个人中心</view>
+    </view>
+  </view>
+
+  <block wx:else>
   <view wx:if="{{caseLoading}}" class="source-card">正在带入参考案例...</view>
   <view wx:elif="{{caseItem}}" class="source-card">
     <view class="source-label">参考案例</view>
@@ -101,4 +118,5 @@
   >
     {{submitting ? '正在提交' : '提交定制需求'}}
   </button>
+  </block>
 </view>

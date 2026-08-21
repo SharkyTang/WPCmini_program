@@ -52,6 +52,11 @@
       "pages": ["index"]
     },
     {
+      "name": "account-my-inquiries",
+      "root": "pages/my-inquiries",
+      "pages": ["index", "detail"]
+    },
+    {
       "name": "account-notification-cases",
       "root": "pages/notification-cases",
       "pages": ["index"]
@@ -81,7 +86,8 @@
         "account-history",
         "account-notifications",
         "account-feedback",
-        "account-inquiry"
+        "account-inquiry",
+        "account-my-inquiries"
       ]
     },
     "pages/notifications/index": {

@@ -1,6 +1,8 @@
 const PRODUCTION_ENV_ID = "cloud1-d3gznsms746425a42";
 const STAGING_ENV_ID = "wine-admin-staging-d5c4cf20f02c5";
 const CLOUD_ENVIRONMENT_IDS = Object.freeze({
+  // Temporary user-authorized shared-production mode. Keep unknown versions
+  // fail-closed; only these three explicit runtime versions may resolve.
   develop: PRODUCTION_ENV_ID,
   trial: PRODUCTION_ENV_ID,
   release: PRODUCTION_ENV_ID,
@@ -15,11 +17,12 @@ const envList = Object.keys(CLOUD_ENVIRONMENT_IDS)
 const isMac = false;
 
 function normalizeEnvVersion(value) {
-  return ["develop", "trial", "release"].includes(value) ? value : "release";
+  return ["develop", "trial", "release"].includes(value) ? value : "";
 }
 
 function resolveCloudEnvironment(envVersion, environmentIds = CLOUD_ENVIRONMENT_IDS) {
   const version = normalizeEnvVersion(envVersion);
+  if (!version) return "";
   const configuredEnv = environmentIds && typeof environmentIds[version] === "string"
     ? environmentIds[version].trim()
     : "";
@@ -35,7 +38,7 @@ function getMiniProgramEnvVersion(wxApi) {
       accountInfo && accountInfo.miniProgram && accountInfo.miniProgram.envVersion
     );
   } catch (error) {
-    return "release";
+    return "";
   }
 }
 

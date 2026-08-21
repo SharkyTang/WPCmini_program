@@ -10,8 +10,12 @@ import { join, resolve } from "node:path";
 import {
   BACKUP_SCHEMA_VERSION,
   DEFAULT_COLLECTIONS,
+  INQUIRY_FOLLOWUP_COLLECTIONS,
+  LEGACY_COLLECTIONS_V2,
   createBackup,
   parseArgs,
+  serializeRecords,
+  sha256,
   validateBackupManifest,
 } from "../scripts/backup-cloudbase-data.mjs";
 import {
@@ -20,7 +24,8 @@ import {
   parseRestoreArgs,
 } from "../scripts/restore-cloudbase-data.mjs";
 
-function createDatabase(recordsByCollection) {
+function createDatabase(recordsByCollection, options = {}) {
+  const missingCollections = new Set(options.missingCollections || []);
   return {
     collection(name) {
       const state = { skip: 0, limit: 100 };
@@ -34,6 +39,11 @@ function createDatabase(recordsByCollection) {
           return this;
         },
         async get() {
+          if (missingCollections.has(name)) {
+            const error = new Error(`collection ${name} not exist`);
+            error.code = "DATABASE_COLLECTION_NOT_EXIST";
+            throw error;
+          }
           const records = recordsByCollection[name] || [];
           return { data: records.slice(state.skip, state.skip + state.limit) };
         },
@@ -56,19 +66,93 @@ async function test(name, fn) {
 }
 
 await test("backup scope includes every current user, content, contact, and notification collection", () => {
-  assert.equal(DEFAULT_COLLECTIONS.length, 13);
+  assert.equal(DEFAULT_COLLECTIONS.length, 17);
   for (const required of [
     "contact_settings",
     "user_profiles",
     "favorites",
     "browse_history",
     "inquiries",
+    "inquiry_messages",
+    "inquiry_alert_jobs",
+    "inquiry_reply_subscriptions",
+    "inquiry_admin_events",
     "feedback",
     "notification_subscriptions",
     "notification_push_jobs",
     "notification_delivery_logs",
   ]) {
     assert.equal(DEFAULT_COLLECTIONS.includes(required), true, required);
+  }
+});
+
+await test("backup before collection creation records missing follow-up collections as audited empties", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "cloudbase-pre-schema-backup-"));
+  try {
+    const records = Object.fromEntries(
+      LEGACY_COLLECTIONS_V2.map((name) => [name, name === "catalog_meta"
+        ? [{ _id: "current" }]
+        : []])
+    );
+    const result = await createBackup({
+      db: createDatabase(records, {
+        missingCollections: INQUIRY_FOLLOWUP_COLLECTIONS,
+      }),
+      envId: "pre-schema-env",
+      outputDir: directory,
+      now: new Date("2026-08-20T00:00:00.000Z"),
+    });
+    assert.deepEqual(
+      result.manifest.sourceMissingCollections,
+      INQUIRY_FOLLOWUP_COLLECTIONS
+    );
+    for (const name of INQUIRY_FOLLOWUP_COLLECTIONS) {
+      assert.equal(result.manifest.collections[name].count, 0);
+      assert.equal(result.manifest.collections[name].sourceMissing, true);
+    }
+    assert.equal(validateBackupManifest(directory).valid, true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+await test("legacy schema v2 backups remain verifiable and restorable", () => {
+  const directory = mkdtempSync(join(tmpdir(), "cloudbase-v2-backup-"));
+  try {
+    const manifest = {
+      schemaVersion: 2,
+      status: "complete",
+      envId: "legacy-source",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      collections: {},
+      catalogMetaCurrentFound: true,
+    };
+    for (const name of LEGACY_COLLECTIONS_V2) {
+      const records = [{
+        _id: name === "catalog_meta" ? "current" : `${name}_legacy`,
+      }];
+      const content = serializeRecords(records);
+      writeFileSync(resolve(directory, `${name}.json`), content, "utf8");
+      manifest.collections[name] = {
+        filename: `${name}.json`,
+        count: 1,
+        sha256: sha256(content),
+      };
+    }
+    writeFileSync(
+      resolve(directory, "manifest.json"),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      "utf8"
+    );
+    const verified = validateBackupManifest(directory);
+    assert.equal(verified.schemaVersion, 2);
+    assert.equal(verified.collectionNames.length, 13);
+    const plan = buildRestorePlan(directory, "legacy-recovery");
+    assert.equal(plan.schemaVersion, 2);
+    assert.equal(plan.totalCollections, 13);
+    assert.equal(plan.totalDocuments, 13);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -92,11 +176,11 @@ await test("backup writes a complete checksummed manifest and restore plan", asy
     assert.equal(result.manifest.scope.cloudStorage, false);
     const verified = validateBackupManifest(directory);
     assert.equal(verified.valid, true);
-    assert.equal(Object.keys(verified.collections).length, 13);
+    assert.equal(Object.keys(verified.collections).length, 17);
     const plan = buildRestorePlan(directory, "recovery-env");
     assert.equal(plan.sourceEnv, "source-env");
     assert.equal(plan.targetEnv, "recovery-env");
-    assert.equal(plan.totalDocuments, 13);
+    assert.equal(plan.totalDocuments, 17);
 
     const casePath = resolve(directory, "wine_packaging.json");
     const original = readFileSync(casePath, "utf8");

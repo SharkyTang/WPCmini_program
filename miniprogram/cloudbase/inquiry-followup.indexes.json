@@ -1,0 +1,29 @@
+{
+  "inquiries": [
+    { "name": "openid_createdAt", "fields": [{ "field": "openid", "order": "asc" }, { "field": "createdAt", "order": "desc" }] },
+    { "name": "openid_createdAt_id", "fields": [{ "field": "openid", "order": "asc" }, { "field": "createdAt", "order": "desc" }, { "field": "_id", "order": "desc" }] },
+    { "name": "openid_id", "fields": [{ "field": "openid", "order": "asc" }, { "field": "_id", "order": "asc" }] },
+    { "name": "status_createdAt", "fields": [{ "field": "status", "order": "asc" }, { "field": "createdAt", "order": "desc" }] },
+    { "name": "createdAt_id", "fields": [{ "field": "createdAt", "order": "desc" }, { "field": "_id", "order": "desc" }] },
+    { "name": "status_createdAt_id", "fields": [{ "field": "status", "order": "asc" }, { "field": "createdAt", "order": "desc" }, { "field": "_id", "order": "desc" }] },
+    { "name": "claimedBy_createdAt_id", "fields": [{ "field": "claimedByOpenid", "order": "asc" }, { "field": "createdAt", "order": "desc" }, { "field": "_id", "order": "desc" }] },
+    { "name": "claimedBy_status_createdAt_id", "fields": [{ "field": "claimedByOpenid", "order": "asc" }, { "field": "status", "order": "asc" }, { "field": "createdAt", "order": "desc" }, { "field": "_id", "order": "desc" }] },
+    { "name": "claimedByOpenid_claimedBy_createdAt_id", "fields": [{ "field": "claimedByOpenid", "order": "asc" }, { "field": "claimedBy", "order": "asc" }, { "field": "createdAt", "order": "desc" }, { "field": "_id", "order": "desc" }] },
+    { "name": "claimedByOpenid_claimedBy_status_createdAt_id", "fields": [{ "field": "claimedByOpenid", "order": "asc" }, { "field": "claimedBy", "order": "asc" }, { "field": "status", "order": "asc" }, { "field": "createdAt", "order": "desc" }, { "field": "_id", "order": "desc" }] },
+    { "name": "claimedBy_status_updatedAt", "fields": [{ "field": "claimedByOpenid", "order": "asc" }, { "field": "status", "order": "asc" }, { "field": "updatedAt", "order": "desc" }] },
+    { "name": "alertTaskStatus_createdAt", "fields": [{ "field": "alertTaskStatus", "order": "asc" }, { "field": "createdAt", "order": "asc" }] }
+  ],
+  "inquiry_messages": [
+    { "name": "inquiryId_createdAt", "fields": [{ "field": "inquiryId", "order": "asc" }, { "field": "createdAt", "order": "asc" }] },
+    { "name": "inquiry_customer_direction_createdAt_id", "fields": [{ "field": "inquiryId", "order": "asc" }, { "field": "customerVisible", "order": "asc" }, { "field": "direction", "order": "asc" }, { "field": "createdAt", "order": "asc" }, { "field": "_id", "order": "asc" }] }
+  ],
+  "inquiry_alert_jobs": [
+    { "name": "status_dueAt", "fields": [{ "field": "status", "order": "asc" }, { "field": "dueAt", "order": "asc" }] },
+    { "name": "status_nextAttemptAt", "fields": [{ "field": "status", "order": "asc" }, { "field": "nextAttemptAt", "order": "asc" }] },
+    { "name": "status_leaseUntil", "fields": [{ "field": "status", "order": "asc" }, { "field": "leaseUntil", "order": "asc" }] },
+    { "name": "inquiryId", "fields": [{ "field": "inquiryId", "order": "asc" }] }
+  ],
+  "inquiry_reply_subscriptions": [
+    { "name": "inquiry_openid", "fields": [{ "field": "inquiryId", "order": "asc" }, { "field": "openid", "order": "asc" }] }
+  ]
+}

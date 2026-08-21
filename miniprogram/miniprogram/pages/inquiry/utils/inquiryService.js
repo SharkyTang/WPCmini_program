@@ -64,6 +64,11 @@ async function submitInquiry(draft, context = {}) {
   return {
     id: response.id || "",
     record,
+    alertStatus: response.alertStatus || "deferred",
+    replySubscription: response.replySubscription || {
+      enabled: false,
+      templateId: "",
+    },
   };
 }
 

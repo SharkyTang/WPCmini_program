@@ -10,11 +10,12 @@ const HOME_ROUTE = "/pages/index/index";
 App({
   onLaunch: function () {
     const envVersion = getMiniProgramEnvVersion(wx);
+    const cloudEnvironment = resolveCloudEnvironment(envVersion);
     this.globalData = {
       // env 参数说明：
       // env 参数决定接下来小程序发起的云开发调用（wx.cloud.xxx）会请求到哪个云环境的资源
       // 此处请填入环境 ID, 环境 ID 可在微信开发者工具右上顶部工具栏点击云开发按钮打开获取
-      env: resolveCloudEnvironment(envVersion),
+      env: cloudEnvironment,
       envVersion,
       caseDataVersion: 0,
       cloudReady: false,
@@ -26,6 +27,14 @@ App({
         stage: "capability_check",
         code: "CLOUD_UNSUPPORTED",
         envVersion,
+      });
+    } else if (!cloudEnvironment) {
+      console.error("无法确认小程序运行版本，云开发未初始化");
+      reportClientFault({
+        type: "cloud_init_error",
+        stage: "environment_detection",
+        code: "UNKNOWN_ENV_VERSION",
+        envVersion: "unknown",
       });
     } else {
       try {

@@ -1,0 +1,37 @@
+<view class="page">
+  <view class="hero">
+    <view class="page-title">我的定制需求</view>
+    <view class="page-subtitle">查看提交记录和顾问回复</view>
+    <view wx:if="{{unreadCount}}" class="unread-summary">有 {{unreadCount}} 条回复待查看</view>
+  </view>
+
+  <view wx:if="{{errorMessage}}" class="state-card">
+    <view class="state-title">加载失败</view>
+    <view class="state-text">{{errorMessage}}</view>
+    <view class="state-action" bindtap="retry">重试</view>
+  </view>
+  <view wx:elif="{{loading}}" class="state-card">正在加载需求...</view>
+  <view wx:elif="{{!items.length}}" class="state-card">
+    <view class="state-title">还没有提交过需求</view>
+    <view class="state-text">提交后可以在这里查看顾问回复和处理进度。</view>
+    <view class="state-action" bindtap="openInquiryForm">提交定制需求</view>
+  </view>
+  <view wx:else class="list">
+    <view wx:for="{{items}}" wx:key="id" class="card" data-id="{{item.id}}" bindtap="openDetail">
+      <view class="card-head">
+        <view class="status status-{{item.status}}">{{item.statusLabel}}</view>
+        <view class="created-at">{{item.createdAtText}}</view>
+      </view>
+      <view class="card-title">{{item.packageSummary || '定制包装需求'}}</view>
+      <view class="card-content">{{item.contentPreview || '暂无补充说明'}}</view>
+      <view wx:if="{{item.lastAdminReplyPreview}}" class="reply-preview">
+        <view class="reply-label">最新回复</view>
+        <view class="reply-content">{{item.lastAdminReplyPreview}}</view>
+      </view>
+      <view wx:if="{{item.customerUnreadCount}}" class="unread-badge">{{item.unreadLabel}}</view>
+      <view class="card-foot">查看详情 <text>›</text></view>
+    </view>
+    <view wx:if="{{loadingMore}}" class="list-tip">正在加载更多...</view>
+    <view wx:elif="{{!hasMore}}" class="list-tip">已显示全部需求</view>
+  </view>
+</view>
