@@ -59,6 +59,18 @@ page {
   background: linear-gradient(135deg, #f5e2ae 0%, #ead1a1 100%);
 }
 
+.image-retry-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24rpx;
+  box-sizing: border-box;
+  color: #806b52;
+  font-size: 22rpx;
+  line-height: 1.5;
+  text-align: center;
+}
+
 .banner-card-preview {
   opacity: 0.72;
 }
@@ -187,6 +199,7 @@ page {
 
 .product-badge {
   position: absolute;
+  pointer-events: none;
   top: 22rpx;
   left: 22rpx;
   height: 40rpx;

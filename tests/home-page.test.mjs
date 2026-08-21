@@ -8,10 +8,66 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const pagePath = resolve(__dirname, "../miniprogram/miniprogram/pages/index/index.js");
 const wxmlPath = resolve(__dirname, "../miniprogram/miniprogram/pages/index/index.wxml");
 const wxssPath = resolve(__dirname, "../miniprogram/miniprogram/pages/index/index.wxss");
+const CACHE_TTL_MS = 20 * 60 * 1000;
+
+function applySetDataPatch(currentData, patch) {
+  const nextData = {
+    ...currentData,
+  };
+  Object.entries(patch).forEach(([path, value]) => {
+    const segments = path.match(/[^.[\]]+/g) || [];
+    if (segments.length <= 1) {
+      nextData[path] = value;
+      return;
+    }
+    let target = nextData;
+    segments.forEach((segment, index) => {
+      const key = /^\d+$/.test(segment) ? Number(segment) : segment;
+      if (index === segments.length - 1) {
+        target[key] = value;
+        return;
+      }
+      const nextSegment = segments[index + 1];
+      const existing = target[key];
+      target[key] = Array.isArray(existing)
+        ? [...existing]
+        : existing && typeof existing === "object"
+          ? { ...existing }
+          : /^\d+$/.test(nextSegment)
+            ? []
+            : {};
+      target = target[key];
+    });
+  });
+  return nextData;
+}
 
 function loadHomePage(wxMock = {}, cases = [], options = {}) {
   let pageConfig;
   let activePageLoadingToken = null;
+  const NativeDate = Date;
+  let nowMs = Object.prototype.hasOwnProperty.call(options, "nowMs")
+    ? Number(options.nowMs)
+    : NativeDate.now();
+  class ControlledDate extends NativeDate {
+    constructor(...args) {
+      super(...(args.length ? args : [nowMs]));
+    }
+
+    static now() {
+      return nowMs;
+    }
+  }
+  const clock = {
+    advance(deltaMs) {
+      nowMs += Number(deltaMs);
+      return nowMs;
+    },
+    set(nextNowMs) {
+      nowMs = Number(nextNowMs);
+      return nowMs;
+    },
+  };
   const app = {
     globalData: {},
   };
@@ -35,6 +91,7 @@ function loadHomePage(wxMock = {}, cases = [], options = {}) {
     ? options.cache
     : null;
   const catalogCache = {
+    CACHE_TTL_MS,
     HOME_CACHE_KEY: "wineHomeFeedV3",
     readCache: () => cachedHome,
     clearCache(key) {
@@ -177,6 +234,7 @@ function loadHomePage(wxMock = {}, cases = [], options = {}) {
     },
     console,
     clearTimeout: options.clearTimeout || clearTimeout,
+    Date: ControlledDate,
     setTimeout: options.setTimeout || setTimeout,
     wx: {
       navigateTo() {},
@@ -200,15 +258,13 @@ function loadHomePage(wxMock = {}, cases = [], options = {}) {
   });
   pageConfig.setData = function setData(nextData, callback) {
     calls.setData.push(nextData);
-    this.data = {
-      ...this.data,
-      ...nextData,
-    };
+    this.data = applySetDataPatch(this.data, nextData);
     if (typeof callback === "function") callback();
   };
   return {
     app,
     calls,
+    clock,
     page: pageConfig,
   };
 }
@@ -333,7 +389,9 @@ await test("home carousel keeps one crop ratio across active and preview cards",
   assert.match(swiperTag, /bindchange="onBannerChange"/);
   assert.match(swiperBlock, /wx:for-index="bannerIndex"/);
   assert.match(bannerCardTag, /bannerIndex == activeBannerIndex/);
-  assert.match(titleTag, /item\.title && bannerIndex == activeBannerIndex/);
+  assert.match(titleTag, /item\.title/);
+  assert.match(titleTag, /item\.imageLoadState != 'failed'/);
+  assert.match(titleTag, /bannerIndex == activeBannerIndex/);
   assert.match(bannerCardTag, /bindtap="onBannerTap"/);
   assert.match(bannerCardTag, /data-id="{{item\.caseId}}"/);
 });
@@ -370,7 +428,14 @@ await test("home entry loading waits for the active banner after content commits
   assert.equal(calls.pageLoading.some((event) => event.type === "finish"), false);
 
   assert.equal(page.onBannerImageError({
-    currentTarget: { dataset: { index: 1 } },
+    currentTarget: {
+      dataset: {
+        index: 1,
+        bannerId: "stale-banner",
+        url: "https://example.com/stale-banner.jpg",
+        mediaEpoch: page.data.banners[1].mediaEpoch,
+      },
+    },
   }), false);
   assert.equal(calls.pageLoading.some((event) => event.type === "finish"), false);
 
@@ -494,7 +559,7 @@ await test("home entry loading closes without waiting for card images when no ba
   page.onUnload();
 });
 
-await test("home entry loading treats the active banner error as settled", async () => {
+await test("an active banner error renews image URLs before entry loading settles", async () => {
   const feed = buildHomeFeed();
   const { calls, page } = loadHomePage({}, [], {
     fetchHomeFeed: async () => ({
@@ -506,17 +571,36 @@ await test("home entry loading treats the active banner error as settled", async
 
   page.onLoad();
   await page._loadPromise;
-  page.onBannerImageError({
-    currentTarget: { dataset: { index: 0 } },
+  const failedBanner = page.data.banners[0];
+  const recovery = page.onBannerImageError({
+    currentTarget: {
+      dataset: {
+        index: 0,
+        bannerId: failedBanner.id,
+        url: failedBanner.renderImageUrl,
+        mediaEpoch: failedBanner.mediaEpoch,
+      },
+    },
   });
 
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(calls.pageLoading.filter((event) => event.type === "finish"))),
-    [{ type: "finish", token: "home-loading-1" }]
-  );
+  assert.equal(calls.pageLoading.some((event) => event.type === "finish"), false);
+  await recovery;
+  assert.equal(calls.fetchHomeFeed.length, 2);
+  const renewedBanner = page.data.banners[0];
+  page.onBannerImageLoad({
+    currentTarget: {
+      dataset: {
+        index: 0,
+        bannerId: renewedBanner.id,
+        url: renewedBanner.renderImageUrl,
+        mediaEpoch: renewedBanner.mediaEpoch,
+      },
+    },
+  });
+  assert.equal(calls.pageLoading.some((event) => event.type === "finish"), true);
   assert.equal(
     calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
-    0
+    1
   );
   page.onUnload();
 });
@@ -639,8 +723,14 @@ await test("home page uses a softer fallback in timeline single page mode", asyn
   assert.equal(calls.requiredModules.includes("../../utils/cloudData"), false);
 });
 
-await test("cached home renders one banner first, hydrates after ready, and revalidates stale revision", async () => {
-  const feed = buildHomeFeed();
+await test("cached home without an image URL timestamp hydrates locally and requests a full feed", async () => {
+  const nowMs = 10_000_000;
+  const cachedFeed = buildHomeFeed();
+  const refreshedFeed = buildHomeFeed();
+  refreshedFeed.banners = refreshedFeed.banners.map((banner) => ({
+    ...banner,
+    imageUrl: `${banner.imageUrl}?renewed=1`,
+  }));
   let resolveCatalog;
   const catalogResult = new Promise((resolve) => {
     resolveCatalog = resolve;
@@ -648,11 +738,12 @@ await test("cached home renders one banner first, hydrates after ready, and reva
   const { calls, page } = loadHomePage({}, [], {
     cache: {
       revision: 17,
-      cachedAt: 1,
-      fresh: false,
-      data: feed,
+      cachedAt: nowMs - 1000,
+      fresh: true,
+      data: cachedFeed,
     },
     fetchHomeFeed: () => catalogResult,
+    nowMs,
   });
 
   page.onLoad();
@@ -661,7 +752,7 @@ await test("cached home renders one banner first, hydrates after ready, and reva
   assert.equal("popularCases" in calls.setData[0], false);
   assert.equal("latestCases" in calls.setData[0], false);
   assert.equal(page.data.banners.length, 1);
-  assert.equal(page.data.banners[0].renderImageUrl, feed.banners[0].imageUrl);
+  assert.equal(page.data.banners[0].renderImageUrl, cachedFeed.banners[0].imageUrl);
   assert.equal(page.data.popularCases.length, 0);
   assert.equal(page.data.latestCases.length, 0);
   assert.equal(page.data.homeContentReady, false);
@@ -685,12 +776,9 @@ await test("cached home renders one banner first, hydrates after ready, and reva
   });
   assert.equal(
     calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
-    1
+    0
   );
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(calls.pageLoading.filter((event) => event.type === "finish"))),
-    [{ type: "finish", token: "home-loading-1" }]
-  );
+  assert.equal(calls.pageLoading.some((event) => event.type === "finish"), false);
 
   await page.onShow();
   assert.equal(calls.fetchHomeFeed.length, 0);
@@ -710,17 +798,40 @@ await test("cached home renders one banner first, hydrates after ready, and reva
   await Promise.resolve();
   assert.deepEqual(
     JSON.parse(JSON.stringify(calls.fetchHomeFeed)),
-    [{ knownRevision: 17 }]
+    [{}]
   );
-  const setDataCountBeforeNotModified = calls.setData.length;
-  resolveCatalog({ revision: 17, notModified: true });
+  const setDataCountBeforeFullFeed = calls.setData.length;
+  resolveCatalog({
+    revision: 18,
+    notModified: false,
+    ...refreshedFeed,
+  });
   const result = await page._loadPromise;
 
-  assert.equal(result.notModified, true);
-  assert.equal(calls.setData.length, setDataCountBeforeNotModified);
+  assert.equal(result.notModified, false);
+  assert.equal(calls.setData.length > setDataCountBeforeFullFeed, true);
+  assert.equal(page.data.catalogRevision, 18);
+  assert.equal(
+    page.data.banners[0].renderImageUrl,
+    refreshedFeed.banners[0].imageUrl
+  );
+  assert.equal(page._homeCache.data.imageUrlsFetchedAt, nowMs);
+  page.onBannerImageLoad({
+    currentTarget: {
+      dataset: {
+        index: 0,
+        bannerId: page.data.banners[0].id,
+        url: page.data.banners[0].renderImageUrl,
+        mediaEpoch: page.data.banners[0].mediaEpoch,
+      },
+    },
+  });
+  assert.equal(calls.pageLoading.some((event) => event.type === "finish"), true);
   assert.equal(calls.writeCache.length, 0);
   await flushTasks();
   assert.equal(calls.writeCache.length, 1);
+  assert.equal(calls.writeCache[0].revision, 18);
+  assert.equal(calls.writeCache[0].data.imageUrlsFetchedAt, nowMs);
   assert.equal(
     calls.performanceEvents.filter((event) => event.name === "client_boot_result").length,
     1
@@ -728,22 +839,181 @@ await test("cached home renders one banner first, hydrates after ready, and reva
   page.onUnload();
 });
 
-await test("timeline scene with cache hydrates locally and never contacts cloud", async () => {
+await test("fresh cached image URLs may revalidate by revision without renewing their timestamp", async () => {
+  const nowMs = 20_000_000;
+  const imageUrlsFetchedAt = nowMs - 60 * 1000;
+  const feed = {
+    ...buildHomeFeed(),
+    imageUrlsFetchedAt,
+  };
+  let resolveCatalog;
+  const catalogResult = new Promise((resolve) => {
+    resolveCatalog = resolve;
+  });
+  const { calls, page } = loadHomePage({}, [], {
+    cache: {
+      revision: 19,
+      cachedAt: nowMs - 1000,
+      fresh: true,
+      data: feed,
+    },
+    fetchHomeFeed: () => catalogResult,
+    nowMs,
+    touchCache: () => true,
+  });
+
+  page.onLoad();
+  page.onReady();
+  await Promise.resolve();
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.fetchHomeFeed)),
+    [{ knownRevision: 19 }]
+  );
+  const setDataCountBeforeNotModified = calls.setData.length;
+  resolveCatalog({ revision: 19, notModified: true });
+  const result = await page._loadPromise;
+
+  assert.equal(result.notModified, true);
+  assert.equal(calls.setData.length, setDataCountBeforeNotModified);
+  assert.equal(page._homeCache.cachedAt, nowMs);
+  assert.equal(
+    page._homeCache.data.imageUrlsFetchedAt,
+    imageUrlsFetchedAt
+  );
+  await flushTasks();
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.touchCache)),
+    [{ key: "wineHomeFeedV3", revision: 19 }]
+  );
+  assert.equal(calls.writeCache.length, 0);
+  page.onUnload();
+});
+
+await test("returning to home before cached image URLs expire does not request again", async () => {
+  const nowMs = 30_000_000;
   const feed = buildHomeFeed();
-  const { calls, page } = loadHomePage({
+  const { calls, clock, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => ({
+      revision: 20,
+      notModified: false,
+      ...feed,
+    }),
+    nowMs,
+  });
+
+  page.onLoad();
+  page.onReady();
+  await page._loadPromise;
+  page.onBannerImageLoad({
+    currentTarget: {
+      dataset: {
+        index: 0,
+        bannerId: page.data.banners[0].id,
+        url: page.data.banners[0].renderImageUrl,
+      },
+    },
+  });
+  page.onHide();
+  clock.advance(CACHE_TTL_MS - 1);
+
+  const result = await page.onShow();
+
+  assert.equal(result.skipped, true);
+  assert.equal(calls.fetchHomeFeed.length, 1);
+  assert.equal(page._homeCache.data.imageUrlsFetchedAt, nowMs);
+  page.onUnload();
+});
+
+await test("returning to home after image URL expiry performs exactly one full refresh", async () => {
+  const nowMs = 40_000_000;
+  const initialFeed = buildHomeFeed();
+  const refreshedFeed = buildHomeFeed();
+  refreshedFeed.banners = refreshedFeed.banners.map((banner) => ({
+    ...banner,
+    imageUrl: `${banner.imageUrl}?resumed=1`,
+  }));
+  let requestCount = 0;
+  const { calls, clock, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => {
+      requestCount += 1;
+      return requestCount === 1
+        ? {
+          revision: 20,
+          notModified: false,
+          ...initialFeed,
+        }
+        : {
+          revision: 21,
+          notModified: false,
+          ...refreshedFeed,
+        };
+    },
+    nowMs,
+  });
+
+  page.onLoad();
+  page.onReady();
+  await page._loadPromise;
+  await flushTasks();
+  page.onBannerImageLoad({
+    currentTarget: {
+      dataset: {
+        index: 0,
+        bannerId: page.data.banners[0].id,
+        url: page.data.banners[0].renderImageUrl,
+      },
+    },
+  });
+  page.onHide();
+  clock.advance(CACHE_TTL_MS);
+
+  const refreshResult = await page.onShow();
+
+  assert.equal(refreshResult.ok, true);
+  assert.equal(refreshResult.notModified, false);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.fetchHomeFeed)),
+    [{}, {}]
+  );
+  assert.equal(page.data.catalogRevision, 21);
+  assert.equal(
+    page.data.banners[0].renderImageUrl,
+    refreshedFeed.banners[0].imageUrl
+  );
+  assert.equal(
+    page._homeCache.data.imageUrlsFetchedAt,
+    nowMs + CACHE_TTL_MS
+  );
+
+  page.onHide();
+  const immediateReturnResult = await page.onShow();
+  assert.equal(immediateReturnResult.skipped, true);
+  assert.equal(calls.fetchHomeFeed.length, 2);
+  page.onUnload();
+});
+
+await test("timeline scene with cache hydrates locally and never contacts cloud", async () => {
+  const nowMs = 50_000_000;
+  const feed = buildHomeFeed();
+  const { calls, clock, page } = loadHomePage({
     getEnterOptionsSync() {
       return { scene: 1154 };
     },
   }, [], {
     cache: {
       revision: 21,
-      cachedAt: Date.now(),
+      cachedAt: nowMs,
       fresh: true,
-      data: feed,
+      data: {
+        ...feed,
+        imageUrlsFetchedAt: nowMs,
+      },
     },
     fetchHomeFeed: async () => {
       throw new Error("timeline mode must not request catalog");
     },
+    nowMs,
   });
 
   page.onLoad();
@@ -753,6 +1023,7 @@ await test("timeline scene with cache hydrates locally and never contacts cloud"
     currentTarget: { dataset: { index: 0 } },
   });
   page.onReady();
+  clock.advance(CACHE_TTL_MS);
   await page.onShow();
   await page.onPullDownRefresh();
   await flushTasks();
@@ -1087,6 +1358,24 @@ await test("home reports an allowed catalog fallback before the legacy read succ
   assert.equal(calls.clientFaults[0].fallbackUsed, true);
 });
 
+await test("forced legacy home refresh also renews banner and case image URLs", async () => {
+  const cases = [
+    buildCase(1, { homeSections: ["popular", "latest"] }),
+  ];
+  const { calls, page } = loadHomePage({}, cases);
+
+  const result = await page.loadData({ silent: true, forceRefresh: true });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(calls.fetchVisibleCases)),
+    [{ includeImageUrls: false, forceRefresh: true }]
+  );
+  assert.equal(calls.fetchVisibleBanners[0].options.forceRefresh, true);
+  assert.equal(calls.attachCaseImageUrls[0].options.preferBanner, true);
+  assert.equal(calls.attachCaseImageUrls[0].options.forceRefresh, true);
+});
+
 await test("home no-cache error exposes retry and retry can recover", async () => {
   let requestCount = 0;
   const feed = buildHomeFeed();
@@ -1243,4 +1532,433 @@ await test("home contains storage and pull-down completion API failures", async 
   });
   assert.equal(switchedUrl, "/pages/category/index");
   assert.equal(page.stopPullDownRefreshSafely(), false);
+});
+
+function buildVersionedHomeFeed(version) {
+  const feed = buildHomeFeed();
+  return {
+    ...feed,
+    banners: feed.banners.map((banner) => ({
+      ...banner,
+      imageUrl: `${banner.imageUrl}?media=${version}`,
+    })),
+    popularCases: feed.popularCases.map((item) => ({
+      ...item,
+      coverImageUrl: `${item.coverImageUrl}?media=${version}`,
+    })),
+    latestCases: feed.latestCases.map((item) => ({
+      ...item,
+      coverImageUrl: `${item.coverImageUrl}?media=${version}`,
+    })),
+  };
+}
+
+function bannerImageDataset(banner, index = 0) {
+  return {
+    index,
+    bannerId: banner.id,
+    url: banner.renderImageUrl,
+    mediaEpoch: banner.mediaEpoch,
+  };
+}
+
+function productImageDataset(card, section, index = 0) {
+  return {
+    section,
+    index,
+    caseId: card.id,
+    url: card.coverImageUrl,
+    mediaEpoch: card.mediaEpoch,
+  };
+}
+
+function pageLoadingCount(calls, type) {
+  return calls.pageLoading.filter((event) => event.type === type).length;
+}
+
+await test("home image markup wires epoch-aware recovery for banners and both product groups", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+  const bannerImageTag = wxml.match(
+    /<image\b(?=[^>]*class="banner-image")[^>]*>/
+  )?.[0] || "";
+  const productImageTags = Array.from(
+    wxml.matchAll(/<image\b(?=[^>]*class="product-image")[^>]*>/g),
+    (match) => match[0]
+  );
+
+  assert.match(bannerImageTag, /binderror="onBannerImageError"/);
+  assert.match(bannerImageTag, /data-media-epoch="{{item\.mediaEpoch}}"/);
+  assert.equal(productImageTags.length, 2);
+  productImageTags.forEach((tag) => {
+    assert.match(tag, /binderror="onProductImageError"/);
+    assert.match(tag, /data-index="{{productIndex}}"/);
+    assert.match(tag, /data-case-id="{{item\.id}}"/);
+    assert.match(tag, /data-url="{{item\.coverImageUrl}}"/);
+    assert.match(tag, /data-media-epoch="{{item\.mediaEpoch}}"/);
+  });
+  assert.match(productImageTags[0], /data-section="popularCases"/);
+  assert.match(productImageTags[1], /data-section="latestCases"/);
+  assert.equal((wxml.match(/catchtap="retryHomeImages"/g) || []).length, 3);
+  assert.equal(
+    (wxml.match(/>\s*图片加载失败，点击重试\s*<\/view>/g) || []).length,
+    3
+  );
+});
+
+await test("old banner events with the same id and URL cannot settle a newer media epoch", async () => {
+  const feed = buildVersionedHomeFeed("stable-url");
+  let requestCount = 0;
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => ({
+      revision: 70 + ++requestCount,
+      notModified: false,
+      ...feed,
+    }),
+  });
+
+  page.onLoad();
+  page.onReady();
+  await page._loadPromise;
+  const oldBanner = { ...page.data.banners[0] };
+  page.onBannerImageLoad({
+    currentTarget: { dataset: bannerImageDataset(oldBanner) },
+  });
+
+  const manualRefresh = page.retryHomeImages();
+  const trackedRefresh = page._homeImageRecoveryPromise;
+  assert.equal(manualRefresh, trackedRefresh);
+  await trackedRefresh;
+
+  const renewedBanner = page.data.banners[0];
+  assert.equal(renewedBanner.id, oldBanner.id);
+  assert.equal(renewedBanner.renderImageUrl, oldBanner.renderImageUrl);
+  assert.notEqual(renewedBanner.mediaEpoch, oldBanner.mediaEpoch);
+  const finishesBeforeOldEvents = pageLoadingCount(calls, "finish");
+
+  assert.equal(page.onBannerImageLoad({
+    currentTarget: { dataset: bannerImageDataset(oldBanner) },
+  }), false);
+  assert.equal(page.onBannerImageError({
+    currentTarget: { dataset: bannerImageDataset(oldBanner) },
+    detail: { errMsg: "stale image error" },
+  }), false);
+  assert.equal(pageLoadingCount(calls, "finish"), finishesBeforeOldEvents);
+  assert.equal(calls.fetchHomeFeed.length, 2);
+  assert.equal(page.data.banners[0].renderImageUrl, renewedBanner.renderImageUrl);
+  assert.equal(page.data.banners[0].imageLoadState, "pending");
+
+  page.onBannerImageLoad({
+    currentTarget: { dataset: bannerImageDataset(renewedBanner) },
+  });
+  assert.equal(pageLoadingCount(calls, "finish"), finishesBeforeOldEvents + 1);
+  page.onUnload();
+});
+
+await test("simultaneous banner and product errors share one refresh and one recovery loading", async () => {
+  const initialFeed = buildVersionedHomeFeed("initial");
+  const refreshedFeed = buildVersionedHomeFeed("recovered");
+  let requestCount = 0;
+  let resolveRecovery;
+  const recoveryResult = new Promise((resolve) => {
+    resolveRecovery = resolve;
+  });
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: () => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return Promise.resolve({
+          revision: 80,
+          notModified: false,
+          ...initialFeed,
+        });
+      }
+      return recoveryResult;
+    },
+  });
+
+  page.onLoad();
+  page.onReady();
+  await page._loadPromise;
+  const banner = { ...page.data.banners[0] };
+  const product = { ...page.data.popularCases[0] };
+  page.onBannerImageLoad({
+    currentTarget: { dataset: bannerImageDataset(banner) },
+  });
+  const beginsBeforeErrors = pageLoadingCount(calls, "begin");
+
+  const bannerRecovery = page.onBannerImageError({
+    currentTarget: { dataset: bannerImageDataset(banner) },
+    detail: { errMsg: "banner failed" },
+  });
+  const recoveryPromise = page._homeImageRecoveryPromise;
+  const productRecovery = page.onProductImageError({
+    currentTarget: {
+      dataset: productImageDataset(product, "popularCases"),
+    },
+    detail: { errMsg: "product failed" },
+  });
+
+  assert.equal(bannerRecovery, recoveryPromise);
+  assert.equal(productRecovery, recoveryPromise);
+  assert.equal(pageLoadingCount(calls, "begin"), beginsBeforeErrors + 1);
+  await Promise.resolve();
+  assert.equal(calls.fetchHomeFeed.length, 2);
+
+  resolveRecovery({
+    revision: 81,
+    notModified: false,
+    ...refreshedFeed,
+  });
+  await recoveryPromise;
+
+  assert.equal(calls.fetchHomeFeed.length, 2);
+  assert.equal(pageLoadingCount(calls, "begin"), beginsBeforeErrors + 1);
+  assert.equal(
+    page.data.banners[0].renderImageUrl,
+    refreshedFeed.banners[0].imageUrl
+  );
+  assert.equal(
+    page.data.popularCases[0].coverImageUrl,
+    refreshedFeed.popularCases[0].coverImageUrl
+  );
+  page.onUnload();
+});
+
+await test("a second automatic image failure waits for manual retry instead of issuing a third request", async () => {
+  const feeds = [
+    buildVersionedHomeFeed("first"),
+    buildVersionedHomeFeed("automatic"),
+    buildVersionedHomeFeed("manual"),
+  ];
+  let requestCount = 0;
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => ({
+      revision: 90 + requestCount,
+      notModified: false,
+      ...feeds[requestCount++],
+    }),
+  });
+
+  page.onLoad();
+  page.onReady();
+  await page._loadPromise;
+  const firstBanner = { ...page.data.banners[0] };
+  page.onBannerImageError({
+    currentTarget: { dataset: bannerImageDataset(firstBanner) },
+    detail: { errMsg: "expired first URL" },
+  });
+  const automaticRecovery = page._homeImageRecoveryPromise;
+  await automaticRecovery;
+
+  assert.equal(calls.fetchHomeFeed.length, 2);
+  const automaticBanner = { ...page.data.banners[0] };
+  const secondFailure = page.onBannerImageError({
+    currentTarget: { dataset: bannerImageDataset(automaticBanner) },
+    detail: { errMsg: "renewed URL also failed" },
+  });
+  await secondFailure;
+  await flushTasks();
+
+  assert.equal(calls.fetchHomeFeed.length, 2);
+  assert.equal(page.data.banners[0].renderImageUrl, "");
+  assert.equal(page.data.banners[0].imageLoadState, "failed");
+  assert.equal(page._homeMediaState, "failed");
+  assert.equal(page._homeImageRecoveryPromise, null);
+
+  const manualRecovery = page.retryHomeImages();
+  assert.equal(manualRecovery, page._homeImageRecoveryPromise);
+  await manualRecovery;
+
+  assert.equal(calls.fetchHomeFeed.length, 3);
+  const manualBanner = page.data.banners[0];
+  assert.equal(manualBanner.renderImageUrl, feeds[2].banners[0].imageUrl);
+  assert.equal(manualBanner.imageLoadState, "pending");
+  page.onBannerImageLoad({
+    currentTarget: { dataset: bannerImageDataset(manualBanner) },
+  });
+  assert.equal(page._homeMediaState, "ready");
+  page.onUnload();
+});
+
+await test("hidden image errors defer work and merge into one recovery when home becomes visible", async () => {
+  const initialFeed = buildVersionedHomeFeed("before-hide");
+  const refreshedFeed = buildVersionedHomeFeed("after-show");
+  let requestCount = 0;
+  let resolveRecovery;
+  const recoveryResult = new Promise((resolve) => {
+    resolveRecovery = resolve;
+  });
+  const { calls, page } = loadHomePage({}, [], {
+    fetchHomeFeed: () => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return Promise.resolve({
+          revision: 100,
+          notModified: false,
+          ...initialFeed,
+        });
+      }
+      return recoveryResult;
+    },
+  });
+
+  page.onLoad();
+  page.onReady();
+  await page._loadPromise;
+  const hiddenBanner = { ...page.data.banners[0] };
+  const hiddenProduct = { ...page.data.popularCases[0] };
+  page.onBannerImageLoad({
+    currentTarget: { dataset: bannerImageDataset(hiddenBanner) },
+  });
+  page.onHide();
+  const beginsBeforeHiddenErrors = pageLoadingCount(calls, "begin");
+
+  assert.equal(page.onBannerImageError({
+    currentTarget: { dataset: bannerImageDataset(hiddenBanner) },
+    detail: { errMsg: "late hidden banner error" },
+  }), true);
+  assert.equal(page.onProductImageError({
+    currentTarget: {
+      dataset: productImageDataset(hiddenProduct, "popularCases"),
+    },
+    detail: { errMsg: "late hidden product error" },
+  }), true);
+  assert.equal(calls.fetchHomeFeed.length, 1);
+  assert.equal(pageLoadingCount(calls, "begin"), beginsBeforeHiddenErrors);
+  assert.equal(page._homeImageRecoveryPromise, null);
+
+  const resumedRecovery = page.onShow();
+  const recoveryPromise = page._homeImageRecoveryPromise;
+  assert.equal(resumedRecovery, recoveryPromise);
+  assert.equal(pageLoadingCount(calls, "begin"), beginsBeforeHiddenErrors + 1);
+  await Promise.resolve();
+  assert.equal(calls.fetchHomeFeed.length, 2);
+
+  resolveRecovery({
+    revision: 101,
+    notModified: false,
+    ...refreshedFeed,
+  });
+  await recoveryPromise;
+
+  assert.equal(calls.fetchHomeFeed.length, 2);
+  assert.equal(pageLoadingCount(calls, "begin"), beginsBeforeHiddenErrors + 1);
+  assert.equal(
+    page.data.banners[0].renderImageUrl,
+    refreshedFeed.banners[0].imageUrl
+  );
+  assert.equal(
+    page.data.popularCases[0].coverImageUrl,
+    refreshedFeed.popularCases[0].coverImageUrl
+  );
+  page.onUnload();
+});
+
+await test("an offline long-resume refresh keeps cached content and closes recovery loading", async () => {
+  const nowMs = 60_000_000;
+  const feed = buildVersionedHomeFeed("cached-before-offline");
+  let requestCount = 0;
+  const { calls, clock, page } = loadHomePage({}, [], {
+    fetchHomeFeed: async () => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return {
+          revision: 110,
+          notModified: false,
+          ...feed,
+        };
+      }
+      throw new Error("offline during resume");
+    },
+    isLegacyCatalogFallbackAllowed: () => false,
+    nowMs,
+  });
+
+  page.onLoad();
+  page.onReady();
+  await page._loadPromise;
+  const initialBanner = { ...page.data.banners[0] };
+  page.onBannerImageLoad({
+    currentTarget: { dataset: bannerImageDataset(initialBanner) },
+  });
+  const finishesBeforeResume = pageLoadingCount(calls, "finish");
+  page.onHide();
+  clock.advance(CACHE_TTL_MS);
+
+  const result = await page.onShow();
+
+  assert.equal(result.ok, false);
+  assert.equal(result.cached, true);
+  assert.equal(calls.fetchHomeFeed.length, 2);
+  assert.equal(page.data.banners[0].title, initialBanner.title);
+  assert.equal(page.data.popularCases.length, feed.popularCases.length);
+  assert.equal(page.data.latestCases.length, feed.latestCases.length);
+  assert.equal(page._homeEntryAwaitingFreshFeed, false);
+  assert.equal(page._homeImageRecoveryPromise, null);
+  assert.equal(pageLoadingCount(calls, "finish"), finishesBeforeResume + 1);
+  page.onUnload();
+});
+
+await test("an incomplete legacy URL exchange never renews the media timestamp", async () => {
+  const nowMs = 70_000_000;
+  const initialFeed = buildVersionedHomeFeed("before-signing-failure");
+  const legacyCases = [
+    buildCase(1, {
+      coverBanner: "cloud://case-banner",
+      homeSections: ["popular", "latest"],
+    }),
+  ];
+  let requestCount = 0;
+  const { calls, page } = loadHomePage({}, legacyCases, {
+    attachCaseImageUrls: async (items) => items.map((item) => ({
+      ...item,
+      imageFileId: item.coverBanner,
+      coverImageUrl: "",
+    })),
+    fetchHomeFeed: async () => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        return {
+          revision: 120,
+          notModified: false,
+          ...initialFeed,
+        };
+      }
+      throw Object.assign(new Error("catalog unavailable"), {
+        code: "UNKNOWN_ACTION",
+      });
+    },
+    fetchVisibleBanners: async () => [{
+      id: "legacy-banner",
+      caseId: "case_1",
+      image: "cloud://legacy-banner",
+      imageUrl: "",
+    }],
+    nowMs,
+  });
+
+  page.onLoad();
+  page.onReady();
+  await page._loadPromise;
+  const failedBanner = { ...page.data.banners[0] };
+  page.onBannerImageLoad({
+    currentTarget: { dataset: bannerImageDataset(failedBanner) },
+  });
+  const originalFetchedAt = page._homeCache.data.imageUrlsFetchedAt;
+
+  const recovery = page.onBannerImageError({
+    currentTarget: { dataset: bannerImageDataset(failedBanner) },
+    detail: { errMsg: "expired signed URL" },
+  });
+  const result = await recovery;
+
+  assert.equal(result.ok, false);
+  assert.equal(result.cached, true);
+  assert.equal(calls.fetchHomeFeed.length, 2);
+  assert.equal(page._homeCache.data.imageUrlsFetchedAt, originalFetchedAt);
+  assert.equal(page.data.banners[0].renderImageUrl, "");
+  assert.equal(page.data.banners[0].imageLoadState, "failed");
+  assert.equal(page._homeImagesNeedRefresh, true);
+  assert.equal(page._homeImageRecoveryPromise, null);
+  page.onUnload();
 });

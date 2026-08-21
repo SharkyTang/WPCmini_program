@@ -230,8 +230,11 @@ async function refreshImageUrl(fileID) {
   return resolveImageUrl(fileID, urls);
 }
 
-async function attachBannerImageUrls(banners) {
-  const tempUrlMap = await getTempUrlMap(banners.map((item) => item.image));
+async function attachBannerImageUrls(banners, options = {}) {
+  const tempUrlMap = await getTempUrlMap(
+    banners.map((item) => item.image),
+    options
+  );
   return banners.map((item) => ({
     ...item,
     imageUrl: resolveImageUrl(item.image, tempUrlMap),
@@ -243,7 +246,9 @@ async function fetchVisibleCases(options = {}) {
 
   if (!shouldForceRefresh(options) && visibleCasesCache) {
     const cachedCases = copyList(visibleCasesCache);
-    return includeImageUrls ? attachCaseImageUrls(cachedCases) : cachedCases;
+    return includeImageUrls
+      ? attachCaseImageUrls(cachedCases, options)
+      : cachedCases;
   }
   const records = await fetchAll(CASE_COLLECTION, {
     where: { isVisible: true },
@@ -251,7 +256,9 @@ async function fetchVisibleCases(options = {}) {
   });
   const cases = records.map(normalizeCaseRecord);
   visibleCasesCache = copyList(cases);
-  return includeImageUrls ? attachCaseImageUrls(cases) : copyList(cases);
+  return includeImageUrls
+    ? attachCaseImageUrls(cases, options)
+    : copyList(cases);
 }
 
 async function fetchVisibleBanners(cases, options = {}) {
@@ -263,7 +270,7 @@ async function fetchVisibleBanners(cases, options = {}) {
     orderField: "sortOrder",
   });
   const banners = buildFallbackBanners(records.map(normalizeBannerRecord), cases);
-  visibleBannersCache = await attachBannerImageUrls(banners);
+  visibleBannersCache = await attachBannerImageUrls(banners, options);
   return copyList(visibleBannersCache);
 }
 
