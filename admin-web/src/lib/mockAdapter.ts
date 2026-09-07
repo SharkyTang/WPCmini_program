@@ -9,7 +9,9 @@ import type {
   CaseDraft,
   CaseFilters,
   CaseRecord,
+  CleanupUnreferencedFilesResult,
   CreateCaseResult,
+  FileUploadProgress,
   HomeSection,
   HomeSectionOrders,
   ListPendingPurgeJobsRequest,
@@ -20,8 +22,12 @@ import type {
   RegisterUploadItemInput,
   SharedUploadItem,
   UploadedCaseImages,
+  UploadedCaseVideo,
+  UploadedVideoPoster,
   UploadItemStatusPatch,
   UploadProgress,
+  VideoFileMetadata,
+  VideoPatch,
 } from "../types";
 import { mergeTagValues, normalizeValues } from "./caseLogic";
 import { AdminApiError } from "./errors";
@@ -36,6 +42,7 @@ const PURGE_JOB_KEY = "wine-admin-demo-purge-jobs-v1";
 const UPLOAD_JOB_KEY = "wine-admin-demo-upload-jobs-v1";
 const ACTIVITY_FEED_KEY = "wine-admin-demo-activity-feed-v1";
 const CONFIG_OVERRIDE_KEY = "wine-admin-demo-config-override-v1";
+const mockMediaFiles = new Map<string, { url: string; fileSizeBytes: number }>();
 
 function readConfigOverride(): Partial<
   Pick<AdminConfig, "writeEnabled" | "permanentDeleteEnabled" | "activitySyncEnabled">
@@ -325,6 +332,10 @@ export class MockAdminApi implements AdminApi {
     await delay();
     return {
       ...DEFAULT_CONFIG,
+      features: {
+        videoUploadEnabled: true,
+        videoDisplayEnabled: true,
+      },
       permanentDeleteEnabled: true,
       activitySyncEnabled: true,
       ...readConfigOverride(),
@@ -433,6 +444,7 @@ export class MockAdminApi implements AdminApi {
     data: Partial<CaseDraft>,
     expectedVersion: number,
     clientMutationId: string,
+    videoPatch?: VideoPatch,
   ): Promise<CaseRecord> {
     ensureSession();
     await delay(260);
@@ -478,6 +490,36 @@ export class MockAdminApi implements AdminApi {
     next.coverImage = next.galleryImages[0] || next.coverImage;
     next.coverImageUrl = next.galleryImages[0] || next.coverImageUrl;
     next.galleryImageUrls = next.galleryImages;
+    if (videoPatch?.mode === "clear") {
+      next.videoFileID = "";
+      next.videoUrl = "";
+      next.videoPreviewUrl = "";
+      next.videoPosterFileID = "";
+      next.videoPoster = "";
+      next.videoPosterPreviewUrl = "";
+      next.videoDurationSeconds = null;
+      next.videoFileSizeBytes = null;
+    } else if (videoPatch?.mode === "external") {
+      next.videoFileID = "";
+      next.videoUrl = videoPatch.url;
+      next.videoPreviewUrl = videoPatch.url;
+      next.videoPosterFileID = "";
+      next.videoPoster = videoPatch.posterUrl || "";
+      next.videoPosterPreviewUrl = videoPatch.posterUrl || "";
+      next.videoDurationSeconds = videoPatch.durationSeconds ?? null;
+      next.videoFileSizeBytes = null;
+    } else if (videoPatch?.mode === "upload") {
+      next.videoFileID = videoPatch.fileID;
+      next.videoUrl = "";
+      next.videoPreviewUrl = mockMediaFiles.get(videoPatch.fileID)?.url || "";
+      next.videoPosterFileID = videoPatch.posterFileID || "";
+      next.videoPoster = "";
+      next.videoPosterPreviewUrl = videoPatch.posterFileID
+        ? mockMediaFiles.get(videoPatch.posterFileID)?.url || ""
+        : "";
+      next.videoDurationSeconds = videoPatch.durationSeconds;
+      next.videoFileSizeBytes = mockMediaFiles.get(videoPatch.fileID)?.fileSizeBytes || null;
+    }
     assertReady(next);
     cases[index] = next;
     writeCases(cases);
@@ -852,7 +894,64 @@ export class MockAdminApi implements AdminApi {
     };
   }
 
-  async cleanupUnreferencedFiles(_fileIDs: string[]): Promise<void> {
-    // Blob URLs are released by the browser when the demo session ends.
+  async uploadCaseVideo(
+    caseId: string,
+    file: File,
+    metadata: VideoFileMetadata,
+    onProgress?: (progress: FileUploadProgress) => void,
+  ): Promise<UploadedCaseVideo> {
+    ensureSession();
+    const fileID = `cloud://mock-env/wine-packaging/videos/demo-admin/${caseId}/${crypto.randomUUID()}.mp4`;
+    onProgress?.({ loadedBytes: 0, totalBytes: file.size, percent: 0 });
+    await delay(220);
+    onProgress?.({ loadedBytes: file.size, totalBytes: file.size, percent: 100 });
+    mockMediaFiles.set(fileID, { url: URL.createObjectURL(file), fileSizeBytes: file.size });
+    return { fileID, ...metadata };
+  }
+
+  async uploadVideoPoster(
+    caseId: string,
+    file: File,
+    onProgress?: (progress: FileUploadProgress) => void,
+  ): Promise<UploadedVideoPoster> {
+    ensureSession();
+    const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
+    const fileID = `cloud://mock-env/wine-packaging/videos/demo-admin/${caseId}/${crypto.randomUUID()}-poster.${extension}`;
+    onProgress?.({ loadedBytes: 0, totalBytes: file.size, percent: 0 });
+    await delay(160);
+    onProgress?.({ loadedBytes: file.size, totalBytes: file.size, percent: 100 });
+    mockMediaFiles.set(fileID, { url: URL.createObjectURL(file), fileSizeBytes: file.size });
+    return { fileID, fileSizeBytes: file.size };
+  }
+
+  async cleanupUnreferencedFiles(fileIDs: string[]): Promise<CleanupUnreferencedFilesResult> {
+    ensureSession();
+    const requestedFileIDs = [...new Set(fileIDs.filter(Boolean))];
+    const referencedFileIDs = new Set(
+      readCases().flatMap((item) => [
+        item.coverImage,
+        item.coverThumbnail,
+        item.coverBanner,
+        ...item.galleryImages,
+        ...item.sourceGalleryImages,
+        ...item.galleryThumbnails,
+        ...item.galleryBanners,
+        item.videoFileID || "",
+        item.videoPosterFileID || "",
+      ]).filter(Boolean),
+    );
+    const deletedFileIds: string[] = [];
+    const skippedFileIds: string[] = [];
+    requestedFileIDs.forEach((fileID) => {
+      if (referencedFileIDs.has(fileID) || !mockMediaFiles.has(fileID)) {
+        skippedFileIds.push(fileID);
+        return;
+      }
+      const media = mockMediaFiles.get(fileID);
+      if (media?.url) URL.revokeObjectURL(media.url);
+      mockMediaFiles.delete(fileID);
+      deletedFileIds.push(fileID);
+    });
+    return { deletedFileIds, skippedFileIds, failedFileIds: [] };
   }
 }

@@ -29,6 +29,30 @@ function numberValue(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+export function normalizeStableHttpsUrl(value: unknown): string {
+  const text = String(value || "").trim();
+  if (!text || text.length > 2048 || /\s/.test(text)) return "";
+  try {
+    const url = new URL(text);
+    if (url.protocol !== "https:" || !url.hostname || url.username || url.password) return "";
+    return text;
+  } catch {
+    return "";
+  }
+}
+
+function normalizeVideoDuration(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizeFileSize(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 function normalizeHomeSections(value: unknown): HomeSection[] {
   return normalizeValues(value).filter((section): section is HomeSection =>
     ["banner", "popular", "latest"].includes(section),
@@ -60,6 +84,11 @@ export function normalizeCaseRecord(value: unknown): CaseRecord {
       rawGalleryImageUrls[0] ||
       (/^https?:|^data:|^blob:/.test(coverImage) ? coverImage : ""),
   );
+  const videoFileID = String(raw.videoFileID || "").trim();
+  const videoUrl = normalizeStableHttpsUrl(raw.videoUrl);
+  const videoPreviewUrl = normalizeStableHttpsUrl(raw.videoPreviewUrl) || videoUrl;
+  const hasVideo = Boolean(videoFileID || videoUrl);
+  const videoPosterFileID = hasVideo ? String(raw.videoPosterFileID || "").trim() : "";
   return {
     _id: id,
     id,
@@ -91,6 +120,16 @@ export function normalizeCaseRecord(value: unknown): CaseRecord {
     homeSections: normalizeHomeSections(raw.homeSections),
     homeSectionOrder: normalizeHomeOrder(raw.homeSectionOrder),
     sortOrder: numberValue(raw.sortOrder, 9999),
+    videoFileID,
+    videoUrl,
+    videoPreviewUrl: hasVideo ? videoPreviewUrl : "",
+    videoPosterFileID,
+    videoPoster: hasVideo ? normalizeStableHttpsUrl(raw.videoPoster) : "",
+    videoPosterPreviewUrl: hasVideo
+      ? normalizeStableHttpsUrl(raw.videoPosterPreviewUrl) || normalizeStableHttpsUrl(raw.videoPoster)
+      : "",
+    videoDurationSeconds: hasVideo ? normalizeVideoDuration(raw.videoDurationSeconds) : null,
+    videoFileSizeBytes: hasVideo ? normalizeFileSize(raw.videoFileSizeBytes) : null,
     notes: String(raw.notes || ""),
     isVisible: raw.isVisible === true,
     isPinned: raw.isPinned === true,
@@ -115,6 +154,17 @@ export function toCasePayload(draft: Partial<CaseDraft>): Record<string, unknown
   multiFields.forEach((field) => {
     if (field in draft) payload[field] = { values: normalizeValues(draft[field]) };
   });
+  // Video mutations use the separate atomic videoPatch contract. Keeping these
+  // fields out of the generic case payload prevents old and partial forms from
+  // accidentally clearing an existing video.
+  delete payload.videoFileID;
+  delete payload.videoUrl;
+  delete payload.videoPreviewUrl;
+  delete payload.videoPosterFileID;
+  delete payload.videoPoster;
+  delete payload.videoPosterPreviewUrl;
+  delete payload.videoDurationSeconds;
+  delete payload.videoFileSizeBytes;
   delete payload.version;
   return payload;
 }
@@ -162,11 +212,29 @@ export function normalizeAdminConfig(value: unknown): AdminConfig {
       gallery: numberValue(rawLimits.gallery, DEFAULT_CONFIG.limits.gallery),
       batch: numberValue(rawLimits.batch, DEFAULT_CONFIG.limits.batch),
       uploadBytes: numberValue(rawLimits.uploadBytes, DEFAULT_CONFIG.limits.uploadBytes),
+      videoUploadBytes: numberValue(
+        rawLimits.videoUploadBytes,
+        DEFAULT_CONFIG.limits.videoUploadBytes,
+      ),
+      videoDurationSeconds: numberValue(
+        rawLimits.videoDurationSeconds,
+        DEFAULT_CONFIG.limits.videoDurationSeconds,
+      ),
+      videoPosterUploadBytes: numberValue(
+        rawLimits.videoPosterUploadBytes,
+        DEFAULT_CONFIG.limits.videoPosterUploadBytes,
+      ),
       homepage: {
         banner: numberValue(rawHomepage.banner, DEFAULT_CONFIG.limits.homepage.banner),
         popular: numberValue(rawHomepage.popular, DEFAULT_CONFIG.limits.homepage.popular),
         latest: numberValue(rawHomepage.latest, DEFAULT_CONFIG.limits.homepage.latest),
       },
+    },
+    features: {
+      videoUploadEnabled:
+        (raw.features as Record<string, unknown> | undefined)?.videoUploadEnabled === true,
+      videoDisplayEnabled:
+        (raw.features as Record<string, unknown> | undefined)?.videoDisplayEnabled === true,
     },
     writeEnabled: raw.writeEnabled === true,
     permanentDeleteEnabled: raw.permanentDeleteEnabled === true,

@@ -18,6 +18,9 @@ function normalizeFunctionResult(response) {
   if (result.ok === false) {
     const error = new Error(result.message || "案例管理请求失败");
     error.code = result.code || "CASE_ADMIN_ERROR";
+    if (result.currentVersion !== undefined && result.currentVersion !== null) {
+      error.currentVersion = result.currentVersion;
+    }
     throw error;
   }
   return result;
@@ -226,9 +229,33 @@ async function fetchCaseAdminHomepageDisplay(options = {}) {
 
 async function fetchCaseAdminDetail(id) {
   const result = await callCaseAdmin("getCase", { id });
-  const item = normalizeCaseAdminItem(result.item);
+  const rawItem = result.item || {};
+  const item = {
+    ...normalizeCaseAdminItem(rawItem),
+    videoFileID: rawItem.videoFileID || "",
+    videoUrl: rawItem.videoUrl || "",
+    videoPosterFileID: rawItem.videoPosterFileID || "",
+    videoPoster: rawItem.videoPoster || "",
+    videoDurationSeconds: rawItem.videoDurationSeconds ?? null,
+    videoFileSizeBytes: rawItem.videoFileSizeBytes ?? null,
+    videoPreviewUrl: rawItem.videoPreviewUrl || "",
+    videoPosterPreviewUrl: rawItem.videoPosterPreviewUrl || "",
+  };
   const items = await attachCaseGalleryUrls(item ? [item] : []);
   return items[0] || null;
+}
+
+async function fetchCaseAdminConfig() {
+  const result = await callCaseAdmin("getAdminConfig");
+  return result.config || result;
+}
+
+async function prepareCaseVideoUpload({ id, kind, fileName }) {
+  return callCaseAdmin("prepareVideoUpload", {
+    id,
+    kind,
+    fileName,
+  });
 }
 
 function markCaseDataChanged() {
@@ -242,8 +269,13 @@ async function createCaseAdmin(caseData) {
   return result;
 }
 
-async function updateCaseAdmin(id, caseData) {
-  const result = await callCaseAdmin("updateCase", { id, case: caseData });
+async function updateCaseAdmin(id, caseData, options = {}) {
+  const request = { id, case: caseData };
+  if (options.videoPatch) request.videoPatch = options.videoPatch;
+  if (options.expectedVersion !== undefined && options.expectedVersion !== null) {
+    request.expectedVersion = options.expectedVersion;
+  }
+  const result = await callCaseAdmin("updateCase", request);
   markCaseDataChanged();
   return result;
 }
@@ -278,6 +310,33 @@ async function uploadCaseCoverImage(input, maybeCloudPath) {
   return response.fileID;
 }
 
+async function uploadCaseVideoMedia({ filePath, cloudPath, onProgress, onTask }) {
+  if (!wx.cloud) {
+    throw new Error("当前基础库不支持云开发");
+  }
+  if (!filePath || !cloudPath) {
+    throw new Error("缺少待上传文件或上传路径");
+  }
+
+  const uploadTask = wx.cloud.uploadFile({
+    cloudPath,
+    filePath,
+  });
+  if (typeof onTask === "function") onTask(uploadTask);
+  if (uploadTask && typeof uploadTask.onProgressUpdate === "function") {
+    uploadTask.onProgressUpdate((progress = {}) => {
+      if (typeof onProgress === "function") {
+        onProgress(Number(progress.progress) || 0);
+      }
+    });
+  }
+  const response = await uploadTask;
+  if (!response || !response.fileID) {
+    throw new Error("云存储未返回文件标识");
+  }
+  return response.fileID;
+}
+
 async function generateCaseImageVariants(fileIDs = []) {
   if (!wx.cloud || !fileIDs.length) {
     throw new Error("缺少待处理的案例图片");
@@ -300,11 +359,21 @@ async function generateCaseImageVariants(fileIDs = []) {
 
 async function cleanupUnreferencedFiles(fileIDs = []) {
   const uniqueFileIDs = Array.from(new Set(fileIDs.filter(isCloudFileId)));
-  if (!uniqueFileIDs.length) return [];
+  if (!uniqueFileIDs.length) {
+    return {
+      deletedFileIds: [],
+      skippedFileIds: [],
+      failedFileIds: [],
+    };
+  }
   const result = await callCaseAdmin("cleanupUnreferencedFiles", {
     fileIDs: uniqueFileIDs,
   });
-  return result.deletedFileIds || [];
+  return {
+    deletedFileIds: result.deletedFileIds || [],
+    skippedFileIds: result.skippedFileIds || [],
+    failedFileIds: result.failedFileIds || [],
+  };
 }
 
 module.exports = {
@@ -315,13 +384,16 @@ module.exports = {
   cleanupUnreferencedFiles,
   createCaseAdmin,
   deleteCaseAdmin,
+  fetchCaseAdminConfig,
   fetchCaseAdminDetail,
   fetchCaseAdminHomepageDisplay,
   fetchCaseAdminList,
   fetchRecentCaseAdminList,
   generateCaseImageVariants,
+  prepareCaseVideoUpload,
   attachCaseGalleryUrls,
   setCaseVisibility,
   updateCaseAdmin,
   uploadCaseCoverImage,
+  uploadCaseVideoMedia,
 };

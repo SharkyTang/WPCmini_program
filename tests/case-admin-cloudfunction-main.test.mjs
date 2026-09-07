@@ -127,8 +127,10 @@ function createQuery(
 
 function loadCaseAdminFunction(options = {}) {
   const calls = [];
+  const warnings = [];
   const deletedFiles = [];
   const tempFileRequests = [];
+  const fileInfoRequests = [];
   let transactionCount = 0;
   let deleteFileCallCount = 0;
   const collections = {
@@ -138,6 +140,7 @@ function loadCaseAdminFunction(options = {}) {
     case_admin_purge_jobs: clone(options.purgeJobs || []),
     case_admin_upload_jobs: clone(options.uploadJobs || []),
     case_admin_activity_feed: clone(options.activityFeed || []),
+    case_admin_video_upload_intents: clone(options.videoUploadIntents || []),
   };
 
   const mockCloud = {
@@ -179,6 +182,13 @@ function loadCaseAdminFunction(options = {}) {
     },
     async getTempFileURL({ fileList }) {
       tempFileRequests.push(...fileList);
+      if (options.tempFileURLHook) {
+        await options.tempFileURLHook({
+          fileList: clone(fileList),
+          collections,
+          calls,
+        });
+      }
       return {
         fileList: fileList.map((fileID) => ({
           fileID,
@@ -223,6 +233,7 @@ function loadCaseAdminFunction(options = {}) {
             doc(id) {
               return {
                 async get() {
+                  calls.push({ collectionName, type: "get", id });
                   const record = records.find((item) => item._id === id);
                   if (!record) throw new Error("document not found");
                   const data = clone(record);
@@ -288,10 +299,69 @@ function loadCaseAdminFunction(options = {}) {
           if (transactionCount === options.transactionFailureAt) {
             throw new Error(options.transactionFailureMessage || "transaction connection lost");
           }
-          return callback(databaseApi);
+          try {
+            return await callback(databaseApi);
+          } finally {
+            calls.push({ type: "transactionEnd" });
+          }
         };
       }
       return databaseApi;
+    },
+  };
+
+  const mockHttps = {
+    request(url, requestOptions, callback) {
+      const handlers = {};
+      let completed = false;
+      const request = {
+        on(eventName, handler) {
+          handlers[eventName] = handler;
+          return this;
+        },
+        setTimeout() {
+          return this;
+        },
+        destroy(error) {
+          if (completed) return;
+          completed = true;
+          if (handlers.error) handlers.error(error || new Error("destroyed"));
+        },
+        end() {
+          queueMicrotask(async () => {
+            if (completed) return;
+            try {
+              const parsedUrl = new URL(String(url));
+              const fileID = decodeURIComponent(parsedUrl.pathname.slice(1));
+              fileInfoRequests.push(fileID);
+              const fileInfoResponse = options.fileInfoHook
+                ? await options.fileInfoHook({ fileList: [fileID] })
+                : {
+                  fileList: [{
+                    fileID,
+                    ...clone((options.fileInfoById || {})[fileID] || {}),
+                  }],
+                };
+              const item = (fileInfoResponse.fileList || [])[0] || {};
+              completed = true;
+              callback({
+                statusCode: Number(item.statusCode) || 200,
+                headers: item.headers || {
+                  "content-length": String(item.size || ""),
+                  "content-type": item.mime || item.contentType || "",
+                  ...(item.location ? { location: item.location } : {}),
+                },
+                resume() {},
+              });
+            } catch (error) {
+              completed = true;
+              if (handlers.error) handlers.error(error);
+            }
+          });
+        },
+      };
+      assert.equal(requestOptions.method, "HEAD");
+      return request;
     },
   };
 
@@ -318,7 +388,9 @@ function loadCaseAdminFunction(options = {}) {
     console: {
       ...console,
       error() {},
-      warn() {},
+      warn(...args) {
+        warnings.push(args);
+      },
     },
     process: {
       env: {
@@ -328,13 +400,23 @@ function loadCaseAdminFunction(options = {}) {
         ADMIN_ACTIVITY_SYNC_ENABLED: options.activitySyncEnabled || "",
         ADMIN_PERMANENT_DELETE_ENABLED: options.permanentDeleteEnabled || "",
         CASE_ADMIN_DISPLAY_NAMES: options.adminDisplayNames || "",
+        VIDEO_UPLOAD_ENABLED: options.videoUploadEnabled || "",
+        VIDEO_DISPLAY_ENABLED: options.videoDisplayEnabled || "",
+        TCB_ENV: Object.prototype.hasOwnProperty.call(options, "tcbEnv")
+          ? options.tcbEnv
+          : "env",
       },
     },
     require(moduleName) {
       if (moduleName === "node:crypto") return require("node:crypto");
+      if (moduleName === "node:https") return mockHttps;
+      if (moduleName === "node:url") return require("node:url");
       if (moduleName === "wx-server-sdk") return mockCloud;
       if (moduleName === "./caseAdminLogic") return logic;
-      if (moduleName === "@cloudbase/node-sdk" && options.userInfo) {
+      if (
+        moduleName === "@cloudbase/node-sdk"
+        && (options.userInfo || options.fileInfoById || options.fileInfoHook)
+      ) {
         return {
           SYMBOL_CURRENT_ENV: "current-env",
           init() {
@@ -343,8 +425,21 @@ function loadCaseAdminFunction(options = {}) {
                 return {
                   getUserInfo() {
                     if (options.userInfoError) throw options.userInfoError;
-                    return clone(options.userInfo);
+                    return clone(options.userInfo || {});
                   },
+                };
+              },
+              async getFileInfo({ fileList }) {
+                fileInfoRequests.push(...fileList);
+                if (options.fileInfoHook) {
+                  return options.fileInfoHook({ fileList: clone(fileList) });
+                }
+                return {
+                  fileList: fileList.map((fileID) => ({
+                    code: "SUCCESS",
+                    fileID,
+                    ...clone((options.fileInfoById || {})[fileID] || {}),
+                  })),
                 };
               },
             };
@@ -362,9 +457,11 @@ function loadCaseAdminFunction(options = {}) {
   return {
     main: sandbox.module.exports.main,
     calls,
+    warnings,
     collections,
     deletedFiles,
     tempFileRequests,
+    fileInfoRequests,
   };
 }
 
@@ -376,6 +473,16 @@ async function test(name, fn) {
     console.error(`not ok - ${name}`);
     throw error;
   }
+}
+
+function createDeferred() {
+  let resolvePromise;
+  let rejectPromise;
+  const promise = new Promise((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
 }
 
 await test("deleteCase rejects non admins", async () => {
@@ -439,7 +546,44 @@ await test("cleanupUnreferencedFiles deletes only files confirmed unused", async
   });
   assert.equal(result.ok, true);
   assert.deepEqual(clone(result.deletedFileIds), [unused]);
+  assert.deepEqual(clone(result.skippedFileIds), [referenced]);
+  assert.deepEqual(clone(result.failedFileIds), []);
   assert.deepEqual(deletedFiles, [unused]);
+});
+
+await test("cleanupUnreferencedFiles reports deleted, skipped and failed files separately", async () => {
+  const referenced = `cloud://env/wine-packaging/variants/v2/${"c".repeat(32)}/banner.jpg`;
+  const deleted = `cloud://env/wine-packaging/variants/v2/${"d".repeat(32)}/display.jpg`;
+  const failed = `cloud://env/wine-packaging/variants/v2/${"e".repeat(32)}/thumbnail.jpg`;
+  const loaded = loadCaseAdminFunction({
+    deleteFileFailureAt: 2,
+    cases: [{
+      _id: "partial-cleanup-case",
+      galleryBanners: [referenced],
+      coverBanner: referenced,
+    }],
+  });
+  const result = await loaded.main({
+    action: "cleanupUnreferencedFiles",
+    fileIDs: [deleted, referenced, failed],
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(clone(result.deletedFileIds), [deleted]);
+  assert.deepEqual(clone(result.skippedFileIds), [referenced]);
+  assert.deepEqual(clone(result.failedFileIds), [failed]);
+  assert.deepEqual(
+    [
+      ...result.deletedFileIds,
+      ...result.skippedFileIds,
+      ...result.failedFileIds,
+    ].sort(),
+    [deleted, referenced, failed].sort()
+  );
+  assert.deepEqual(loaded.deletedFiles, [deleted]);
+  const warning = loaded.warnings.find(
+    ([message]) => message === "case file cleanup failed"
+  );
+  assert.equal(JSON.stringify(warning).includes(failed), false);
 });
 
 await test("cleanupUnreferencedFiles rejects paths outside the case namespace", async () => {
@@ -453,6 +597,7 @@ await test("cleanupUnreferencedFiles rejects paths outside the case namespace", 
 });
 
 await test("deleteCase moves a case to trash without deleting any files", async () => {
+  const videoFileID = "cloud://env/wine-packaging/videos/aaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccc.mp4";
   const { main, collections, deletedFiles } = loadCaseAdminFunction({
     cases: [{
       _id: "case_doc_1",
@@ -460,6 +605,8 @@ await test("deleteCase moves a case to trash without deleting any files", async 
       isVisible: true,
       isPinned: true,
       homeSections: { values: ["banner"] },
+      videoFileID,
+      videoDurationSeconds: 60,
       version: 3,
     }],
   });
@@ -475,6 +622,7 @@ await test("deleteCase moves a case to trash without deleting any files", async 
   assert.equal(collections.wine_packaging[0].isPinned, false);
   assert.deepEqual(collections.wine_packaging[0].homeSections, { values: [] });
   assert.equal(collections.wine_packaging[0].version, 4);
+  assert.equal(collections.wine_packaging[0].videoFileID, videoFileID);
   const legacyList = await main({ action: "listCases", page: 1, pageSize: 20 });
   assert.deepEqual(clone(legacyList.items), []);
 });
@@ -660,6 +808,754 @@ await test("CloudBase UID access uses the official server SDK and honors the web
     adminUids: "another-admin",
   });
   assert.equal((await forbidden.main({ action: "listCasesV2" })).code, "FORBIDDEN");
+});
+
+await test("admin config exposes fail-closed video feature gates and upload limits", async () => {
+  const disabled = loadCaseAdminFunction();
+  const disabledResult = await disabled.main({ action: "getAdminConfig" });
+  assert.equal(disabledResult.ok, true);
+  assert.deepEqual(clone(disabledResult.config.features), {
+    videoUploadEnabled: false,
+    videoDisplayEnabled: false,
+  });
+  assert.equal(disabledResult.config.limits.videoUploadBytes, 104857600);
+  assert.equal(disabledResult.config.limits.videoDurationSeconds, 120);
+  assert.equal(disabledResult.config.limits.videoPosterUploadBytes, 5242880);
+  assert.deepEqual(clone(disabledResult.config.upload.video.acceptedExtensions), [".mp4"]);
+
+  const enabled = loadCaseAdminFunction({
+    videoUploadEnabled: "true",
+    videoDisplayEnabled: "true",
+  });
+  const enabledResult = await enabled.main({ action: "getAdminConfig" });
+  assert.deepEqual(clone(enabledResult.config.features), {
+    videoUploadEnabled: true,
+    videoDisplayEnabled: true,
+  });
+
+  const blocked = await disabled.main({
+    action: "prepareVideoUpload",
+    id: "missing",
+    kind: "video",
+    fileName: "demo.mp4",
+  });
+  assert.equal(blocked.code, "VIDEO_UPLOAD_DISABLED");
+});
+
+await test("prepared video and poster uploads bind atomically and return admin previews", async () => {
+  const loaded = loadCaseAdminFunction({
+    videoUploadEnabled: "true",
+    cases: [{
+      _id: "video-case",
+      title: "视频案例",
+      caseId: "case_501",
+      coverImage: "cloud://env/cover.jpg",
+      galleryImages: ["cloud://env/cover.jpg"],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+    }],
+    fileInfoHook({ fileList }) {
+      return {
+        fileList: fileList.map((fileID) => ({
+          code: "SUCCESS",
+          fileID,
+          size: fileID.includes("/posters/") ? 5242880 : 104857600,
+          mime: fileID.includes("/posters/") ? "image/jpeg" : "video/mp4",
+        })),
+      };
+    },
+  });
+  const videoPrepared = await loaded.main({
+    action: "prepareVideoUpload",
+    id: "video-case",
+    kind: "video",
+    fileName: "demo.mp4",
+  });
+  const posterPrepared = await loaded.main({
+    action: "prepareVideoUpload",
+    id: "video-case",
+    kind: "poster",
+    fileName: "poster.jpg",
+  });
+  assert.equal(videoPrepared.ok, true);
+  assert.equal(posterPrepared.ok, true);
+  assert.match(videoPrepared.cloudPath, /^wine-packaging\/videos\/[a-f0-9]{24}\/[a-f0-9]{24}\/[a-f0-9]{32}\.mp4$/);
+  assert.match(posterPrepared.cloudPath, /^wine-packaging\/videos\/[a-f0-9]{24}\/[a-f0-9]{24}\/posters\/[a-f0-9]{32}\.jpg$/);
+  const videoFileID = `cloud://env/${videoPrepared.cloudPath}`;
+  const posterFileID = `cloud://env/${posterPrepared.cloudPath}`;
+  const saved = await loaded.main({
+    action: "updateCase",
+    id: "video-case",
+    case: { notes: "已配置视频" },
+    expectedVersion: 1,
+    videoPatch: {
+      mode: "upload",
+      fileID: videoFileID,
+      posterFileID,
+      durationSeconds: 119.2,
+    },
+  });
+  assert.equal(saved.ok, true);
+  const transactionStart = loaded.calls.findIndex((call) => call.type === "transaction");
+  const transactionEnd = loaded.calls.findIndex(
+    (call, index) => index > transactionStart && call.type === "transactionEnd"
+  );
+  const transactionCalls = loaded.calls.slice(transactionStart + 1, transactionEnd);
+  const firstWriteIndex = transactionCalls.findIndex(
+    (call) => ["add", "remove", "set", "update"].includes(call.type)
+  );
+  const lastReadIndex = transactionCalls.reduce(
+    (index, call, callIndex) => call.type === "get" ? callIndex : index,
+    -1
+  );
+  assert.equal(firstWriteIndex > lastReadIndex, true);
+  assert.equal(
+    transactionCalls.filter(
+      (call) => call.type === "get"
+        && call.collectionName === "case_admin_video_upload_intents"
+    ).length,
+    2
+  );
+  const stored = loaded.collections.wine_packaging[0];
+  assert.equal(stored.videoFileID, videoFileID);
+  assert.equal(stored.videoUrl, "");
+  assert.equal(stored.videoPosterFileID, posterFileID);
+  assert.equal(stored.videoDurationSeconds, 120);
+  assert.equal(stored.videoFileSizeBytes, 104857600);
+  assert.equal(
+    loaded.collections.case_admin_video_upload_intents.every(
+      (intent) => intent.status === "consumed" && intent.consumedByCaseId === "video-case"
+    ),
+    true
+  );
+  const detail = await loaded.main({ action: "getCase", id: "video-case" });
+  assert.equal(detail.item.videoPreviewUrl, `https://temp/${encodeURIComponent(videoFileID)}`);
+  assert.equal(
+    detail.item.videoPosterPreviewUrl,
+    `https://temp/${encodeURIComponent(posterFileID)}`
+  );
+  const cleared = await loaded.main({
+    action: "updateCase",
+    id: "video-case",
+    case: {},
+    expectedVersion: 2,
+    videoPatch: { mode: "clear" },
+  });
+  assert.equal(cleared.ok, true);
+  assert.equal(loaded.collections.wine_packaging[0].videoFileID, "");
+  assert.equal(loaded.collections.wine_packaging[0].videoPosterFileID, "");
+  assert.equal(loaded.collections.wine_packaging[0].videoDurationSeconds, null);
+  assert.deepEqual(new Set(loaded.deletedFiles), new Set([videoFileID, posterFileID]));
+});
+
+await test("video upload validation fails closed for cross-environment, MIME and size errors", async () => {
+  for (const scenario of [
+    { authority: "other-env", code: "CROSS_ENV_VIDEO_FILE" },
+    { authority: "env", tcbEnv: "", code: "STORAGE_ENV_UNAVAILABLE" },
+    { authority: "env", mime: "video/quicktime", code: "INVALID_VIDEO_MIME" },
+    { authority: "env", mime: "video/mp4", size: 104857601, code: "VIDEO_FILE_TOO_LARGE" },
+  ]) {
+    const loaded = loadCaseAdminFunction({
+      videoUploadEnabled: "true",
+      ...(Object.prototype.hasOwnProperty.call(scenario, "tcbEnv")
+        ? { tcbEnv: scenario.tcbEnv }
+        : {}),
+      cases: [{
+        _id: "video-validation-case",
+        title: "验证案例",
+        coverImage: "cloud://env/cover.jpg",
+        galleryImages: ["cloud://env/cover.jpg"],
+        packageTypes: { values: ["礼盒"] },
+        isVisible: false,
+        version: 1,
+      }],
+      fileInfoHook({ fileList }) {
+        return {
+          fileList: fileList.map((fileID) => ({
+            code: "SUCCESS",
+            fileID,
+            mime: scenario.mime || "video/mp4",
+            size: scenario.size || 1024,
+          })),
+        };
+      },
+    });
+    const prepared = await loaded.main({
+      action: "prepareVideoUpload",
+      id: "video-validation-case",
+      kind: "video",
+      fileName: "demo.mp4",
+    });
+    const fileID = `cloud://${scenario.authority}/${prepared.cloudPath}`;
+    const result = await loaded.main({
+      action: "updateCase",
+      id: "video-validation-case",
+      case: {},
+      expectedVersion: 1,
+      videoPatch: { mode: "upload", fileID, durationSeconds: 60 },
+    });
+    assert.equal(result.code, scenario.code);
+    assert.equal(loaded.collections.wine_packaging[0].videoFileID, undefined);
+  }
+});
+
+await test("external video patches work while upload is disabled and direct legacy fields are ignored", async () => {
+  const loaded = loadCaseAdminFunction({
+    cases: [{
+      _id: "external-case",
+      title: "外链案例",
+      coverImage: "cloud://env/cover.jpg",
+      galleryImages: ["cloud://env/cover.jpg"],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+      videoUrl: "https://old.example.com/video.mp4",
+    }],
+  });
+  const ignored = await loaded.main({
+    action: "updateCase",
+    id: "external-case",
+    case: { videoUrl: "https://ignored.example.com/video.mp4" },
+  });
+  assert.equal(ignored.ok, true);
+  assert.equal(
+    loaded.collections.wine_packaging[0].videoUrl,
+    "https://old.example.com/video.mp4"
+  );
+  const external = await loaded.main({
+    action: "updateCase",
+    id: "external-case",
+    case: {},
+    expectedVersion: 2,
+    videoPatch: {
+      mode: "external",
+      url: "https://media.example.com/video.mp4",
+      posterUrl: "https://media.example.com/poster.webp",
+      durationSeconds: 75,
+    },
+  });
+  assert.equal(external.ok, true);
+  assert.equal(
+    loaded.collections.wine_packaging[0].videoUrl,
+    "https://media.example.com/video.mp4"
+  );
+  assert.equal(loaded.collections.wine_packaging[0].videoFileID, "");
+  assert.equal(loaded.collections.wine_packaging[0].videoDurationSeconds, 75);
+});
+
+await test("a disabled upload gate still allows an existing upload to remove its poster", async () => {
+  const videoFileID = "cloud://env/wine-packaging/videos/aaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccc.mp4";
+  const posterFileID = "cloud://env/wine-packaging/videos/aaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbb/posters/dddddddddddddddddddddddddddddddd.webp";
+  const loaded = loadCaseAdminFunction({
+    cases: [{
+      _id: "existing-video-case",
+      title: "已有视频案例",
+      coverImage: "cloud://env/cover.jpg",
+      galleryImages: ["cloud://env/cover.jpg"],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+      videoFileID,
+      videoPosterFileID: posterFileID,
+      videoDurationSeconds: 60,
+      videoFileSizeBytes: 1024,
+    }],
+  });
+
+  const result = await loaded.main({
+    action: "updateCase",
+    id: "existing-video-case",
+    case: {},
+    expectedVersion: 1,
+    videoPatch: {
+      mode: "upload",
+      fileID: videoFileID,
+      durationSeconds: 60,
+      posterFileID: "",
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(loaded.collections.wine_packaging[0].videoFileID, videoFileID);
+  assert.equal(loaded.collections.wine_packaging[0].videoPosterFileID, "");
+  assert.deepEqual(loaded.fileInfoRequests, []);
+  assert.deepEqual(loaded.deletedFiles, [posterFileID]);
+});
+
+await test("every explicit video patch requires an expected case version", async () => {
+  const loaded = loadCaseAdminFunction({
+    videoUploadEnabled: "true",
+    cases: [{
+      _id: "version-required-video-case",
+      title: "视频版本案例",
+      coverImage: "cloud://env/cover.jpg",
+      galleryImages: ["cloud://env/cover.jpg"],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+    }],
+  });
+  const patches = [
+    {
+      mode: "upload",
+      fileID: "cloud://env/wine-packaging/videos/aaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbb/cccccccccccccccccccccccccccccccc.mp4",
+      durationSeconds: 60,
+    },
+    { mode: "external", url: "https://media.example.com/video.mp4" },
+    { mode: "clear" },
+  ];
+  for (const videoPatch of patches) {
+    const result = await loaded.main({
+      action: "updateCase",
+      id: "version-required-video-case",
+      case: {},
+      videoPatch,
+    });
+    assert.equal(result.code, "EXPECTED_VERSION_REQUIRED");
+  }
+  assert.equal(loaded.collections.wine_packaging[0].version, 1);
+  assert.deepEqual(loaded.fileInfoRequests, []);
+});
+
+await test("another administrator can retain bound video fields while replacing only one file", async () => {
+  const caseDocumentId = "cross-admin-video-case";
+  const originalActor = { type: "wechat_openid", id: "admin-a" };
+  const originalVideo = logic.buildPreparedVideoUpload({
+    actor: originalActor,
+    caseDocumentId,
+    kind: "video",
+    fileName: "old.mp4",
+    uploadId: "a".repeat(32),
+  });
+  const originalPoster = logic.buildPreparedVideoUpload({
+    actor: originalActor,
+    caseDocumentId,
+    kind: "poster",
+    fileName: "old.jpg",
+    uploadId: "b".repeat(32),
+  });
+  assert.equal(originalVideo.valid, true);
+  assert.equal(originalPoster.valid, true);
+  const originalVideoFileID = `cloud://env/${originalVideo.cloudPath}`;
+  const originalPosterFileID = `cloud://env/${originalPoster.cloudPath}`;
+
+  for (const replacedKind of ["poster", "video"]) {
+    const loaded = loadCaseAdminFunction({
+      openid: "admin-b",
+      adminOpenids: "admin-b",
+      videoUploadEnabled: "true",
+      cases: [{
+        _id: caseDocumentId,
+        title: "跨管理员视频案例",
+        coverImage: "cloud://env/cover.jpg",
+        galleryImages: ["cloud://env/cover.jpg"],
+        packageTypes: { values: ["礼盒"] },
+        isVisible: false,
+        version: 1,
+        videoFileID: originalVideoFileID,
+        videoPosterFileID: originalPosterFileID,
+        videoDurationSeconds: 60,
+        videoFileSizeBytes: 4096,
+      }],
+      fileInfoHook({ fileList }) {
+        return {
+          fileList: fileList.map((fileID) => ({
+            code: "SUCCESS",
+            fileID,
+            size: replacedKind === "video" ? 8192 : 2048,
+            mime: replacedKind === "video" ? "video/mp4" : "image/jpeg",
+          })),
+        };
+      },
+    });
+    const prepared = await loaded.main({
+      action: "prepareVideoUpload",
+      id: caseDocumentId,
+      kind: replacedKind,
+      fileName: replacedKind === "video" ? "new.mp4" : "new.jpg",
+    });
+    assert.equal(prepared.ok, true);
+    const introducedFileID = `cloud://env/${prepared.cloudPath}`;
+    const saved = await loaded.main({
+      action: "updateCase",
+      id: caseDocumentId,
+      case: {},
+      expectedVersion: 1,
+      videoPatch: {
+        mode: "upload",
+        fileID: replacedKind === "video" ? introducedFileID : originalVideoFileID,
+        posterFileID: replacedKind === "poster" ? introducedFileID : originalPosterFileID,
+        durationSeconds: 61,
+      },
+    });
+    assert.equal(saved.ok, true);
+    assert.deepEqual(loaded.fileInfoRequests, [introducedFileID]);
+    const stored = loaded.collections.wine_packaging[0];
+    assert.equal(
+      stored.videoFileID,
+      replacedKind === "video" ? introducedFileID : originalVideoFileID
+    );
+    assert.equal(
+      stored.videoPosterFileID,
+      replacedKind === "poster" ? introducedFileID : originalPosterFileID
+    );
+    assert.equal(stored.videoFileSizeBytes, replacedKind === "video" ? 8192 : 4096);
+    assert.equal(loaded.collections.case_admin_video_upload_intents.length, 1);
+    assert.equal(loaded.collections.case_admin_video_upload_intents[0].status, "consumed");
+  }
+});
+
+await test("version conflicts preserve prepared uploads for retry", async () => {
+  const uid = "web-admin-1";
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    videoUploadEnabled: "true",
+    cases: [{
+      _id: "conflict-video-case",
+      title: "冲突案例",
+      coverImage: "cloud://env/cover.jpg",
+      galleryImages: ["cloud://env/cover.jpg"],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+    }],
+  });
+  const prepared = await loaded.main({
+    action: "prepareVideoUpload",
+    id: "conflict-video-case",
+    kind: "video",
+    fileName: "demo.mp4",
+  });
+  const fileID = `cloud://env/${prepared.cloudPath}`;
+  const result = await loaded.main({
+    action: "updateCase",
+    id: "conflict-video-case",
+    case: {},
+    expectedVersion: 2,
+    videoPatch: { mode: "upload", fileID, durationSeconds: 60 },
+  });
+  assert.equal(result.code, "VERSION_CONFLICT");
+  assert.equal(loaded.collections.wine_packaging[0].videoFileID, undefined);
+  assert.equal(loaded.collections.case_admin_video_upload_intents[0].status, "prepared");
+  assert.deepEqual(loaded.deletedFiles, []);
+  assert.deepEqual(loaded.fileInfoRequests, []);
+});
+
+await test("unreferenced prepared video cleanup is actor-scoped", async () => {
+  const loaded = loadCaseAdminFunction({
+    videoUploadEnabled: "true",
+    cases: [{
+      _id: "cleanup-video-case",
+      title: "清理案例",
+      coverImage: "cloud://env/cover.jpg",
+      galleryImages: ["cloud://env/cover.jpg"],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+    }],
+  });
+  const prepared = await loaded.main({
+    action: "prepareVideoUpload",
+    id: "cleanup-video-case",
+    kind: "video",
+    fileName: "unused.mp4",
+  });
+  const fileID = `cloud://env/${prepared.cloudPath}`;
+  const result = await loaded.main({
+    action: "cleanupUnreferencedFiles",
+    fileIDs: [fileID],
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(clone(result.deletedFileIds), [fileID]);
+  assert.deepEqual(loaded.deletedFiles, [fileID]);
+
+  const other = loadCaseAdminFunction({
+    openid: "other-admin",
+    adminOpenids: "other-admin",
+  });
+  const forbidden = await other.main({
+    action: "cleanupUnreferencedFiles",
+    fileIDs: [fileID],
+  });
+  assert.equal(forbidden.code, "INVALID_CLEANUP_PATH");
+  assert.deepEqual(other.deletedFiles, []);
+});
+
+await test("a cleanup claim after save preflight blocks the save transaction", async () => {
+  const updateTransactionReady = createDeferred();
+  const releaseUpdateTransaction = createDeferred();
+  const deleteStarted = createDeferred();
+  const releaseDelete = createDeferred();
+  let videoFileID = "";
+  const loaded = loadCaseAdminFunction({
+    videoUploadEnabled: "true",
+    cases: [{
+      _id: "cleanup-wins-video-case",
+      title: "清理优先案例",
+      coverImage: "cloud://env/cover.jpg",
+      galleryImages: ["cloud://env/cover.jpg"],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+    }],
+    fileInfoHook({ fileList }) {
+      return {
+        fileList: fileList.map((fileID) => ({
+          code: "SUCCESS",
+          fileID,
+          size: 4096,
+          mime: "video/mp4",
+        })),
+      };
+    },
+    async transactionHook({ transactionCount }) {
+      if (transactionCount !== 1) return;
+      updateTransactionReady.resolve();
+      await releaseUpdateTransaction.promise;
+    },
+    async deleteFileHook({ fileList }) {
+      if (!videoFileID || !fileList.includes(videoFileID)) return;
+      deleteStarted.resolve();
+      await releaseDelete.promise;
+    },
+  });
+  const prepared = await loaded.main({
+    action: "prepareVideoUpload",
+    id: "cleanup-wins-video-case",
+    kind: "video",
+    fileName: "race.mp4",
+  });
+  videoFileID = `cloud://env/${prepared.cloudPath}`;
+  const savePromise = loaded.main({
+    action: "updateCase",
+    id: "cleanup-wins-video-case",
+    case: {},
+    expectedVersion: 1,
+    videoPatch: { mode: "upload", fileID: videoFileID, durationSeconds: 60 },
+  });
+  await updateTransactionReady.promise;
+  assert.deepEqual(loaded.fileInfoRequests, [videoFileID]);
+
+  const cleanupPromise = loaded.main({
+    action: "cleanupUnreferencedFiles",
+    fileIDs: [videoFileID],
+  });
+  await deleteStarted.promise;
+  assert.equal(
+    loaded.collections.case_admin_video_upload_intents[0].status,
+    "cleanup_claimed"
+  );
+  const transactionStarts = loaded.calls.reduce((indexes, call, index) => {
+    if (call.type === "transaction") indexes.push(index);
+    return indexes;
+  }, []);
+  const cleanupTransactionStart = transactionStarts[1];
+  const cleanupTransactionEnd = loaded.calls.findIndex(
+    (call, index) => index > cleanupTransactionStart && call.type === "transactionEnd"
+  );
+  const cleanupTransactionCalls = loaded.calls.slice(
+    cleanupTransactionStart + 1,
+    cleanupTransactionEnd
+  );
+  const intentReadIndex = cleanupTransactionCalls.findIndex(
+    (call) => call.type === "get"
+      && call.collectionName === "case_admin_video_upload_intents"
+  );
+  const intentWriteIndex = cleanupTransactionCalls.findIndex(
+    (call) => call.type === "update"
+      && call.collectionName === "case_admin_video_upload_intents"
+  );
+  assert.equal(intentReadIndex >= 0 && intentWriteIndex > intentReadIndex, true);
+
+  releaseUpdateTransaction.resolve();
+  const saveResult = await savePromise;
+  assert.equal(saveResult.code, "VIDEO_UPLOAD_CLEANUP_CLAIMED");
+  assert.equal(loaded.collections.wine_packaging[0].videoFileID, undefined);
+  assert.equal(loaded.collections.wine_packaging[0].version, 1);
+
+  releaseDelete.resolve();
+  const cleanupResult = await cleanupPromise;
+  assert.deepEqual(clone(cleanupResult.deletedFileIds), [videoFileID]);
+  assert.deepEqual(loaded.deletedFiles, [videoFileID]);
+  assert.equal(loaded.collections.wine_packaging[0].videoFileID, undefined);
+});
+
+await test("a committed video save makes concurrent client cleanup skip deletion", async () => {
+  const previewStarted = createDeferred();
+  const releasePreview = createDeferred();
+  let videoFileID = "";
+  const loaded = loadCaseAdminFunction({
+    videoUploadEnabled: "true",
+    cases: [{
+      _id: "save-wins-video-case",
+      title: "保存优先案例",
+      coverImage: "cloud://env/cover.jpg",
+      galleryImages: ["cloud://env/cover.jpg"],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+    }],
+    fileInfoHook({ fileList }) {
+      return {
+        fileList: fileList.map((fileID) => ({
+          code: "SUCCESS",
+          fileID,
+          size: 4096,
+          mime: "video/mp4",
+        })),
+      };
+    },
+    async tempFileURLHook({ fileList, collections }) {
+      const intent = collections.case_admin_video_upload_intents[0];
+      if (
+        videoFileID
+        && fileList.includes(videoFileID)
+        && intent
+        && intent.status === "consumed"
+      ) {
+        previewStarted.resolve();
+        await releasePreview.promise;
+      }
+    },
+  });
+  const prepared = await loaded.main({
+    action: "prepareVideoUpload",
+    id: "save-wins-video-case",
+    kind: "video",
+    fileName: "race.mp4",
+  });
+  videoFileID = `cloud://env/${prepared.cloudPath}`;
+  const savePromise = loaded.main({
+    action: "updateCase",
+    id: "save-wins-video-case",
+    case: {},
+    expectedVersion: 1,
+    videoPatch: { mode: "upload", fileID: videoFileID, durationSeconds: 60 },
+  });
+  await previewStarted.promise;
+  assert.equal(loaded.collections.wine_packaging[0].videoFileID, videoFileID);
+  assert.equal(loaded.collections.case_admin_video_upload_intents[0].status, "consumed");
+
+  const cleanupResult = await loaded.main({
+    action: "cleanupUnreferencedFiles",
+    fileIDs: [videoFileID],
+  });
+  assert.deepEqual(clone(cleanupResult.deletedFileIds), []);
+  assert.deepEqual(clone(cleanupResult.skippedFileIds), [videoFileID]);
+  assert.deepEqual(loaded.deletedFiles, []);
+  assert.equal(loaded.collections.wine_packaging[0].videoFileID, videoFileID);
+
+  releasePreview.resolve();
+  const saveResult = await savePromise;
+  assert.equal(saveResult.ok, true);
+  assert.equal(loaded.collections.wine_packaging[0].videoFileID, videoFileID);
+  assert.deepEqual(loaded.deletedFiles, []);
+});
+
+await test("a claimed video cleanup can retry after storage deletion fails", async () => {
+  const loaded = loadCaseAdminFunction({
+    videoUploadEnabled: "true",
+    deleteFileFailureAt: 1,
+    cases: [{
+      _id: "retry-cleanup-video-case",
+      title: "清理重试案例",
+      coverImage: "cloud://env/cover.jpg",
+      galleryImages: ["cloud://env/cover.jpg"],
+      packageTypes: { values: ["礼盒"] },
+      isVisible: false,
+      version: 1,
+    }],
+  });
+  const prepared = await loaded.main({
+    action: "prepareVideoUpload",
+    id: "retry-cleanup-video-case",
+    kind: "video",
+    fileName: "retry.mp4",
+  });
+  const videoFileID = `cloud://env/${prepared.cloudPath}`;
+  const first = await loaded.main({
+    action: "cleanupUnreferencedFiles",
+    fileIDs: [videoFileID],
+  });
+  assert.deepEqual(clone(first.deletedFileIds), []);
+  assert.deepEqual(clone(first.skippedFileIds), []);
+  assert.deepEqual(clone(first.failedFileIds), [videoFileID]);
+  assert.equal(
+    loaded.collections.case_admin_video_upload_intents[0].status,
+    "cleanup_claimed"
+  );
+  const cleanupWarning = loaded.warnings.find(
+    ([message]) => message === "case file cleanup failed"
+  );
+  assert.deepEqual(clone(cleanupWarning), [
+    "case file cleanup failed",
+    {
+      stage: "delete_unreferenced_file",
+      errorCode: "STORAGE_DELETE_FAILED",
+    },
+  ]);
+  assert.equal(JSON.stringify(cleanupWarning).includes(videoFileID), false);
+
+  const retry = await loaded.main({
+    action: "cleanupUnreferencedFiles",
+    fileIDs: [videoFileID],
+  });
+  assert.deepEqual(clone(retry.deletedFileIds), [videoFileID]);
+  assert.deepEqual(clone(retry.skippedFileIds), []);
+  assert.deepEqual(clone(retry.failedFileIds), []);
+  assert.deepEqual(loaded.deletedFiles, [videoFileID]);
+});
+
+await test("permanent deletion includes managed video and poster files", async () => {
+  const uid = "web-admin-1";
+  const actor = { type: "cloudbase_uid", id: uid };
+  const videoPath = logic.buildPreparedVideoUpload({
+    actor,
+    caseDocumentId: "trash-video",
+    kind: "video",
+    fileName: "video.mp4",
+    uploadId: "a".repeat(32),
+  }).cloudPath;
+  const posterPath = logic.buildPreparedVideoUpload({
+    actor,
+    caseDocumentId: "trash-video",
+    kind: "poster",
+    fileName: "poster.webp",
+    uploadId: "b".repeat(32),
+  }).cloudPath;
+  const videoFileID = `cloud://env/${videoPath}`;
+  const posterFileID = `cloud://env/${posterPath}`;
+  const loaded = loadCaseAdminFunction({
+    wxContext: {},
+    userInfo: { uid, openId: "", isAnonymous: false },
+    adminUids: uid,
+    webWriteEnabled: "true",
+    permanentDeleteEnabled: "true",
+    cases: [{
+      _id: "trash-video",
+      title: "待永久删除",
+      caseId: "case_888",
+      coverImage: "",
+      galleryImages: [],
+      videoFileID,
+      videoPosterFileID: posterFileID,
+      deletedAt: "2026-08-01",
+      version: 3,
+    }],
+  });
+  const result = await loaded.main({
+    action: "permanentlyDeleteCases",
+    ids: ["trash-video"],
+    expectedVersions: { "trash-video": 3 },
+    clientMutationId: "purge-video-case",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.deletedFileCount, 2);
+  assert.deepEqual(new Set(loaded.deletedFiles), new Set([videoFileID, posterFileID]));
 });
 
 await test("identity service failures are not reported as permission denials", async () => {

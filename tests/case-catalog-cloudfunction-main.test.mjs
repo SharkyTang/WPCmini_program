@@ -631,10 +631,91 @@ await test("detail v2 requests fall back to the legacy response while disabled",
   const expectedItem = logic.buildDetail(record, {
     [display]: `https://temp/${encodeURIComponent(display)}`,
   });
+  delete expectedItem.videoUrl;
+  delete expectedItem.videoPoster;
+  delete expectedItem.videoDurationSeconds;
   assert.deepEqual(JSON.parse(JSON.stringify(result)), {
     ok: true,
     item: JSON.parse(JSON.stringify(expectedItem)),
   });
+});
+
+await test("public detail resolves CloudBase video only while the display gate is enabled", async () => {
+  const display = "cloud://env/display.jpg";
+  const video = "cloud://env/wine-packaging/videos/video.mp4";
+  const poster = "cloud://env/wine-packaging/videos/poster.jpg";
+  const record = {
+    _id: "doc_video",
+    caseId: "case_video",
+    title: "视频案例",
+    isVisible: true,
+    galleryImages: [display],
+    coverImage: display,
+    videoFileID: video,
+    videoUrl: "https://media.example.com/fallback.mp4",
+    videoPosterFileID: poster,
+    videoPoster: "https://media.example.com/fallback.jpg",
+    videoDurationSeconds: 88,
+    videoFileSizeBytes: 1024,
+  };
+
+  const disabled = loadCaseCatalog({
+    env: { DETAIL_INITIAL_MODE_ENABLED: "true" },
+    recordsByCollection: { wine_packaging: [record] },
+  });
+  const hidden = await disabled.main({
+    action: "getCaseDetail",
+    id: "doc_video",
+    detailMode: "initial_v2",
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(hidden.item, "videoUrl"), false);
+  assert.equal(disabled.tempFileRequests.includes(video), false);
+  assert.equal(disabled.tempFileRequests.includes(poster), false);
+
+  const enabled = loadCaseCatalog({
+    env: {
+      DETAIL_INITIAL_MODE_ENABLED: "true",
+      VIDEO_DISPLAY_ENABLED: "true",
+    },
+    recordsByCollection: { wine_packaging: [record] },
+  });
+  const visible = await enabled.main({
+    action: "getCaseDetail",
+    id: "doc_video",
+    detailMode: "initial_v2",
+  });
+  assert.equal(visible.item.videoUrl, `https://temp/${encodeURIComponent(video)}`);
+  assert.equal(visible.item.videoPoster, `https://temp/${encodeURIComponent(poster)}`);
+  assert.equal(visible.item.videoDurationSeconds, 88);
+  assert.equal(Object.prototype.hasOwnProperty.call(visible.item, "videoFileID"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(visible.item, "videoFileSizeBytes"), false);
+  assert.equal(enabled.tempFileRequests.includes(video), true);
+  assert.equal(enabled.tempFileRequests.includes(poster), true);
+});
+
+await test("catalog and library cards never request or expose video fields", async () => {
+  const cover = "cloud://env/cover.jpg";
+  const video = "cloud://env/wine-packaging/videos/video.mp4";
+  const recordsByCollection = {
+    catalog_meta: [{ _id: "current", revision: 1 }],
+    wine_packaging: [{
+      _id: "doc_video_card",
+      caseId: "case_video_card",
+      title: "卡片案例",
+      isVisible: true,
+      coverImage: cover,
+      videoFileID: video,
+      videoDurationSeconds: 60,
+    }],
+  };
+  const loaded = loadCaseCatalog({
+    env: { VIDEO_DISPLAY_ENABLED: "true" },
+    recordsByCollection,
+  });
+  const result = await loaded.main({ action: "getCatalogSnapshot" });
+  assert.equal(result.ok, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(result.items[0], "videoUrl"), false);
+  assert.equal(loaded.tempFileRequests.includes(video), false);
 });
 
 await test("indexed home feed uses bounded section queries and preserves limits", async () => {

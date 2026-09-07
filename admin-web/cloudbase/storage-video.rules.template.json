@@ -1,0 +1,4 @@
+{
+  "read": "resource.openid == auth.openid || resource.openid == auth.uid",
+  "write": "(resource.openid == auth.openid || resource.openid == auth.uid) && (/^wine-packaging\\/videos\\//.test(resource.path) == false || auth.openid in ['__CASE_ADMIN_OPENID__'] || auth.uid in ['__CASE_ADMIN_UID__'])"
+}

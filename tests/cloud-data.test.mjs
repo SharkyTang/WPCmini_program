@@ -358,6 +358,39 @@ await test("fetchCaseById returns a visible document id without an index fallbac
   assert.equal(caseItem.id, "doc_visible");
 });
 
+await test("legacy database readers fail closed and never return video fields", async () => {
+  const record = {
+    _id: "doc_video",
+    caseId: "case_video",
+    title: "video",
+    coverImage: "https://example.com/visible.png",
+    videoFileID: "cloud://production.bucket/wine-packaging/videos/admin/case/video.mp4",
+    videoUrl: "https://media.example.com/video.mp4",
+    videoPosterFileID: "cloud://production.bucket/wine-packaging/videos/admin/case/poster.webp",
+    videoPoster: "https://media.example.com/poster.webp",
+    videoDurationSeconds: 60,
+    videoFileSizeBytes: 1024,
+    isVisible: true,
+    sortOrder: 1,
+  };
+  const lookup = mockCaseLookupData([record]);
+  const detail = await lookup.fetchCaseById("doc_video");
+
+  assert.equal(detail.videoUrl, "");
+  assert.equal(detail.videoPoster, "");
+  assert.equal(detail.videoDurationSeconds, null);
+  assert.equal(Object.hasOwn(detail, "videoFileID"), false);
+  assert.equal(Object.hasOwn(detail, "videoPosterFileID"), false);
+  assert.equal(Object.hasOwn(detail, "videoFileSizeBytes"), false);
+
+  const listReader = mockCloudData([record]);
+  const [card] = await listReader.fetchVisibleCases({ includeImageUrls: false });
+  assert.equal(card.videoUrl, "");
+  assert.equal(card.videoPoster, "");
+  assert.equal(card.videoDurationSeconds, null);
+  assert.equal(Object.hasOwn(card, "videoFileID"), false);
+});
+
 await test("fetchCaseById never exposes a hidden document through either lookup path", async () => {
   const { fetchCaseById, docCalls, whereCalls } = mockCaseLookupData([
     {

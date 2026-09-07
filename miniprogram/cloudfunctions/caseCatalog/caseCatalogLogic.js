@@ -9,9 +9,40 @@ const USER_LIBRARY_LIMITS = {
   history: 50,
 };
 const DETAIL_INITIAL_THUMBNAIL_LIMIT = 9;
+const HTTPS_MEDIA_URL_MAX_LENGTH = 2048;
+const VIDEO_DURATION_SECONDS_MAX = 120;
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeHttpsMediaUrl(value) {
+  const url = trimText(value);
+  if (!url || url.length > HTTPS_MEDIA_URL_MAX_LENGTH || /\s/.test(url)) return "";
+  const match = /^https:\/\/(\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::(\d{1,5}))?(?:[/?#].*)?$/i.exec(url);
+  if (!match) return "";
+  const port = match[2] ? Number(match[2]) : 443;
+  return port > 0 && port <= 65535 ? url : "";
+}
+
+function normalizeVideoDurationSeconds(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const duration = Number(value);
+  return Number.isSafeInteger(duration)
+    && duration > 0
+    && duration <= VIDEO_DURATION_SECONDS_MAX
+    ? duration
+    : null;
+}
+
+function normalizeVideoFileSizeBytes(value) {
+  const size = Number(value);
+  return Number.isSafeInteger(size) && size > 0 ? size : null;
+}
+
+function normalizeCloudFileId(value) {
+  const fileID = trimText(value);
+  return fileID.indexOf("cloud://") === 0 ? fileID : "";
 }
 
 function normalizeValues(value) {
@@ -62,6 +93,9 @@ function normalizeCaseRecord(record = {}) {
   const styles = normalizeValues(record.styles);
   const scenes = normalizeValues(record.scenes);
   const id = record._id || record.id || "";
+  const videoFileID = normalizeCloudFileId(record.videoFileID);
+  const videoUrl = normalizeHttpsMediaUrl(record.videoUrl);
+  const hasVideo = Boolean(videoFileID || videoUrl);
 
   return {
     id,
@@ -88,6 +122,16 @@ function normalizeCaseRecord(record = {}) {
     coverBanner:
       firstImage(record.coverBanner) || galleryBanners[0] || galleryImages[0] || legacyCover,
     imageVariantVersion: Number(record.imageVariantVersion) || 0,
+    videoFileID,
+    videoUrl,
+    videoPosterFileID: hasVideo ? normalizeCloudFileId(record.videoPosterFileID) : "",
+    videoPoster: hasVideo ? normalizeHttpsMediaUrl(record.videoPoster) : "",
+    videoDurationSeconds: hasVideo
+      ? normalizeVideoDurationSeconds(record.videoDurationSeconds)
+      : null,
+    videoFileSizeBytes: videoFileID
+      ? normalizeVideoFileSizeBytes(record.videoFileSizeBytes)
+      : null,
   };
 }
 
@@ -293,7 +337,13 @@ function mergeUserLibrary(type, libraryRecords = [], caseRecords = [], urlMap = 
 
 function buildDetail(record = {}, urlMap = {}) {
   const item = normalizeCaseRecord(record);
-  const { sourceGalleryImages: _sourceGalleryImages, ...publicItem } = item;
+  const {
+    sourceGalleryImages: _sourceGalleryImages,
+    videoFileID: _videoFileID,
+    videoPosterFileID: _videoPosterFileID,
+    videoFileSizeBytes: _videoFileSizeBytes,
+    ...publicItem
+  } = item;
   const gallery = item.galleryImages.map((fileID, index) => {
     const thumbnailFileID =
       item.galleryThumbnails[index] || item.coverThumbnail || fileID;
@@ -306,8 +356,29 @@ function buildDetail(record = {}, urlMap = {}) {
   });
   return {
     ...publicItem,
+    ...resolveDetailVideo(item, urlMap),
     gallery,
     coverImageUrl: gallery[0] ? gallery[0].displayUrl : "",
+  };
+}
+
+function resolveDetailVideo(item = {}, urlMap = {}) {
+  const videoUrl = item.videoFileID
+    ? resolvePublicUrl(item.videoFileID, urlMap)
+    : item.videoUrl;
+  if (!videoUrl) {
+    return {
+      videoUrl: "",
+      videoPoster: "",
+      videoDurationSeconds: null,
+    };
+  }
+  return {
+    videoUrl,
+    videoPoster: item.videoPosterFileID
+      ? resolvePublicUrl(item.videoPosterFileID, urlMap)
+      : item.videoPoster,
+    videoDurationSeconds: item.videoDurationSeconds,
   };
 }
 
@@ -363,6 +434,9 @@ function buildInitialDetail(record = {}, urlMap = {}) {
     coverImage: _coverImage,
     coverThumbnail: _coverThumbnail,
     coverBanner: _coverBanner,
+    videoFileID: _videoFileID,
+    videoPosterFileID: _videoPosterFileID,
+    videoFileSizeBytes: _videoFileSizeBytes,
     ...publicItem
   } = item;
   const unsafeSourceIds = getUnsafeDetailSourceIds(record, item);
@@ -389,9 +463,16 @@ function buildInitialDetail(record = {}, urlMap = {}) {
   });
   return {
     ...publicItem,
+    ...resolveDetailVideo(item, urlMap),
     gallery,
     coverImageUrl: gallery[0] ? gallery[0].heroUrl : "",
   };
+}
+
+function collectDetailVideoFileIds(record = {}) {
+  const item = normalizeCaseRecord(record);
+  if (!item.videoFileID) return [];
+  return [item.videoFileID, item.videoPosterFileID].filter(Boolean);
 }
 
 function collectInitialDetailImageFileIds(record = {}) {
@@ -496,6 +577,7 @@ module.exports = {
   chunkList,
   collectDetailImageFileIds,
   collectDetailPatchFileIds,
+  collectDetailVideoFileIds,
   collectHomeImageFileIds,
   collectInitialDetailImageFileIds,
   getCardImageFileId,
@@ -503,5 +585,8 @@ module.exports = {
   getLibraryType,
   mergeUserLibrary,
   normalizeCaseRecord,
+  normalizeHttpsMediaUrl,
+  normalizeVideoDurationSeconds,
+  normalizeVideoFileSizeBytes,
   trimText,
 };

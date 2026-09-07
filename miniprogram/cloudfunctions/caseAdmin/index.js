@@ -1,4 +1,6 @@
 const crypto = require("node:crypto");
+const https = require("node:https");
+const { URL } = require("node:url");
 const cloud = require("wx-server-sdk");
 const {
   BANNER_COLLECTION,
@@ -11,6 +13,11 @@ const {
   IMAGE_URL_BATCH_SIZE,
   SEARCH_FETCH_LIMIT,
   PINNED_CASE_LIMIT,
+  VIDEO_DURATION_SECONDS_MAX,
+  VIDEO_POSTER_UPLOAD_BYTES,
+  VIDEO_UPLOAD_BYTES,
+  VIDEO_UPLOAD_PREFIX,
+  buildPreparedVideoUpload,
   buildBatchCasePatch,
   buildCaseKeywords,
   buildHomepageDisplayItems,
@@ -18,20 +25,27 @@ const {
   filterCaseItemsV2,
   generateSequentialCaseId,
   getCloudFilePath,
+  isCloudFileFromEnvironment,
   getActivatedHomepageSlots,
   getCaseIdNumber,
+  getCaseVideoFileIds,
+  getPreparedVideoUploadId,
   getAdminDisplayName,
   getEnvList,
   getRecordVersion,
   hasCaseImageChanges,
+  hasCaseVideoChanges,
   isAdminActor,
   isWebAdminUploadFile,
+  isPreparedVideoUploadFile,
+  isVideoUploadFileForActor,
   isWebWriteEnabled,
   normalizeCaseIds,
   normalizeAdminListLimit,
   normalizeClientMutationId,
   normalizeCloudFileIds,
   normalizeHomepageDisplaySlot,
+  normalizeHttpsMediaUrl,
   normalizePage,
   normalizePageSize,
   normalizeUploadJobStatus,
@@ -39,6 +53,7 @@ const {
   paginateCaseItems,
   resolveAdminActor,
   sanitizeCasePayload,
+  sanitizeVideoPatch,
   sortCaseItemsV2,
   trimText,
   validateExpectedVersion,
@@ -73,6 +88,10 @@ const ACTIVITY_FEED_COLLECTION = "case_admin_activity_feed";
 const ACTIVITY_OUTBOX_VIEWER_UID = "__server_outbox__";
 const ACTIVITY_OUTBOX_REPAIR_LIMIT = 10;
 const ADMIN_RECORD_RETENTION_LIMIT = 50;
+const VIDEO_UPLOAD_INTENT_COLLECTION = "case_admin_video_upload_intents";
+const VIDEO_UPLOAD_INTENT_TTL_MS = 30 * 60 * 1000;
+const VIDEO_HEAD_TIMEOUT_MS = 10 * 1000;
+const VIDEO_HEAD_REDIRECT_LIMIT = 2;
 const WEB_WRITE_ACTIONS = new Set([
   "createCase",
   "updateCase",
@@ -84,6 +103,7 @@ const WEB_WRITE_ACTIONS = new Set([
   "setCaseVisibility",
   "deleteCase",
   "cleanupUnreferencedFiles",
+  "prepareVideoUpload",
   "permanentlyDeleteCases",
   "registerUploadItems",
   "updateUploadItemStatus",
@@ -149,6 +169,18 @@ function isActivitySyncEnabled() {
 
 function isPermanentDeleteEnabled() {
   return isWebWriteEnabled(process.env.ADMIN_PERMANENT_DELETE_ENABLED);
+}
+
+function isVideoUploadEnabled() {
+  return isWebWriteEnabled(process.env.VIDEO_UPLOAD_ENABLED);
+}
+
+function isVideoDisplayEnabled() {
+  return isWebWriteEnabled(process.env.VIDEO_DISPLAY_ENABLED);
+}
+
+function getRuntimeCloudEnvironment() {
+  return trimText(process.env.TCB_ENV || process.env.SCF_NAMESPACE);
 }
 
 function getDeterministicDocumentId(prefix, value) {
@@ -552,22 +584,38 @@ function getUploadActivityAction(status, fallback = "upload_updated") {
   })[status] || fallback;
 }
 
-async function loadOfficialCloudbaseUserInfo() {
+function loadOfficialCloudbaseApp() {
   let sdk;
   try {
     // Kept lazy so the legacy WeChat runtime can still start during a staged
     // dependency rollout. Production deployments include this dependency.
     sdk = require("@cloudbase/node-sdk");
   } catch (error) {
-    return { available: false, userInfo: null, error: null };
+    return { available: false, app: null, error: null };
   }
   try {
     const app = sdk.init({
       env: sdk.SYMBOL_CURRENT_ENV || process.env.TCB_ENV || process.env.SCF_NAMESPACE,
     });
+    return { available: true, app, error: null };
+  } catch (error) {
+    return { available: true, app: null, error };
+  }
+}
+
+async function loadOfficialCloudbaseUserInfo() {
+  const loaded = loadOfficialCloudbaseApp();
+  if (loaded.error || !loaded.app) {
+    return {
+      available: loaded.available,
+      userInfo: null,
+      error: loaded.error,
+    };
+  }
+  try {
     return {
       available: true,
-      userInfo: app.auth().getUserInfo(),
+      userInfo: loaded.app.auth().getUserInfo(),
       error: null,
     };
   } catch (error) {
@@ -677,6 +725,12 @@ function isDocumentNotFoundError(error) {
     /(?:document|doc).*(?:not found|does not exist)/i.test(message) ||
     /文档.*不存在/.test(message)
   );
+}
+
+function normalizeLogErrorCode(error, fallback = "UNKNOWN_ERROR") {
+  const code = trimText(error && (error.code || error.errCode || error.status))
+    .toUpperCase();
+  return /^[A-Z0-9_.:-]{1,80}$/.test(code) ? code : fallback;
 }
 
 function ensureAllCasesFound(ids, items) {
@@ -828,7 +882,14 @@ async function getAdminConfig(actor) {
         gallery: CASE_GALLERY_MAX,
         batch: CASE_BATCH_MAX,
         uploadBytes: 20 * 1024 * 1024,
+        videoUploadBytes: VIDEO_UPLOAD_BYTES,
+        videoDurationSeconds: VIDEO_DURATION_SECONDS_MAX,
+        videoPosterUploadBytes: VIDEO_POSTER_UPLOAD_BYTES,
         homepage: HOME_DISPLAY_LIMITS,
+      },
+      features: {
+        videoUploadEnabled: isVideoUploadEnabled(),
+        videoDisplayEnabled: isVideoDisplayEnabled(),
       },
       writeEnabled,
       activitySyncEnabled,
@@ -840,6 +901,16 @@ async function getAdminConfig(actor) {
         pathPrefix: actor && actor.type === "cloudbase_uid"
           ? `wine-packaging/admin-web/${encodeURIComponent(actor.id)}/`
           : "wine-packaging/",
+        video: {
+          acceptedExtensions: [".mp4"],
+          acceptedMimeTypes: ["video/mp4"],
+          pathPrefix: `${VIDEO_UPLOAD_PREFIX}/`,
+        },
+        videoPoster: {
+          acceptedExtensions: [".jpg", ".jpeg", ".png", ".webp"],
+          acceptedMimeTypes: ["image/jpeg", "image/png", "image/webp"],
+          pathPrefix: `${VIDEO_UPLOAD_PREFIX}/`,
+        },
       },
     },
     // Temporary aliases keep early desktop builds compatible.
@@ -921,7 +992,288 @@ async function getCase(event) {
   const id = trimText(event.id);
   if (!id) return fail("INVALID_ID", "缺少案例 ID");
   const response = await db.collection(CASE_COLLECTION).doc(id).get();
-  return ok({ item: response.data || null });
+  const item = response.data || null;
+  if (!item) return ok({ item: null });
+  let urlMap = {};
+  try {
+    urlMap = await getTempUrlMap(getCaseVideoFileIds(item));
+  } catch (error) {
+    // A preview-signing outage must not make an otherwise valid case unreadable
+    // or make a committed update look as though it failed.
+    console.warn("case admin video preview resolution failed");
+  }
+  return ok({
+    item: {
+      ...item,
+      videoPreviewUrl: trimText(item.videoFileID)
+        ? urlMap[item.videoFileID] || ""
+        : normalizeHttpsMediaUrl(item.videoUrl),
+      videoPosterPreviewUrl: trimText(item.videoPosterFileID)
+        ? urlMap[item.videoPosterFileID] || ""
+        : normalizeHttpsMediaUrl(item.videoPoster),
+    },
+  });
+}
+
+function sameAdminActor(left, right) {
+  return Boolean(
+    left
+    && right
+    && trimText(left.type) === trimText(right.type)
+    && trimText(left.id) === trimText(right.id)
+  );
+}
+
+async function prepareVideoUpload(event, actor) {
+  if (!isVideoUploadEnabled()) {
+    return fail("VIDEO_UPLOAD_DISABLED", "视频上传功能尚未开启");
+  }
+  const id = trimText(event.id);
+  if (!id) return fail("INVALID_ID", "缺少案例 ID");
+  const existing = await getCaseById(id);
+  if (!existing) return fail("CASE_NOT_FOUND", "案例不存在或已删除");
+  if (existing.deletedAt) return fail("CASE_IN_TRASH", "回收站中的案例不能上传视频");
+
+  const prepared = buildPreparedVideoUpload({
+    actor,
+    caseDocumentId: id,
+    kind: event.kind,
+    fileName: event.fileName,
+    uploadId: crypto.randomBytes(16).toString("hex"),
+  });
+  if (!prepared.valid) return failFromValidation(prepared);
+  const expiresAt = new Date(Date.now() + VIDEO_UPLOAD_INTENT_TTL_MS).toISOString();
+  await db.collection(VIDEO_UPLOAD_INTENT_COLLECTION).doc(prepared.uploadId).set({
+    data: {
+      actor,
+      caseDocumentId: id,
+      kind: prepared.kind,
+      cloudPath: prepared.cloudPath,
+      status: "prepared",
+      expiresAt,
+      createdAt: db.serverDate(),
+      updatedAt: db.serverDate(),
+    },
+  });
+  return ok({
+    uploadId: prepared.uploadId,
+    cloudPath: prepared.cloudPath,
+    kind: prepared.kind,
+    expiresAt,
+  });
+}
+
+async function validatePreparedVideoIntent(fileID, actor, caseDocumentId, kind, source = db) {
+  const runtimeEnvironment = getRuntimeCloudEnvironment();
+  if (!runtimeEnvironment) {
+    return {
+      valid: false,
+      code: "STORAGE_ENV_UNAVAILABLE",
+      message: "无法确认当前云存储环境，已停止绑定视频",
+    };
+  }
+  if (!isCloudFileFromEnvironment(fileID, runtimeEnvironment)) {
+    return {
+      valid: false,
+      code: "CROSS_ENV_VIDEO_FILE",
+      message: "不能绑定其他云开发环境的视频文件",
+    };
+  }
+  if (!isPreparedVideoUploadFile(fileID, actor, caseDocumentId, kind)) {
+    return {
+      valid: false,
+      code: "INVALID_VIDEO_UPLOAD_PATH",
+      message: "视频文件不属于当前管理员和案例的上传目录",
+    };
+  }
+  const uploadId = getPreparedVideoUploadId(fileID);
+  const intent = await getDocumentOrNull(VIDEO_UPLOAD_INTENT_COLLECTION, uploadId, source);
+  if (
+    !intent
+    || !sameAdminActor(intent.actor, actor)
+    || trimText(intent.caseDocumentId) !== trimText(caseDocumentId)
+    || trimText(intent.kind) !== kind
+    || trimText(intent.cloudPath) !== getCloudFilePath(fileID)
+  ) {
+    return {
+      valid: false,
+      code: "VIDEO_UPLOAD_NOT_PREPARED",
+      message: "视频文件没有有效的上传凭据，请重新选择文件",
+    };
+  }
+  const intentStatus = trimText(intent.status).toLowerCase();
+  if (intentStatus !== "prepared" || intent.consumedAt) {
+    return intentStatus === "cleanup_claimed"
+      ? {
+        valid: false,
+        code: "VIDEO_UPLOAD_CLEANUP_CLAIMED",
+        message: "该上传文件正在安全清理，请重新选择文件",
+      }
+      : {
+        valid: false,
+        code: "VIDEO_UPLOAD_ALREADY_USED",
+        message: "视频上传凭据已被使用",
+      };
+  }
+  const expiresAt = Date.parse(intent.expiresAt || "");
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    return {
+      valid: false,
+      code: "VIDEO_UPLOAD_EXPIRED",
+      message: "视频上传凭据已过期，请重新选择文件",
+    };
+  }
+  return { valid: true, uploadId, intent };
+}
+
+function readHttpsHead(urlValue, redirectsRemaining = VIDEO_HEAD_REDIRECT_LIMIT) {
+  return new Promise((resolve, reject) => {
+    let url;
+    try {
+      url = new URL(urlValue);
+    } catch (error) {
+      reject(new Error("云存储临时地址无效"));
+      return;
+    }
+    if (url.protocol !== "https:") {
+      reject(new Error("云存储临时地址必须使用 HTTPS"));
+      return;
+    }
+    const request = https.request(url, { method: "HEAD" }, (response) => {
+      const statusCode = Number(response.statusCode) || 0;
+      const location = trimText(response.headers && response.headers.location);
+      if ([301, 302, 303, 307, 308].includes(statusCode) && location) {
+        response.resume();
+        if (redirectsRemaining <= 0) {
+          reject(new Error("云存储临时地址重定向次数过多"));
+          return;
+        }
+        let redirected;
+        try {
+          redirected = new URL(location, url);
+        } catch (error) {
+          reject(new Error("云存储重定向地址无效"));
+          return;
+        }
+        if (redirected.protocol !== "https:") {
+          reject(new Error("云存储重定向必须使用 HTTPS"));
+          return;
+        }
+        readHttpsHead(redirected.toString(), redirectsRemaining - 1).then(resolve, reject);
+        return;
+      }
+      response.resume();
+      if (statusCode < 200 || statusCode >= 300) {
+        reject(new Error("云存储文件不可读"));
+        return;
+      }
+      resolve({ headers: response.headers || {} });
+    });
+    request.setTimeout(VIDEO_HEAD_TIMEOUT_MS, () => {
+      request.destroy(new Error("云存储文件校验超时"));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+async function inspectVideoStorageFile(fileID, kind) {
+  let tempResponse;
+  try {
+    tempResponse = await cloud.getTempFileURL({ fileList: [fileID] });
+  } catch (error) {
+    return {
+      valid: false,
+      code: "VIDEO_METADATA_UNAVAILABLE",
+      message: "暂时无法校验视频文件，请稍后重试",
+    };
+  }
+  const signed = tempResponse && Array.isArray(tempResponse.fileList)
+    ? tempResponse.fileList.find((entry) => trimText(entry && entry.fileID) === fileID)
+    : null;
+  const signedUrl = trimText(signed && signed.tempFileURL);
+  if (!signedUrl) {
+    return {
+      valid: false,
+      code: "INVALID_VIDEO_STORAGE_FILE",
+      message: "云存储文件不存在或无法访问",
+    };
+  }
+  let head;
+  try {
+    head = await readHttpsHead(signedUrl);
+  } catch (error) {
+    return {
+      valid: false,
+      code: "VIDEO_METADATA_UNAVAILABLE",
+      message: "暂时无法校验视频文件，请稍后重试",
+    };
+  }
+  const size = Number(head.headers["content-length"]);
+  const mime = trimText(head.headers["content-type"])
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+  if (!Number.isSafeInteger(size) || size <= 0 || !mime) {
+    return {
+      valid: false,
+      code: "INVALID_VIDEO_STORAGE_FILE",
+      message: "云存储文件不存在或元数据不完整",
+    };
+  }
+  const isVideo = kind === "video";
+  const allowedMimeTypes = isVideo
+    ? ["video/mp4"]
+    : ["image/jpeg", "image/png", "image/webp"];
+  if (!allowedMimeTypes.includes(mime)) {
+    return {
+      valid: false,
+      code: isVideo ? "INVALID_VIDEO_MIME" : "INVALID_VIDEO_POSTER_MIME",
+      message: isVideo ? "云存储文件不是 MP4 视频" : "视频封面格式无效",
+    };
+  }
+  const sizeLimit = isVideo ? VIDEO_UPLOAD_BYTES : VIDEO_POSTER_UPLOAD_BYTES;
+  if (size > sizeLimit) {
+    return {
+      valid: false,
+      code: isVideo ? "VIDEO_FILE_TOO_LARGE" : "VIDEO_POSTER_TOO_LARGE",
+      message: isVideo ? "视频不能超过 100MB" : "视频封面不能超过 5MB",
+    };
+  }
+  return { valid: true, size, mime };
+}
+
+async function isVideoFileReferencedByOtherCase(fileID, caseDocumentId) {
+  const [videoResponse, posterResponse] = await Promise.all([
+    db.collection(CASE_COLLECTION).where({ videoFileID: fileID }).field({ _id: true }).limit(2).get(),
+    db.collection(CASE_COLLECTION).where({ videoPosterFileID: fileID }).field({ _id: true }).limit(2).get(),
+  ]);
+  return [...(videoResponse.data || []), ...(posterResponse.data || [])]
+    .some((item) => trimText(item && item._id) !== trimText(caseDocumentId));
+}
+
+function getIntroducedVideoUploadFiles(videoPatch, current = {}) {
+  if (!videoPatch || videoPatch.omitted || videoPatch.mode !== "upload") return [];
+  const candidates = [
+    {
+      kind: "video",
+      field: "videoFileID",
+      fileID: trimText(videoPatch.data && videoPatch.data.videoFileID),
+    },
+    {
+      kind: "poster",
+      field: "videoPosterFileID",
+      fileID: trimText(videoPatch.data && videoPatch.data.videoPosterFileID),
+    },
+  ];
+  return candidates.filter(
+    (item) => item.fileID && item.fileID !== trimText(current[item.field])
+  );
+}
+
+function normalizeStoredVideoFileSize(value) {
+  const size = Number(value);
+  return Number.isSafeInteger(size) && size > 0 ? size : null;
 }
 
 async function getCaseById(id) {
@@ -1810,8 +2162,12 @@ async function updateCase(event, actor) {
   if (mutationResult.value && existing.clientMutationId === mutationResult.value) {
     return ok({ id, version: getRecordVersion(existing), idempotentReplay: true });
   }
+  const videoPatch = sanitizeVideoPatch(event.videoPatch);
+  if (!videoPatch.valid) return failFromValidation(videoPatch);
   const versionValidation = validateExpectedVersion(existing, event.expectedVersion, {
-    required: actor && actor.type === "cloudbase_uid",
+    required: Boolean(
+      (actor && actor.type === "cloudbase_uid") || !videoPatch.omitted
+    ),
   });
   if (!versionValidation.valid) return failFromValidation(versionValidation);
   const input = event.case || event.data || {};
@@ -1820,6 +2176,45 @@ async function updateCase(event, actor) {
     allowIncompleteHidden: actor && actor.type === "cloudbase_uid",
   });
   if (!result.valid) return fail(result.code, result.message);
+  const preparedVideoIntents = [];
+  if (!videoPatch.omitted) {
+    if (videoPatch.mode === "upload") {
+      const uploadedFiles = getIntroducedVideoUploadFiles(videoPatch, existing);
+      if (uploadedFiles.length && !isVideoUploadEnabled()) {
+        return fail("VIDEO_UPLOAD_DISABLED", "视频上传功能尚未开启");
+      }
+      for (const uploadedFile of uploadedFiles) {
+        const intentValidation = await validatePreparedVideoIntent(
+          uploadedFile.fileID,
+          actor,
+          id,
+          uploadedFile.kind
+        );
+        if (!intentValidation.valid) return failFromValidation(intentValidation);
+        if (await isVideoFileReferencedByOtherCase(uploadedFile.fileID, id)) {
+          return fail(
+            "VIDEO_FILE_ALREADY_REFERENCED",
+            "该云存储文件已被其他案例使用"
+          );
+        }
+        const metadata = await inspectVideoStorageFile(
+          uploadedFile.fileID,
+          uploadedFile.kind
+        );
+        if (!metadata.valid) return failFromValidation(metadata);
+        preparedVideoIntents.push({
+          ...uploadedFile,
+          uploadId: intentValidation.uploadId,
+          metadata,
+        });
+      }
+      const videoMetadata = preparedVideoIntents.find((item) => item.kind === "video");
+      videoPatch.data.videoFileSizeBytes = videoMetadata
+        ? videoMetadata.metadata.size
+        : normalizeStoredVideoFileSize(existing.videoFileSizeBytes);
+    }
+    Object.assign(result.data, videoPatch.data);
+  }
   if (Object.prototype.hasOwnProperty.call(result.data, "sourceGalleryImages")) {
     const existingSources = new Set(normalizeCloudFileIds(
       existing.sourceGalleryImages || [],
@@ -1883,15 +2278,59 @@ async function updateCase(event, actor) {
       const currentResponse = await ref.get();
       const current = currentResponse.data;
       committedBase = current;
-      const currentImageChanges = hasCaseImageChanges(current, result.data);
-      if (currentImageChanges) await assertNoActivePurgeCleanup(transaction);
       const currentValidation = validateExpectedVersion(current, event.expectedVersion, {
-        required: actor && actor.type === "cloudbase_uid",
+        required: Boolean(
+          (actor && actor.type === "cloudbase_uid") || !videoPatch.omitted
+        ),
       });
       if (!currentValidation.valid) {
         const error = new Error(currentValidation.message);
         Object.assign(error, currentValidation);
         throw error;
+      }
+      const transactionPreparedVideoIntents = [];
+      if (videoPatch.mode === "upload") {
+        const introducedFiles = getIntroducedVideoUploadFiles(videoPatch, current);
+        for (const introducedFile of introducedFiles) {
+          const preparedIntent = preparedVideoIntents.find(
+            (item) => item.kind === introducedFile.kind
+              && item.fileID === introducedFile.fileID
+          );
+          // expectedVersion makes `existing` and `current` the same revision.
+          // Fail closed if out-of-band data changed without advancing it.
+          if (!preparedIntent) {
+            const error = new Error("案例已被其他管理员修改，请刷新后重试");
+            error.code = "VERSION_CONFLICT";
+            error.currentVersion = getRecordVersion(current);
+            throw error;
+          }
+          const revalidated = await validatePreparedVideoIntent(
+            introducedFile.fileID,
+            actor,
+            id,
+            introducedFile.kind,
+            transaction
+          );
+          if (!revalidated.valid) {
+            const error = new Error(revalidated.message);
+            Object.assign(error, revalidated);
+            throw error;
+          }
+          transactionPreparedVideoIntents.push(preparedIntent);
+        }
+        const introducedVideo = transactionPreparedVideoIntents.find(
+          (item) => item.kind === "video"
+        );
+        result.data.videoFileSizeBytes = introducedVideo
+          ? introducedVideo.metadata.size
+          : normalizeStoredVideoFileSize(current.videoFileSizeBytes);
+      }
+      const currentImageChanges = hasCaseImageChanges(current, result.data);
+      const currentVideoChanges = hasCaseVideoChanges(current, result.data);
+      // This is the final transactional read (and can fence an expired guard).
+      // No case or upload-intent write may happen before it completes.
+      if (currentImageChanges || currentVideoChanges) {
+        await assertNoActivePurgeCleanup(transaction);
       }
       nextVersion = getRecordVersion(current) + 1;
       await ref.update({
@@ -1903,6 +2342,19 @@ async function updateCase(event, actor) {
           ...actorAuditFields(actor, "updated"),
         },
       });
+      for (const preparedIntent of transactionPreparedVideoIntents) {
+        await transaction
+          .collection(VIDEO_UPLOAD_INTENT_COLLECTION)
+          .doc(preparedIntent.uploadId)
+          .update({
+            data: {
+              status: "consumed",
+              consumedAt: db.serverDate(),
+              consumedByCaseId: id,
+              updatedAt: db.serverDate(),
+            },
+          });
+      }
     }, { required: true });
   } catch (error) {
     if (error.code) return failFromValidation(error);
@@ -1913,10 +2365,17 @@ async function updateCase(event, actor) {
   const removedFileIds = getCaseImageFileIds(committedBase).filter(
     (fileID) => !nextFileIds.has(fileID) && !sourceFileIds.has(fileID)
   );
-  await deleteUnreferencedCaseFiles(removedFileIds);
+  const nextVideoFileIds = new Set(getCaseVideoFileIds({
+    ...committedBase,
+    ...result.data,
+  }));
+  const removedVideoFileIds = getCaseVideoFileIds(committedBase).filter(
+    (fileID) => !nextVideoFileIds.has(fileID) && isAllowedPurgeFile(fileID)
+  );
+  await deleteUnreferencedCaseFiles([...removedFileIds, ...removedVideoFileIds]);
   await bumpCatalogRevision();
-
-  return ok({ id, version: nextVersion });
+  const refreshed = await getCase({ id });
+  return ok({ id, version: nextVersion, item: refreshed.item });
 }
 
 async function setCaseVisibility(event, actor) {
@@ -1964,6 +2423,8 @@ async function isCaseImageReferenced(fileID) {
     galleryThumbnailResponse,
     coverBannerResponse,
     galleryBannerResponse,
+    videoResponse,
+    videoPosterResponse,
     bannerResponse,
     optimizedBannerResponse,
   ] = await Promise.all([
@@ -2010,6 +2471,18 @@ async function isCaseImageReferenced(fileID) {
       .limit(1)
       .get(),
     db
+      .collection(CASE_COLLECTION)
+      .where({ videoFileID: fileID })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
+      .collection(CASE_COLLECTION)
+      .where({ videoPosterFileID: fileID })
+      .field({ _id: true })
+      .limit(1)
+      .get(),
+    db
       .collection(BANNER_COLLECTION)
       .where({ image: fileID })
       .field({ _id: true })
@@ -2031,54 +2504,169 @@ async function isCaseImageReferenced(fileID) {
       (galleryThumbnailResponse.data || []).length ||
       (coverBannerResponse.data || []).length ||
       (galleryBannerResponse.data || []).length ||
+      (videoResponse.data || []).length ||
+      (videoPosterResponse.data || []).length ||
       (bannerResponse.data || []).length ||
       (optimizedBannerResponse.data || []).length
   );
 }
 
-async function deleteUnreferencedCaseFiles(fileIDs = []) {
+async function deleteUnreferencedCaseFilesDetailed(fileIDs = []) {
   const deletedFileIds = [];
+  const skippedFileIds = [];
+  const failedFileIds = [];
   for (const fileID of Array.from(new Set(fileIDs.filter((value) => value.indexOf("cloud://") === 0)))) {
-    if (await isCaseImageReferenced(fileID)) continue;
+    if (await isCaseImageReferenced(fileID)) {
+      skippedFileIds.push(fileID);
+      continue;
+    }
     try {
-      await cloud.deleteFile({ fileList: [fileID] });
-      deletedFileIds.push(fileID);
+      const response = await cloud.deleteFile({ fileList: [fileID] });
+      const classified = classifyDeleteFileResponse([fileID], response);
+      if (classified.deleted.includes(fileID)) {
+        deletedFileIds.push(fileID);
+        continue;
+      }
+      failedFileIds.push(fileID);
+      console.warn("case file cleanup failed", {
+        stage: "delete_unreferenced_file",
+        errorCode: classified.ambiguous
+          ? "STORAGE_DELETE_AMBIGUOUS"
+          : "STORAGE_DELETE_REJECTED",
+      });
     } catch (error) {
-      console.warn("case image file delete failed", error);
+      failedFileIds.push(fileID);
+      console.warn("case file cleanup failed", {
+        stage: "delete_unreferenced_file",
+        errorCode: normalizeLogErrorCode(error, "STORAGE_DELETE_FAILED"),
+      });
     }
   }
-  return deletedFileIds;
+  return { deletedFileIds, skippedFileIds, failedFileIds };
+}
+
+async function deleteUnreferencedCaseFiles(fileIDs = []) {
+  const result = await deleteUnreferencedCaseFilesDetailed(fileIDs);
+  return result.deletedFileIds;
 }
 
 function isAllowedCleanupFile(fileID, actor) {
   const path = getCloudFilePath(fileID);
   const isVariant = /^wine-packaging\/variants\/v2\/[a-f0-9]{32}\/(?:display|thumbnail|banner)\.jpg$/i.test(path);
+  const isPreparedVideo = isCloudFileFromEnvironment(
+    fileID,
+    getRuntimeCloudEnvironment()
+  ) && isVideoUploadFileForActor(fileID, actor);
   if (actor && actor.type === "cloudbase_uid") {
-    return isVariant || isWebAdminUploadFile(fileID, actor.id);
+    return isVariant || isWebAdminUploadFile(fileID, actor.id) || isPreparedVideo;
   }
-  return isVariant || /^wine-packaging\/admin\/[^/]+\.(?:jpe?g|png|webp)$/i.test(path);
+  return isVariant
+    || isPreparedVideo
+    || /^wine-packaging\/admin\/[^/]+\.(?:jpe?g|png|webp)$/i.test(path);
 }
 
 function isAllowedPurgeFile(fileID) {
   const path = getCloudFilePath(fileID);
+  if (!isCloudFileFromEnvironment(fileID, getRuntimeCloudEnvironment())) return false;
   return (
     /^wine-packaging\/(?:admin|cases)\/[^/]+\.(?:jpe?g|png|webp)$/i.test(path)
     || /^wine-packaging\/admin-web\/[^/]+\/[^/]+\/[^/]+\.(?:jpe?g|png|webp)$/i.test(path)
     || /^wine-packaging\/variants\/v2\/[a-f0-9]{32}\/(?:display|thumbnail|banner)\.jpg$/i.test(path)
+    || new RegExp(`^${VIDEO_UPLOAD_PREFIX}/[a-f0-9]{24}/[a-f0-9]{24}/(?:[a-f0-9]{32}\\.mp4|posters/[a-f0-9]{32}\\.(?:jpe?g|png|webp))$`, "i").test(path)
   );
+}
+
+function getPreparedVideoFileKind(fileID) {
+  const path = getCloudFilePath(fileID);
+  if (/\/posters\/[a-f0-9]{32}\.(?:jpe?g|png|webp)$/i.test(path)) return "poster";
+  if (/[a-f0-9]{32}\.mp4$/i.test(path)) return "video";
+  return "";
+}
+
+async function claimPreparedVideoCleanup(fileID, actor) {
+  const uploadId = getPreparedVideoUploadId(fileID);
+  const kind = getPreparedVideoFileKind(fileID);
+  if (!uploadId || !kind) return { claimed: false };
+  let claimed = false;
+  await withTransaction(async (transaction) => {
+    // CloudBase may retry this callback after a write conflict.
+    claimed = false;
+    const ref = transaction.collection(VIDEO_UPLOAD_INTENT_COLLECTION).doc(uploadId);
+    const intent = await getDocumentOrNull(
+      VIDEO_UPLOAD_INTENT_COLLECTION,
+      uploadId,
+      transaction
+    );
+    if (
+      !intent
+      || !sameAdminActor(intent.actor, actor)
+      || trimText(intent.kind) !== kind
+      || trimText(intent.cloudPath) !== getCloudFilePath(fileID)
+      || !isPreparedVideoUploadFile(
+        fileID,
+        actor,
+        intent.caseDocumentId,
+        kind
+      )
+    ) {
+      return;
+    }
+    const status = trimText(intent.status).toLowerCase();
+    if (status === "cleanup_claimed") {
+      // A failed or interrupted storage delete is safe for the same actor to retry.
+      claimed = true;
+      return;
+    }
+    if (status !== "prepared" || intent.consumedAt) return;
+    claimed = true;
+    // This transaction reads the intent before writing its cleanup claim.
+    // updateCase consumes the same document, so only one operation can commit.
+    await ref.update({
+      data: {
+        status: "cleanup_claimed",
+        cleanupClaimedAt: db.serverDate(),
+        updatedAt: db.serverDate(),
+      },
+    });
+  }, { required: true });
+  return { claimed };
 }
 
 async function cleanupUnreferencedFiles(event, actor) {
   const fileIDs = normalizeCloudFileIds(event.fileIDs || event.fileIds);
-  if (!fileIDs.length) return ok({ deletedFileIds: [] });
+  if (!fileIDs.length) {
+    return ok({ deletedFileIds: [], skippedFileIds: [], failedFileIds: [] });
+  }
   if (fileIDs.some((fileID) => !isAllowedCleanupFile(fileID, actor))) {
     return fail(
       "INVALID_CLEANUP_PATH",
-      "只能清理案例上传目录中的临时图片"
+      "只能清理当前管理员的案例上传文件"
     );
   }
-  const deletedFileIds = await deleteUnreferencedCaseFiles(fileIDs);
-  return ok({ deletedFileIds });
+  const regularFileIds = [];
+  const claimedVideoFileIds = [];
+  const skippedFileIds = [];
+  for (const fileID of fileIDs) {
+    if (!isVideoUploadFileForActor(fileID, actor)) {
+      regularFileIds.push(fileID);
+      continue;
+    }
+    const claim = await claimPreparedVideoCleanup(fileID, actor);
+    if (claim.claimed) claimedVideoFileIds.push(fileID);
+    else skippedFileIds.push(fileID);
+  }
+  const cleanupResult = await deleteUnreferencedCaseFilesDetailed([
+    ...regularFileIds,
+    ...claimedVideoFileIds,
+  ]);
+  return ok({
+    deletedFileIds: cleanupResult.deletedFileIds,
+    skippedFileIds: Array.from(new Set([
+      ...skippedFileIds,
+      ...cleanupResult.skippedFileIds,
+    ])),
+    failedFileIds: cleanupResult.failedFileIds,
+  });
 }
 
 async function scanCollectionByStableId(collectionName) {
@@ -2110,7 +2698,10 @@ async function getRemainingImageReferenceSet() {
     scanCollectionByStableId(CASE_COLLECTION),
     scanCollectionByStableId(BANNER_COLLECTION),
   ]);
-  const references = new Set(cases.flatMap((item) => getCaseImageFileIds(item)));
+  const references = new Set(cases.flatMap((item) => [
+    ...getCaseImageFileIds(item),
+    ...getCaseVideoFileIds(item),
+  ]));
   banners.forEach((item) => {
     [trimText(item.image), trimText(item.optimizedImage)].forEach((fileID) => {
       if (fileID.indexOf("cloud://") === 0) references.add(fileID);
@@ -2415,7 +3006,10 @@ async function permanentlyDeleteCases(event, actor) {
         }
 
         const candidateFileIds = Array.from(new Set(
-          rows.flatMap((row) => getCaseImageFileIds(row.item))
+          rows.flatMap((row) => [
+            ...getCaseImageFileIds(row.item),
+            ...getCaseVideoFileIds(row.item),
+          ])
         ));
         const caseSummaries = rows.map((row) => ({
           id: row.id,
@@ -3078,6 +3672,7 @@ exports.main = async (event = {}) => {
     if (action === "listHomepageDisplay") return await listHomepageDisplay(event);
     if (action === "getCase") return await getCase(event);
     if (action === "getCaseImageUrls") return await getCaseImageUrls(event);
+    if (action === "prepareVideoUpload") return await prepareVideoUpload(event, actor);
     if (action === "createCase") return await createCase(event, actor);
     if (action === "updateCase") return await updateCase(event, actor);
     if (action === "batchPatchCases") return await batchPatchCases(event, actor);

@@ -71,6 +71,81 @@ describe("MockAdminApi mutation idempotency", () => {
     });
   });
 
+  it("applies videoPatch atomically and preserves video when the patch is omitted", async () => {
+    const api = new MockAdminApi();
+    await api.signIn(DEMO_ACCOUNT, DEMO_PASSWORD);
+    const candidate = (await api.listCases({
+      page: 1,
+      pageSize: 1,
+      filters: { ...EMPTY_FILTERS },
+    })).items[0];
+
+    const withVideo = await api.updateCase(
+      candidate._id,
+      { notes: candidate.notes },
+      candidate.version,
+      "video-external-1",
+      {
+        mode: "external",
+        url: "https://cdn.example.com/video.mp4",
+        posterUrl: "https://cdn.example.com/poster.jpg",
+        durationSeconds: 30,
+      },
+    );
+    expect(withVideo).toMatchObject({
+      videoFileID: "",
+      videoUrl: "https://cdn.example.com/video.mp4",
+      videoPoster: "https://cdn.example.com/poster.jpg",
+      videoDurationSeconds: 30,
+    });
+
+    const unrelatedUpdate = await api.updateCase(
+      candidate._id,
+      { notes: "不影响视频" },
+      withVideo.version,
+      "video-preserve-1",
+    );
+    expect(unrelatedUpdate.videoUrl).toBe("https://cdn.example.com/video.mp4");
+
+    const cleared = await api.updateCase(
+      candidate._id,
+      { notes: unrelatedUpdate.notes },
+      unrelatedUpdate.version,
+      "video-clear-1",
+      { mode: "clear" },
+    );
+    expect(cleared).toMatchObject({
+      videoFileID: "",
+      videoUrl: "",
+      videoPosterFileID: "",
+      videoPoster: "",
+      videoDurationSeconds: null,
+      videoFileSizeBytes: null,
+    });
+  });
+
+  it("returns explicit safe cleanup results for referenced or already absent files", async () => {
+    const api = new MockAdminApi();
+    await api.signIn(DEMO_ACCOUNT, DEMO_PASSWORD);
+    const candidate = (await api.listCases({
+      page: 1,
+      pageSize: 1,
+      filters: { ...EMPTY_FILTERS },
+    })).items[0];
+    const referencedFileID = candidate.galleryImages[0];
+    const absentFileID = "cloud://mock-env/wine-packaging/videos/demo-admin/absent.mp4";
+
+    await expect(api.cleanupUnreferencedFiles([
+      referencedFileID,
+      absentFileID,
+      referencedFileID,
+    ])).resolves.toEqual({
+      deletedFileIds: [],
+      skippedFileIds: [referencedFileID, absentFileID],
+      failedFileIds: [],
+    });
+  });
+
   it("permanently deletes only trashed cases and reuses the purge result", async () => {
     const api = new MockAdminApi();
     await api.signIn(DEMO_ACCOUNT, DEMO_PASSWORD);

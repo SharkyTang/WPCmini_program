@@ -46,6 +46,8 @@
       <view
         class="hero-favorite {{isFavorited ? 'hero-favorite-active' : ''}}"
         catchtap="toggleFavorite"
+        aria-role="button"
+        aria-label="{{isFavorited ? '取消收藏' : '收藏案例'}}"
       >
         <image
           wx:if="{{!isFavorited}}"
@@ -59,6 +61,15 @@
         </view>
       </view>
       <view class="image-count">{{currentImageIndex + 1}} / {{galleryItems.length}}</view>
+      <view
+        class="image-preview-tip"
+        catchtap="previewImage"
+        aria-role="button"
+        aria-label="查看案例全部大图"
+      >
+        <icon class="image-preview-icon" type="search" size="14" color="#ffffff" />
+        <text>点击查看大图</text>
+      </view>
     </view>
     <view wx:else class="hero-placeholder">
       <view class="placeholder-title">暂无案例图片</view>
@@ -86,6 +97,51 @@
       </view>
     </scroll-view>
 
+    <view wx:if="{{galleryItems.length > 1}}" class="gallery-swipe-tip">
+      ← 左右滑动查看更多图片 →
+    </view>
+
+    <view wx:if="{{caseVideo}}" class="video-card">
+      <block wx:if="{{!videoFailed}}">
+        <video
+          id="case-video"
+          class="case-video"
+          src="{{caseVideo.src}}"
+          poster="{{caseVideo.poster}}"
+          object-fit="cover"
+          controls="{{true}}"
+          autoplay="{{false}}"
+          loop="{{false}}"
+          show-center-play-btn="{{true}}"
+          show-play-btn="{{true}}"
+          show-fullscreen-btn="{{true}}"
+          enable-play-gesture="{{true}}"
+          binderror="onVideoError"
+          aria-label="产品展示视频"
+        ></video>
+        <view class="video-copy">
+          <view class="video-title">产品展示视频</view>
+          <view class="video-subtitle">查看更多包装细节</view>
+        </view>
+        <view wx:if="{{caseVideo.durationText}}" class="video-duration">
+          {{caseVideo.durationText}}
+        </view>
+      </block>
+      <view wx:else class="video-error-state">
+        <image
+          wx:if="{{caseVideo.poster}}"
+          class="video-error-poster"
+          src="{{caseVideo.poster}}"
+          mode="aspectFill"
+        />
+        <view class="video-error-shade"></view>
+        <view class="video-error-content">
+          <view class="video-error-title">视频暂时无法播放</view>
+          <view class="video-retry" bindtap="retryVideo" aria-role="button">重新加载</view>
+        </view>
+      </view>
+    </view>
+
     <view class="info-card">
       <view class="info-card-head">
         <view class="section-title">案例信息</view>
@@ -95,12 +151,6 @@
         <view class="info-label">{{item.label}}</view>
         <view class="info-value">{{item.value}}</view>
       </view>
-    </view>
-
-    <view wx:if="{{caseItem.notes}}" class="notes-card">
-      <view class="section-kicker">DESIGN NOTES</view>
-      <view class="section-title">{{detailHeading}}</view>
-      <view class="notes-copy">{{caseItem.notes}}</view>
     </view>
 
     <view class="cta-group">

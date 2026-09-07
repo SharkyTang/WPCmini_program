@@ -174,6 +174,28 @@ test("client normalization preserves up to nine case images", () => {
   assert.deepEqual(plain(normalized.galleryImages), galleryImages.slice(0, 9));
 });
 
+test("client normalization keeps only valid HTTPS video metadata", () => {
+  const normalized = normalizeCaseRecord({
+    _id: "video-case",
+    videoUrl: "  https://media.example.com/cases/demo.mp4  ",
+    videoPoster: "https://media.example.com/cases/demo-poster.jpg",
+    videoDurationSeconds: "88",
+  });
+  assert.equal(normalized.videoUrl, "https://media.example.com/cases/demo.mp4");
+  assert.equal(normalized.videoPoster, "https://media.example.com/cases/demo-poster.jpg");
+  assert.equal(normalized.videoDurationSeconds, 88);
+
+  const invalid = normalizeCaseRecord({
+    _id: "invalid-video-case",
+    videoUrl: "http://media.example.com/demo.mp4",
+    videoPoster: "https://media.example.com/orphan-poster.jpg",
+    videoDurationSeconds: 1.5,
+  });
+  assert.equal(invalid.videoUrl, "");
+  assert.equal(invalid.videoPoster, "");
+  assert.equal(invalid.videoDurationSeconds, null);
+});
+
 test("builds fallback banners from home section cases when CMS banners are empty", () => {
   const cases = [
     normalizeCaseRecord({

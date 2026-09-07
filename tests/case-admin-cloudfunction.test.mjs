@@ -16,9 +16,13 @@ const {
   CASE_GALLERY_MAX,
   HOME_DISPLAY_LIMITS,
   VALID_CASE_ADMIN_ACTIONS,
+  VIDEO_DURATION_SECONDS_MAX,
+  VIDEO_POSTER_UPLOAD_BYTES,
+  VIDEO_UPLOAD_BYTES,
   buildBatchCasePatch,
   buildCaseSearchText,
   buildExpectedVariantPaths,
+  buildPreparedVideoUpload,
   buildHomepageDisplayItems,
   filterCaseItems,
   filterCaseItemsV2,
@@ -30,6 +34,9 @@ const {
   hasCaseImageChanges,
   isAdminOpenid,
   isAdminActor,
+  isCloudFileFromEnvironment,
+  isPreparedVideoUploadFile,
+  isVideoUploadFileForActor,
   isWebAdminUploadFile,
   normalizeClientMutationId,
   normalizeCloudFileIds,
@@ -38,6 +45,7 @@ const {
   parseAdminDisplayNames,
   pickAllowedCaseFields,
   sanitizeCasePayload,
+  sanitizeVideoPatch,
   sortCaseItemsV2,
   resolveAdminActor,
   validateExpectedVersion,
@@ -175,6 +183,7 @@ test("declares supported case admin actions", () => {
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("checkAccess"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getCaseImageUrls"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getVisibleImageUrls"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("prepareVideoUpload"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listHomepageDisplay"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listRecentCases"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("createCase"), true);
@@ -230,6 +239,9 @@ test("keeps only writable case fields", () => {
     title: "案例",
     coverImage: "cloud://cloud1/file.jpg",
     galleryImages: ["cloud://cloud1/file.jpg", "cloud://cloud1/detail.jpg"],
+    videoUrl: "https://media.example.com/case.mp4",
+    videoPoster: "https://media.example.com/case.jpg",
+    videoDurationSeconds: 75,
     isPinned: true,
     homeSections: ["popular"],
     _openid: "hacker",
@@ -237,9 +249,121 @@ test("keeps only writable case fields", () => {
     updatedByOpenid: "bad",
   });
 
-  assert.deepEqual(plain(Object.keys(picked)), ["title", "coverImage", "galleryImages", "homeSections", "isPinned"]);
+  assert.deepEqual(plain(Object.keys(picked)), [
+    "title",
+    "coverImage",
+    "galleryImages",
+    "homeSections",
+    "isPinned",
+  ]);
   assert.equal(ALLOWED_CASE_FIELDS.includes("_openid"), false);
   assert.equal(ALLOWED_CASE_FIELDS.includes("homeSections"), true);
+});
+
+test("validates atomic external, upload and clear video patches", () => {
+  const accepted = sanitizeVideoPatch({
+    mode: "external",
+    url: "  https://media.example.com/cases/demo.mp4  ",
+    posterUrl: "https://media.example.com/cases/demo.jpg",
+    durationSeconds: 90.2,
+  });
+  assert.equal(accepted.valid, true);
+  assert.deepEqual(plain(accepted.data), {
+    videoFileID: "",
+    videoUrl: "https://media.example.com/cases/demo.mp4",
+    videoPosterFileID: "",
+    videoPoster: "https://media.example.com/cases/demo.jpg",
+    videoDurationSeconds: 91,
+    videoFileSizeBytes: null,
+  });
+
+  const insecureUrl = sanitizeVideoPatch({
+    mode: "external",
+    url: "http://media.example.com/demo.mp4",
+  });
+  assert.equal(insecureUrl.valid, false);
+  assert.equal(insecureUrl.code, "INVALID_VIDEO_URL");
+
+  const badPoster = sanitizeVideoPatch({
+    mode: "external",
+    url: "https://media.example.com/demo.mp4",
+    posterUrl: "https://user:secret@media.example.com/demo.jpg",
+  });
+  assert.equal(badPoster.valid, false);
+  assert.equal(badPoster.code, "INVALID_VIDEO_URL");
+
+  const badDuration = sanitizeVideoPatch({
+    mode: "upload",
+    fileID: "cloud://env/wine-packaging/videos/demo.mp4",
+    durationSeconds: 120.01,
+  });
+  assert.equal(badDuration.valid, false);
+  assert.equal(badDuration.code, "INVALID_VIDEO_DURATION");
+
+  const upload = sanitizeVideoPatch({
+    mode: "upload",
+    fileID: "cloud://env/wine-packaging/videos/video.mp4",
+    durationSeconds: 120,
+    posterFileID: "cloud://env/wine-packaging/videos/poster.jpg",
+  });
+  assert.equal(upload.valid, true);
+  assert.equal(upload.data.videoDurationSeconds, 120);
+  assert.deepEqual(plain(upload.fileIDs), [
+    "cloud://env/wine-packaging/videos/video.mp4",
+    "cloud://env/wine-packaging/videos/poster.jpg",
+  ]);
+
+  const clearPatch = sanitizeVideoPatch({ mode: "clear" });
+  assert.equal(clearPatch.valid, true);
+  assert.deepEqual(plain(clearPatch.data), {
+    videoFileID: "",
+    videoUrl: "",
+    videoPosterFileID: "",
+    videoPoster: "",
+    videoDurationSeconds: null,
+    videoFileSizeBytes: null,
+  });
+
+  assert.equal(sanitizeVideoPatch(undefined).omitted, true);
+  assert.equal(sanitizeVideoPatch({ mode: "unknown" }).valid, false);
+  assert.equal(VIDEO_UPLOAD_BYTES, 104857600);
+  assert.equal(VIDEO_POSTER_UPLOAD_BYTES, 5242880);
+  assert.equal(VIDEO_DURATION_SECONDS_MAX, 120);
+});
+
+test("binds prepared video paths to one actor, case and file kind", () => {
+  const actor = { type: "cloudbase_uid", id: "web-admin-1" };
+  const uploadId = "a".repeat(32);
+  const video = buildPreparedVideoUpload({
+    actor,
+    caseDocumentId: "case-doc-1",
+    kind: "video",
+    fileName: "demo.MP4",
+    uploadId,
+  });
+  assert.equal(video.valid, true);
+  const fileID = `cloud://current-env/${video.cloudPath}`;
+  assert.equal(isPreparedVideoUploadFile(fileID, actor, "case-doc-1", "video"), true);
+  assert.equal(isPreparedVideoUploadFile(fileID, actor, "case-doc-2", "video"), false);
+  assert.equal(isPreparedVideoUploadFile(fileID, actor, "case-doc-1", "poster"), false);
+  assert.equal(isVideoUploadFileForActor(fileID, actor), true);
+  assert.equal(
+    isVideoUploadFileForActor(fileID, { type: "cloudbase_uid", id: "other" }),
+    false
+  );
+  assert.equal(isCloudFileFromEnvironment(fileID, "current-env"), true);
+  assert.equal(isCloudFileFromEnvironment(fileID, "other-env"), false);
+  assert.equal(isCloudFileFromEnvironment(
+    "cloud://cloud1-d3gznsms746425a42.636c-cloud1-d3gznsms746425a42/wine-packaging/videos/demo.mp4",
+    "cloud1-d3gznsms746425a42"
+  ), true);
+  assert.equal(buildPreparedVideoUpload({
+    actor,
+    caseDocumentId: "case-doc-1",
+    kind: "video",
+    fileName: "demo.mov",
+    uploadId,
+  }).code, "INVALID_VIDEO_FORMAT");
 });
 
 test("uses the first gallery image as the server-side cover", () => {

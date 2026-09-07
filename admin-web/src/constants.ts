@@ -50,11 +50,18 @@ export const DEFAULT_CONFIG: AdminConfig = {
     gallery: 9,
     batch: 50,
     uploadBytes: 20 * 1024 * 1024,
+    videoUploadBytes: 100 * 1024 * 1024,
+    videoDurationSeconds: 120,
+    videoPosterUploadBytes: 5 * 1024 * 1024,
     homepage: {
       banner: 5,
       popular: 4,
       latest: 6,
     },
+  },
+  features: {
+    videoUploadEnabled: false,
+    videoDisplayEnabled: false,
   },
   writeEnabled: true,
   permanentDeleteEnabled: false,

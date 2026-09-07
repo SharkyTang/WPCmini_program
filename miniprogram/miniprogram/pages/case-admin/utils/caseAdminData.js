@@ -2,6 +2,7 @@ const {
   DEFAULT_FILTERS,
   HOME_SECTION_OPTIONS,
   getSceneLabel,
+  normalizeHttpsMediaUrl,
   normalizeCaseRecord,
   normalizeValues,
 } = require("../../../utils/caseData");
@@ -9,6 +10,16 @@ const {
 const CASE_ADMIN_DEFAULT_SORT_ORDER = 9999;
 const CASE_ADMIN_NOTES_MAX_LENGTH = 800;
 const CASE_ADMIN_GALLERY_MAX = 9;
+const CASE_ADMIN_VIDEO_MAX_BYTES = 100 * 1024 * 1024;
+const CASE_ADMIN_VIDEO_MAX_DURATION_SECONDS = 120;
+const CASE_ADMIN_VIDEO_MAX_LONG_EDGE = 1920;
+const CASE_ADMIN_VIDEO_MAX_SHORT_EDGE = 1080;
+const CASE_ADMIN_VIDEO_POSTER_MAX_BYTES = 5 * 1024 * 1024;
+const CASE_ADMIN_VIDEO_DEFAULT_LIMITS = Object.freeze({
+  videoUploadBytes: CASE_ADMIN_VIDEO_MAX_BYTES,
+  videoDurationSeconds: CASE_ADMIN_VIDEO_MAX_DURATION_SECONDS,
+  videoPosterUploadBytes: CASE_ADMIN_VIDEO_POSTER_MAX_BYTES,
+});
 const CASE_ADMIN_VISIBILITY_OPTIONS = [
   { value: "all", label: "全部" },
   { value: "visible", label: "显示中" },
@@ -71,6 +82,185 @@ function optionLabel(option, field) {
 
 function isCloudFileId(value) {
   return trimText(value).startsWith("cloud://");
+}
+
+function fileExtension(file = {}) {
+  const source = trimText(file.name || file.tempFilePath || file.path);
+  const match = /\.([a-z0-9]+)(?:[?#].*)?$/i.exec(source);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function fileMimeType(file = {}) {
+  const mimeType = trimText(file.mimeType);
+  if (mimeType) return mimeType.toLowerCase();
+  const type = trimText(file.type);
+  return type.includes("/") ? type.toLowerCase() : "";
+}
+
+function positiveLimit(value, fallback) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) && numberValue > 0
+    ? Math.min(numberValue, fallback)
+    : fallback;
+}
+
+function normalizeCaseAdminVideoLimits(limits = {}) {
+  return {
+    videoUploadBytes: positiveLimit(
+      limits.videoUploadBytes,
+      CASE_ADMIN_VIDEO_DEFAULT_LIMITS.videoUploadBytes
+    ),
+    videoDurationSeconds: positiveLimit(
+      limits.videoDurationSeconds,
+      CASE_ADMIN_VIDEO_DEFAULT_LIMITS.videoDurationSeconds
+    ),
+    videoPosterUploadBytes: positiveLimit(
+      limits.videoPosterUploadBytes,
+      CASE_ADMIN_VIDEO_DEFAULT_LIMITS.videoPosterUploadBytes
+    ),
+  };
+}
+
+function validateCaseAdminVideoSelection(file = {}, metadata = {}, limits = {}) {
+  const normalizedLimits = normalizeCaseAdminVideoLimits(limits);
+  const extension = fileExtension(file);
+  const mimeType = fileMimeType(file);
+  const size = Number(file.size || metadata.size);
+  const duration = Number(metadata.duration || file.duration);
+  const width = Number(metadata.width || file.width);
+  const height = Number(metadata.height || file.height);
+  const longEdge = Math.max(width, height);
+  const shortEdge = Math.min(width, height);
+
+  if (extension !== "mp4") {
+    return { valid: false, message: "请选择 MP4 格式的视频" };
+  }
+  if (mimeType && mimeType !== "video/mp4") {
+    return { valid: false, message: "视频文件类型必须为 MP4" };
+  }
+  if (!Number.isFinite(size) || size <= 0) {
+    return { valid: false, message: "无法读取视频大小，请重新选择" };
+  }
+  if (size > normalizedLimits.videoUploadBytes) {
+    return { valid: false, message: "视频不能超过 100MB" };
+  }
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return { valid: false, message: "无法读取视频时长，请重新选择" };
+  }
+  if (duration > normalizedLimits.videoDurationSeconds) {
+    return { valid: false, message: "视频不能超过 120 秒" };
+  }
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    return { valid: false, message: "无法读取视频分辨率，请重新选择" };
+  }
+  if (
+    longEdge > CASE_ADMIN_VIDEO_MAX_LONG_EDGE ||
+    shortEdge > CASE_ADMIN_VIDEO_MAX_SHORT_EDGE
+  ) {
+    return { valid: false, message: "视频分辨率不能超过 1080p" };
+  }
+  return {
+    valid: true,
+    message: "",
+    data: {
+      size,
+      durationSeconds: Math.ceil(duration),
+      width,
+      height,
+    },
+  };
+}
+
+function validateCaseAdminVideoPosterSelection(file = {}, limits = {}) {
+  const normalizedLimits = normalizeCaseAdminVideoLimits(limits);
+  const extension = fileExtension(file);
+  const mimeType = fileMimeType(file);
+  const size = Number(file.size);
+  const allowedExtensions = ["jpg", "jpeg", "png", "webp"];
+  const allowedMimeTypes = ["image/jpeg", "image/png", "image/webp"];
+
+  if (!allowedExtensions.includes(extension)) {
+    return { valid: false, message: "封面仅支持 JPEG、PNG 或 WebP" };
+  }
+  if (mimeType && !allowedMimeTypes.includes(mimeType)) {
+    return { valid: false, message: "封面文件类型不支持" };
+  }
+  if (!Number.isFinite(size) || size <= 0) {
+    return { valid: false, message: "无法读取封面大小，请重新选择" };
+  }
+  if (size > normalizedLimits.videoPosterUploadBytes) {
+    return { valid: false, message: "视频封面不能超过 5MB" };
+  }
+  return { valid: true, message: "", data: { size } };
+}
+
+function buildCaseAdminVideoPatch(state = {}, limits = {}) {
+  if (!state.dirty) return { valid: true, patch: null };
+  if (state.removed) {
+    return { valid: true, patch: { mode: "clear" } };
+  }
+
+  const draft = state.draft || {};
+  if (state.source === "external") {
+    const url = normalizeHttpsMediaUrl(draft.externalUrl);
+    const posterUrl = trimText(draft.externalPosterUrl)
+      ? normalizeHttpsMediaUrl(draft.externalPosterUrl)
+      : "";
+    const rawDuration = trimText(String(draft.externalDurationSeconds ?? ""));
+    const durationSeconds = rawDuration ? Number(rawDuration) : null;
+    if (!url) {
+      return { valid: false, message: "请填写有效的 HTTPS 视频地址" };
+    }
+    if (trimText(draft.externalPosterUrl) && !posterUrl) {
+      return { valid: false, message: "请填写有效的 HTTPS 封面地址" };
+    }
+    if (
+      durationSeconds !== null &&
+      (!Number.isSafeInteger(durationSeconds) ||
+        durationSeconds <= 0 ||
+        durationSeconds > normalizeCaseAdminVideoLimits(limits).videoDurationSeconds)
+    ) {
+      return { valid: false, message: "视频时长需为 1–120 秒的整数" };
+    }
+    return {
+      valid: true,
+      patch: {
+        mode: "external",
+        url,
+        durationSeconds,
+        posterUrl,
+      },
+    };
+  }
+
+  if (!isCloudFileId(draft.uploadFileID)) {
+    return { valid: false, message: "请先上传 MP4 视频" };
+  }
+  const durationSeconds = Number(draft.uploadDurationSeconds);
+  if (
+    !Number.isSafeInteger(durationSeconds) ||
+    durationSeconds <= 0 ||
+    durationSeconds > normalizeCaseAdminVideoLimits(limits).videoDurationSeconds
+  ) {
+    return { valid: false, message: "上传视频的时长信息无效，请重新上传" };
+  }
+  if (draft.uploadPosterFileID && !isCloudFileId(draft.uploadPosterFileID)) {
+    return { valid: false, message: "视频封面需要先上传到云存储" };
+  }
+  return {
+    valid: true,
+    patch: {
+      mode: "upload",
+      fileID: draft.uploadFileID,
+      durationSeconds,
+      posterFileID: draft.uploadPosterFileID || "",
+    },
+  };
 }
 
 function normalizeGalleryImages(value, fallbackImage = "") {
@@ -276,8 +466,10 @@ function getSceneSummary(caseItem = {}) {
 function normalizeCaseAdminItem(record = {}) {
   const item = normalizeCaseRecord(record || {});
   const visible = item.isVisible !== false;
+  const rawVersion = Number(item.version);
   return {
     ...item,
+    version: Number.isInteger(rawVersion) && rawVersion > 0 ? rawVersion : 1,
     displayKey: `case:${item.id || item.caseId || item.coverImage}`,
     visibilityStatus: visible ? "visible" : "hidden",
     visibilityLabel: visible ? "显示中" : "已隐藏",
@@ -339,6 +531,7 @@ function buildCaseAdminImagePath(filePath = "", now = Date.now(), random = Math.
 module.exports = {
   CASE_ADMIN_DEFAULT_SORT_ORDER,
   CASE_ADMIN_GALLERY_MAX,
+  CASE_ADMIN_VIDEO_DEFAULT_LIMITS,
   CASE_ADMIN_FORM_OPTIONS,
   CASE_ADMIN_NOTES_MAX_LENGTH,
   CASE_ADMIN_VIEW_OPTIONS,
@@ -346,6 +539,7 @@ module.exports = {
   buildCaseAdminImagePath,
   buildCaseAdminOptionViews,
   buildCaseAdminPayload,
+  buildCaseAdminVideoPatch,
   buildCaseKeywords,
   createEmptyCaseForm,
   getHomeSectionSummary,
@@ -358,7 +552,10 @@ module.exports = {
   normalizeCaseAdminHomepageDisplayItem,
   normalizeCaseAdminItem,
   normalizeCaseAdminKeyword,
+  normalizeCaseAdminVideoLimits,
   normalizeStringList,
   trimText,
   validateCaseAdminForm,
+  validateCaseAdminVideoPosterSelection,
+  validateCaseAdminVideoSelection,
 };

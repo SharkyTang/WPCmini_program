@@ -9,6 +9,11 @@ const SEARCH_FETCH_LIMIT = 300;
 const CASE_SCAN_BATCH_SIZE = 100;
 const IMAGE_URL_BATCH_SIZE = 50;
 const CASE_GALLERY_MAX = 9;
+const HTTPS_MEDIA_URL_MAX_LENGTH = 2048;
+const VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
+const VIDEO_DURATION_SECONDS_MAX = 120;
+const VIDEO_POSTER_UPLOAD_BYTES = 5 * 1024 * 1024;
+const VIDEO_UPLOAD_PREFIX = "wine-packaging/videos";
 const CASE_BATCH_MAX = 50;
 const PINNED_CASE_LIMIT = 20;
 const CASE_ID_PREFIX = "case_";
@@ -98,6 +103,7 @@ const VALID_CASE_ADMIN_ACTIONS = [
   "listRecentCases",
   "getCase",
   "getCaseImageUrls",
+  "prepareVideoUpload",
   "getVisibleImageUrls",
   "listHomepageDisplay",
   "createCase",
@@ -147,6 +153,131 @@ const ALLOWED_CASE_FIELDS = [
 
 function trimText(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeHttpsMediaUrl(value) {
+  const url = trimText(value);
+  if (!url || url.length > HTTPS_MEDIA_URL_MAX_LENGTH || /\s/.test(url)) return "";
+  const match = /^https:\/\/(\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::(\d{1,5}))?(?:[/?#].*)?$/i.exec(url);
+  if (!match) return "";
+  const port = match[2] ? Number(match[2]) : 443;
+  return port > 0 && port <= 65535 ? url : "";
+}
+
+function sanitizeOptionalHttpsMediaUrl(value, fieldLabel) {
+  const rawValue = trimText(value);
+  if (!rawValue) return { valid: true, value: "" };
+  const normalizedValue = normalizeHttpsMediaUrl(rawValue);
+  return normalizedValue
+    ? { valid: true, value: normalizedValue }
+    : {
+      valid: false,
+      code: "INVALID_VIDEO_URL",
+      message: `${fieldLabel}必须是有效的 HTTPS 链接`,
+    };
+}
+
+function sanitizeVideoDuration(value, options = {}) {
+  const required = options.required === true;
+  if (value === "" || value === null || value === undefined) {
+    return required
+      ? {
+        valid: false,
+        code: "INVALID_VIDEO_DURATION",
+        message: `视频时长必须大于 0 且不超过 ${VIDEO_DURATION_SECONDS_MAX} 秒`,
+      }
+      : { valid: true, value: null };
+  }
+  const duration = Number(value);
+  if (!Number.isFinite(duration) || duration <= 0 || duration > VIDEO_DURATION_SECONDS_MAX) {
+    return {
+      valid: false,
+      code: "INVALID_VIDEO_DURATION",
+      message: `视频时长必须大于 0 且不超过 ${VIDEO_DURATION_SECONDS_MAX} 秒`,
+    };
+  }
+  return { valid: true, value: Math.ceil(duration) };
+}
+
+function sanitizeVideoPatch(value) {
+  if (value === undefined) return { valid: true, omitted: true, data: {} };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { valid: false, code: "INVALID_VIDEO_PATCH", message: "视频修改数据格式无效" };
+  }
+  const mode = trimText(value.mode).toLowerCase();
+  if (mode === "clear") {
+    return {
+      valid: true,
+      omitted: false,
+      mode,
+      data: {
+        videoFileID: "",
+        videoUrl: "",
+        videoPosterFileID: "",
+        videoPoster: "",
+        videoDurationSeconds: null,
+        videoFileSizeBytes: null,
+      },
+      fileIDs: [],
+    };
+  }
+  if (mode === "external") {
+    const urlResult = sanitizeOptionalHttpsMediaUrl(value.url, "视频地址");
+    if (!urlResult.valid || !urlResult.value) {
+      return urlResult.valid
+        ? { valid: false, code: "VIDEO_URL_REQUIRED", message: "请填写视频 HTTPS 地址" }
+        : urlResult;
+    }
+    const posterResult = sanitizeOptionalHttpsMediaUrl(value.posterUrl, "视频封面地址");
+    if (!posterResult.valid) return posterResult;
+    const durationResult = sanitizeVideoDuration(value.durationSeconds);
+    if (!durationResult.valid) return durationResult;
+    return {
+      valid: true,
+      omitted: false,
+      mode,
+      data: {
+        videoFileID: "",
+        videoUrl: urlResult.value,
+        videoPosterFileID: "",
+        videoPoster: posterResult.value,
+        videoDurationSeconds: durationResult.value,
+        videoFileSizeBytes: null,
+      },
+      fileIDs: [],
+    };
+  }
+  if (mode === "upload") {
+    const fileID = trimText(value.fileID);
+    const posterFileID = trimText(value.posterFileID);
+    if (!isCloudFileId(fileID)) {
+      return { valid: false, code: "INVALID_VIDEO_FILE", message: "视频文件需要先上传到云存储" };
+    }
+    if (posterFileID && !isCloudFileId(posterFileID)) {
+      return { valid: false, code: "INVALID_VIDEO_POSTER", message: "视频封面需要先上传到云存储" };
+    }
+    const durationResult = sanitizeVideoDuration(value.durationSeconds, { required: true });
+    if (!durationResult.valid) return durationResult;
+    return {
+      valid: true,
+      omitted: false,
+      mode,
+      data: {
+        videoFileID: fileID,
+        videoUrl: "",
+        videoPosterFileID: posterFileID,
+        videoPoster: "",
+        videoDurationSeconds: durationResult.value,
+        videoFileSizeBytes: null,
+      },
+      fileIDs: posterFileID ? [fileID, posterFileID] : [fileID],
+    };
+  }
+  return {
+    valid: false,
+    code: "INVALID_VIDEO_PATCH",
+    message: "视频修改模式必须是 upload、external 或 clear",
+  };
 }
 
 function getSceneLabel(value) {
@@ -963,6 +1094,139 @@ function getCloudFilePath(fileID) {
   return slashIndex === -1 ? "" : withoutScheme.slice(slashIndex + 1);
 }
 
+function getCloudFileEnvironment(fileID) {
+  const value = trimText(fileID);
+  if (!isCloudFileId(value)) return "";
+  const withoutScheme = value.slice("cloud://".length);
+  const slashIndex = withoutScheme.indexOf("/");
+  return slashIndex > 0 ? withoutScheme.slice(0, slashIndex) : "";
+}
+
+function isCloudFileFromEnvironment(fileID, environmentId) {
+  const expected = trimText(environmentId);
+  const authority = getCloudFileEnvironment(fileID);
+  return Boolean(
+    expected
+    && authority
+    && (authority === expected || authority.startsWith(`${expected}.`))
+  );
+}
+
+function getVideoUploadActorSegment(actor) {
+  if (!actor || !trimText(actor.type) || !trimText(actor.id)) return "";
+  return crypto
+    .createHash("sha256")
+    .update(`actor:${actor.type}:${actor.id}`)
+    .digest("hex")
+    .slice(0, 24);
+}
+
+function getVideoUploadCaseSegment(caseDocumentId) {
+  const id = trimText(caseDocumentId);
+  if (!id) return "";
+  return crypto
+    .createHash("sha256")
+    .update(`case:${id}`)
+    .digest("hex")
+    .slice(0, 24);
+}
+
+function getVideoUploadExtension(kind, fileName) {
+  const normalizedKind = trimText(kind).toLowerCase();
+  const normalizedName = trimText(fileName).toLowerCase();
+  if (normalizedKind === "video") return normalizedName.endsWith(".mp4") ? ".mp4" : "";
+  if (normalizedKind !== "poster") return "";
+  const match = /\.(jpe?g|png|webp)$/.exec(normalizedName);
+  return match ? `.${match[1]}` : "";
+}
+
+function buildPreparedVideoUpload(input = {}) {
+  const actorSegment = getVideoUploadActorSegment(input.actor);
+  const caseSegment = getVideoUploadCaseSegment(input.caseDocumentId);
+  const kind = trimText(input.kind).toLowerCase();
+  const extension = getVideoUploadExtension(kind, input.fileName);
+  const uploadId = trimText(input.uploadId).toLowerCase();
+  if (!actorSegment || !caseSegment || !["video", "poster"].includes(kind)) {
+    return { valid: false, code: "INVALID_VIDEO_UPLOAD", message: "视频上传参数无效" };
+  }
+  if (!extension) {
+    return kind === "video"
+      ? { valid: false, code: "INVALID_VIDEO_FORMAT", message: "仅支持 MP4 视频" }
+      : { valid: false, code: "INVALID_VIDEO_POSTER_FORMAT", message: "封面仅支持 JPEG、PNG 或 WebP" };
+  }
+  if (!/^[a-f0-9]{32}$/.test(uploadId)) {
+    return { valid: false, code: "INVALID_VIDEO_UPLOAD", message: "视频上传任务编号无效" };
+  }
+  const leaf = kind === "video"
+    ? `${uploadId}.mp4`
+    : `posters/${uploadId}${extension}`;
+  return {
+    valid: true,
+    uploadId,
+    kind,
+    extension,
+    cloudPath: `${VIDEO_UPLOAD_PREFIX}/${actorSegment}/${caseSegment}/${leaf}`,
+  };
+}
+
+function getPreparedVideoUploadId(fileID) {
+  const path = getCloudFilePath(fileID);
+  const match = new RegExp(
+    `^${VIDEO_UPLOAD_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/[a-f0-9]{24}/[a-f0-9]{24}/(?:posters/)?([a-f0-9]{32})\\.(?:mp4|jpe?g|png|webp)$`,
+    "i"
+  ).exec(path);
+  return match ? match[1].toLowerCase() : "";
+}
+
+function isPreparedVideoUploadFile(fileID, actor, caseDocumentId, kind) {
+  const uploadId = getPreparedVideoUploadId(fileID);
+  if (!uploadId) return false;
+  const expected = buildPreparedVideoUpload({
+    actor,
+    caseDocumentId,
+    kind,
+    fileName: getCloudFilePath(fileID),
+    uploadId,
+  });
+  return expected.valid && getCloudFilePath(fileID) === expected.cloudPath;
+}
+
+function isVideoUploadFileForActor(fileID, actor) {
+  const path = getCloudFilePath(fileID);
+  const actorSegment = getVideoUploadActorSegment(actor);
+  if (!actorSegment) return false;
+  const pattern = new RegExp(
+    `^${VIDEO_UPLOAD_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/${actorSegment}/[a-f0-9]{24}/(?:[a-f0-9]{32}\\.mp4|posters/[a-f0-9]{32}\\.(?:jpe?g|png|webp))$`,
+    "i"
+  );
+  return pattern.test(path);
+}
+
+function getCaseVideoFileIds(item = {}) {
+  return Array.from(new Set([
+    trimText(item.videoFileID),
+    trimText(item.videoPosterFileID),
+  ].filter(isCloudFileId)));
+}
+
+function hasCaseVideoChanges(existing = {}, patch = {}) {
+  const fields = [
+    "videoFileID",
+    "videoUrl",
+    "videoPosterFileID",
+    "videoPoster",
+    "videoDurationSeconds",
+    "videoFileSizeBytes",
+  ];
+  return fields.some((field) => {
+    if (!Object.prototype.hasOwnProperty.call(patch, field)) return false;
+    if (field === "videoDurationSeconds" || field === "videoFileSizeBytes") {
+      return Number(existing[field] || 0) !== Number(patch[field] || 0);
+    }
+    return trimText(existing[field]) !== trimText(patch[field]);
+  });
+}
+
 function isSupportedSourceFileName(path) {
   return /\.(?:jpe?g|png|webp)$/i.test(trimText(path));
 }
@@ -1348,12 +1612,17 @@ module.exports = {
   PINNED_CASE_LIMIT,
   SEARCH_FETCH_LIMIT,
   UPLOAD_JOB_STATUSES,
+  VIDEO_DURATION_SECONDS_MAX,
+  VIDEO_POSTER_UPLOAD_BYTES,
+  VIDEO_UPLOAD_BYTES,
+  VIDEO_UPLOAD_PREFIX,
   WEB_UPLOAD_PREFIX,
   VALID_CASE_ADMIN_ACTIONS,
   buildBatchCasePatch,
   buildCaseKeywords,
   buildCaseSearchText,
   buildExpectedVariantPaths,
+  buildPreparedVideoUpload,
   buildHomepageDisplayItems,
   buildHomepageDisplaySearchText,
   compareCaseItems,
@@ -1363,6 +1632,9 @@ module.exports = {
   generateCaseId,
   generateSequentialCaseId,
   getCloudFilePath,
+  getCloudFileEnvironment,
+  getCaseVideoFileIds,
+  getPreparedVideoUploadId,
   getEnvList,
   getHomeSectionOrder,
   getActivatedHomepageSlots,
@@ -1374,10 +1646,14 @@ module.exports = {
   getCaseIdNumber,
   getRecordVersion,
   hasCaseImageChanges,
+  hasCaseVideoChanges,
   isAdminActor,
   isAdminOpenid,
   isRoleAdminOpenid,
   isCloudFileId,
+  isCloudFileFromEnvironment,
+  isPreparedVideoUploadFile,
+  isVideoUploadFileForActor,
   isSupportedSourceFileName,
   isWebAdminUploadFile,
   isWebWriteEnabled,
@@ -1387,6 +1663,7 @@ module.exports = {
   normalizeCloudFileIds,
   normalizeGalleryImages,
   normalizeHomeSectionOrder,
+  normalizeHttpsMediaUrl,
   normalizeListCaseFilters,
   normalizeListSort,
   normalizePage,
@@ -1400,6 +1677,8 @@ module.exports = {
   pickAllowedCaseFields,
   resolveAdminActor,
   sanitizeCasePayload,
+  sanitizeVideoDuration,
+  sanitizeVideoPatch,
   sortCaseItemsV2,
   trimText,
   validateExpectedVersion,

@@ -8,7 +8,9 @@ import type {
   BatchPatchRequest,
   CaseDraft,
   CaseRecord,
+  CleanupUnreferencedFilesResult,
   CreateCaseResult,
+  FileUploadProgress,
   HomeSectionOrders,
   ListPendingPurgeJobsRequest,
   ListCasesRequest,
@@ -19,8 +21,12 @@ import type {
   RegisterUploadItemInput,
   SharedUploadItem,
   UploadedCaseImages,
+  UploadedCaseVideo,
+  UploadedVideoPoster,
   UploadItemStatusPatch,
   UploadProgress,
+  VideoFileMetadata,
+  VideoPatch,
 } from "../types";
 import { assertAdminAccess } from "./accessLogic";
 import { buildStoragePath } from "./caseLogic";
@@ -87,6 +93,12 @@ type CloudbaseAppLike = {
   storage: {
     from: () => StorageLike;
   };
+  uploadFile: (input: {
+    cloudPath: string;
+    filePath: File;
+    method?: "post" | "put";
+    onUploadProgress?: (event: { loaded?: number; total?: number }) => void;
+  }) => Promise<{ fileID?: string }>;
   database: () => DatabaseLike;
 };
 
@@ -114,6 +126,39 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object"
     ? value as Record<string, unknown>
     : null;
+}
+
+function normalizeCleanupFileIDs(value: unknown, requested: Set<string>): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map((fileID) => String(fileID || ""))
+    .filter((fileID) => fileID && requested.has(fileID)))];
+}
+
+function normalizeCleanupResult(
+  requestedFileIDs: string[],
+  value: Record<string, unknown>,
+): CleanupUnreferencedFilesResult {
+  const requested = [...new Set(requestedFileIDs.filter(Boolean))];
+  const requestedSet = new Set(requested);
+  const explicitFailed = new Set(normalizeCleanupFileIDs(value.failedFileIds, requestedSet));
+  const deleted = new Set(
+    normalizeCleanupFileIDs(value.deletedFileIds, requestedSet)
+      .filter((fileID) => !explicitFailed.has(fileID)),
+  );
+  const skipped = new Set(
+    normalizeCleanupFileIDs(value.skippedFileIds, requestedSet)
+      .filter((fileID) => !explicitFailed.has(fileID) && !deleted.has(fileID)),
+  );
+  const failed = new Set(explicitFailed);
+  requested.forEach((fileID) => {
+    if (!deleted.has(fileID) && !skipped.has(fileID)) failed.add(fileID);
+  });
+  return {
+    deletedFileIds: requested.filter((fileID) => deleted.has(fileID)),
+    skippedFileIds: requested.filter((fileID) => skipped.has(fileID)),
+    failedFileIds: requested.filter((fileID) => failed.has(fileID)),
+  };
 }
 
 function parseFunctionValue(value: unknown): unknown {
@@ -553,6 +598,7 @@ export class CloudbaseAdminApi implements AdminApi {
     data: Partial<CaseDraft>,
     expectedVersion: number,
     clientMutationId: string,
+    videoPatch?: VideoPatch,
   ): Promise<CaseRecord> {
     const result = await this.callAdmin<ResultEnvelope & { item?: unknown }>({
       action: "updateCase",
@@ -560,6 +606,7 @@ export class CloudbaseAdminApi implements AdminApi {
       case: toCasePayload(data),
       expectedVersion,
       clientMutationId,
+      ...(videoPatch ? { videoPatch } : {}),
     });
     if (result.item) {
       const [item] = await this.hydrate([normalizeCaseRecord(result.item)], true);
@@ -792,11 +839,73 @@ export class CloudbaseAdminApi implements AdminApi {
     return { sources, variants };
   }
 
-  async cleanupUnreferencedFiles(fileIDs: string[]): Promise<void> {
-    if (!fileIDs.length) return;
-    await this.callAdmin({
-      action: "cleanupUnreferencedFiles",
-      fileIDs,
+  private async uploadPreparedVideoFile(
+    caseId: string,
+    kind: "video" | "poster",
+    file: File,
+    onProgress?: (progress: FileUploadProgress) => void,
+  ): Promise<string> {
+    const prepared = await this.callAdmin<
+      ResultEnvelope & { uploadId?: string; cloudPath?: string; expiresAt?: string }
+    >({
+      action: "prepareVideoUpload",
+      id: caseId,
+      kind,
+      fileName: file.name,
     });
+    const cloudPath = String(prepared.cloudPath || "");
+    if (!prepared.uploadId || !cloudPath) {
+      throw new AdminApiError("INVALID_UPLOAD_TARGET", "服务端未返回有效的视频上传路径");
+    }
+    onProgress?.({ loadedBytes: 0, totalBytes: file.size, percent: 0 });
+    const result = await this.getApp().uploadFile({
+      cloudPath,
+      filePath: file,
+      method: "put",
+      onUploadProgress: (event) => {
+        const loadedBytes = Math.max(0, Number(event.loaded || 0));
+        const totalBytes = Math.max(1, Number(event.total || file.size || 1));
+        onProgress?.({
+          loadedBytes,
+          totalBytes,
+          percent: Math.min(99, Math.max(0, Math.round((loadedBytes / totalBytes) * 100))),
+        });
+      },
+    });
+    const fileID = String(result.fileID || "");
+    if (!fileID) throw new AdminApiError("UPLOAD_FAILED", `${kind === "video" ? "视频" : "封面"}上传失败`);
+    onProgress?.({ loadedBytes: file.size, totalBytes: file.size, percent: 100 });
+    return fileID;
+  }
+
+  async uploadCaseVideo(
+    caseId: string,
+    file: File,
+    metadata: VideoFileMetadata,
+    onProgress?: (progress: FileUploadProgress) => void,
+  ): Promise<UploadedCaseVideo> {
+    const fileID = await this.uploadPreparedVideoFile(caseId, "video", file, onProgress);
+    return { fileID, ...metadata };
+  }
+
+  async uploadVideoPoster(
+    caseId: string,
+    file: File,
+    onProgress?: (progress: FileUploadProgress) => void,
+  ): Promise<UploadedVideoPoster> {
+    const fileID = await this.uploadPreparedVideoFile(caseId, "poster", file, onProgress);
+    return { fileID, fileSizeBytes: file.size };
+  }
+
+  async cleanupUnreferencedFiles(fileIDs: string[]): Promise<CleanupUnreferencedFilesResult> {
+    const requestedFileIDs = [...new Set(fileIDs.filter(Boolean))];
+    if (!requestedFileIDs.length) {
+      return { deletedFileIds: [], skippedFileIds: [], failedFileIds: [] };
+    }
+    const result = await this.callAdmin<ResultEnvelope & Partial<CleanupUnreferencedFilesResult>>({
+      action: "cleanupUnreferencedFiles",
+      fileIDs: requestedFileIDs,
+    });
+    return normalizeCleanupResult(requestedFileIDs, result);
   }
 }

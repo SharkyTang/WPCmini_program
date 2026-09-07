@@ -45,6 +45,14 @@ export interface CaseRecord {
   homeSections: HomeSection[];
   homeSectionOrder: Partial<Record<HomeSection, number>>;
   sortOrder: number;
+  videoFileID?: string;
+  videoUrl?: string;
+  videoPreviewUrl?: string;
+  videoPosterFileID?: string;
+  videoPoster?: string;
+  videoPosterPreviewUrl?: string;
+  videoDurationSeconds?: number | null;
+  videoFileSizeBytes?: number | null;
   notes: string;
   isVisible: boolean;
   isPinned: boolean;
@@ -83,7 +91,14 @@ export interface AdminConfig {
     gallery: number;
     batch: number;
     uploadBytes: number;
+    videoUploadBytes: number;
+    videoDurationSeconds: number;
+    videoPosterUploadBytes: number;
     homepage: Record<HomeSection, number>;
+  };
+  features: {
+    videoUploadEnabled: boolean;
+    videoDisplayEnabled: boolean;
   };
   writeEnabled: boolean;
   permanentDeleteEnabled: boolean;
@@ -152,6 +167,49 @@ export interface UploadProgress {
   total: number;
   stage: "uploading" | "processing";
 }
+
+export interface FileUploadProgress {
+  loadedBytes: number;
+  totalBytes: number;
+  percent: number;
+}
+
+export interface CleanupUnreferencedFilesResult {
+  deletedFileIds: string[];
+  skippedFileIds: string[];
+  failedFileIds: string[];
+}
+
+export interface VideoFileMetadata {
+  durationSeconds: number;
+  width: number;
+  height: number;
+  fileSizeBytes: number;
+}
+
+export interface UploadedCaseVideo extends VideoFileMetadata {
+  fileID: string;
+}
+
+export interface UploadedVideoPoster {
+  fileID: string;
+  fileSizeBytes: number;
+}
+
+export type VideoPatch =
+  | {
+      mode: "upload";
+      fileID: string;
+      durationSeconds: number;
+      posterFileID?: string;
+    }
+  | {
+      mode: "external";
+      url: string;
+      durationSeconds?: number | null;
+      posterUrl?: string;
+    }
+  | { mode: "clear" };
 
 export interface AdminUser {
   id: string;
@@ -273,6 +331,7 @@ export interface AdminApi {
     data: Partial<CaseDraft>,
     expectedVersion: number,
     clientMutationId: string,
+    videoPatch?: VideoPatch,
   ): Promise<CaseRecord>;
   batchPatchCases(request: BatchPatchRequest): Promise<MutationResult>;
   moveCasesToTrash(ids: string[], expectedVersions: Record<string, number>): Promise<MutationResult>;
@@ -296,7 +355,18 @@ export interface AdminApi {
     batchId: string,
     onProgress?: (progress: UploadProgress) => void,
   ): Promise<UploadedCaseImages>;
-  cleanupUnreferencedFiles(fileIDs: string[]): Promise<void>;
+  uploadCaseVideo(
+    caseId: string,
+    file: File,
+    metadata: VideoFileMetadata,
+    onProgress?: (progress: FileUploadProgress) => void,
+  ): Promise<UploadedCaseVideo>;
+  uploadVideoPoster(
+    caseId: string,
+    file: File,
+    onProgress?: (progress: FileUploadProgress) => void,
+  ): Promise<UploadedVideoPoster>;
+  cleanupUnreferencedFiles(fileIDs: string[]): Promise<CleanupUnreferencedFilesResult>;
   registerUploadItems?(items: RegisterUploadItemInput[]): Promise<void>;
   updateUploadItemStatus?(
     mutationId: string,

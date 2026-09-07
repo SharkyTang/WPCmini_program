@@ -10,6 +10,16 @@ const IMAGE_URL_FUNCTION = "caseAdmin";
 const PAGE_SIZE = 20;
 const TEMP_FILE_URL_BATCH_SIZE = 20;
 const TEMP_FILE_URL_CACHE_TTL = 30 * 60 * 1000;
+const PUBLIC_VIDEO_FIELDS = [
+  "videoFileID",
+  "videoUrl",
+  "videoPosterFileID",
+  "videoPoster",
+  "videoDurationSeconds",
+  "videoFileSizeBytes",
+  "videoPreviewUrl",
+  "videoPosterPreviewUrl",
+];
 
 let visibleCasesCache = null;
 let visibleBannersCache = null;
@@ -22,6 +32,16 @@ function shouldForceRefresh(options = {}) {
 
 function copyList(items) {
   return (items || []).map((item) => ({ ...item }));
+}
+
+// 直读数据库是旧版兼容链路，不具备服务端视频开关与临时链接保护。
+// 因此此链路必须默认禁止视频，只允许 caseCatalog 成功响应携带公开视频。
+function stripPublicVideoFields(record = {}) {
+  const safeRecord = { ...record };
+  PUBLIC_VIDEO_FIELDS.forEach((field) => {
+    delete safeRecord[field];
+  });
+  return safeRecord;
 }
 
 function clearCloudDataCache(options = {}) {
@@ -254,7 +274,9 @@ async function fetchVisibleCases(options = {}) {
     where: { isVisible: true },
     orderField: "sortOrder",
   });
-  const cases = records.map(normalizeCaseRecord);
+  const cases = records.map((record) =>
+    normalizeCaseRecord(stripPublicVideoFields(record))
+  );
   visibleCasesCache = copyList(cases);
   return includeImageUrls
     ? attachCaseImageUrls(cases, options)
@@ -303,7 +325,9 @@ async function fetchCaseById(id) {
   }
 
   if (!record) throw createCaseNotFoundError(id);
-  const cases = await attachCaseDetailImageUrls([normalizeCaseRecord(record)]);
+  const cases = await attachCaseDetailImageUrls([
+    normalizeCaseRecord(stripPublicVideoFields(record)),
+  ]);
   return cases[0];
 }
 

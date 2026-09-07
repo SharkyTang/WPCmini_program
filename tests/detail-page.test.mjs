@@ -115,6 +115,31 @@ test("detail page supports a gallery and native image preview", () => {
   assert.equal(source.includes("wx.saveImageToPhotosAlbum"), false);
 });
 
+test("detail V2 exposes clear image guidance and keeps video outside the gallery", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+  const wxss = readFileSync(wxssPath, "utf8");
+
+  assert.equal(wxml.includes("点击查看大图"), true);
+  assert.equal(wxml.includes('type="search"'), true);
+  assert.equal(wxml.includes("← 左右滑动查看更多图片 →"), true);
+  assert.match(
+    wxml,
+    /<view wx:if="\{\{galleryItems\.length > 1\}\}" class="gallery-swipe-tip">/
+  );
+  assert.equal(wxml.includes('wx:if="{{caseVideo}}" class="video-card"'), true);
+  assert.equal(wxml.includes('<block wx:if="{{!videoFailed}}">'), true);
+  assert.equal(wxml.includes('<video\n          id="case-video"'), true);
+  assert.equal(wxml.includes('autoplay="{{false}}"'), true);
+  assert.equal(wxml.includes('loop="{{false}}"'), true);
+  assert.equal(wxml.includes('poster="{{caseVideo.poster}}"'), true);
+  assert.equal(wxml.indexOf('class="video-card"') > wxml.indexOf('class="gallery-swipe-tip"'), true);
+  assert.equal(wxml.indexOf('class="info-card"') > wxml.indexOf('class="video-card"'), true);
+  assert.equal(wxml.includes('class="notes-card"'), false);
+  assert.match(wxss, /\.hero-favorite\s*\{[\s\S]*?top:\s*18rpx;/);
+  assert.match(wxss, /\.image-preview-tip\s*\{[\s\S]*?background:\s*rgba\(36, 29, 22, 0\.78\);/);
+  assert.match(wxss, /\.info-case-title\s*\{[\s\S]*?white-space:\s*normal;/);
+});
+
 async function asyncTest(name, fn) {
   try {
     await fn();
@@ -134,6 +159,7 @@ function loadDetailInteractionPage(options = {}) {
   let nativeLoadingSequence = 0;
   const previewCalls = [];
   const clientFaults = [];
+  const videoPauseCalls = [];
   const caseItem = options.caseItem || {
     id: "case_1",
     title: "鎏金礼盒",
@@ -283,6 +309,13 @@ function loadDetailInteractionPage(options = {}) {
       previewImage(payload) {
         previewCalls.push(payload);
       },
+      createVideoContext(id) {
+        return {
+          pause() {
+            videoPauseCalls.push(id);
+          },
+        };
+      },
       nextTick(callback) {
         callback();
       },
@@ -311,6 +344,7 @@ function loadDetailInteractionPage(options = {}) {
     nativeLoadingEvents,
     previewCalls,
     clientFaults,
+    videoPauseCalls,
   };
 }
 
@@ -482,6 +516,72 @@ await asyncTest("detail shows the wedding label without rewriting the case scene
   assert.deepEqual(JSON.parse(JSON.stringify(context.page.data.caseItem.scenes)), ["婚宴"]);
 });
 
+await asyncTest("detail only builds an optional HTTPS video and falls back to the first image poster", async () => {
+  const videoCase = {
+    id: "video_case",
+    title: "视频案例",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+    videoUrl: "https://cdn.example.com/case.mp4",
+    videoPoster: "",
+    videoDurationSeconds: 88,
+    gallery: [{
+      index: 0,
+      displayUrl: "https://cdn.example.com/cover.jpg",
+    }],
+  };
+  const context = loadDetailInteractionPage({ caseItem: videoCase });
+
+  assert.equal(await context.page.loadCase("video_case"), true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.page.data.caseVideo)),
+    {
+      src: "https://cdn.example.com/case.mp4",
+      poster: "https://cdn.example.com/cover.jpg",
+      durationText: "01:28",
+    }
+  );
+  context.page.onHide();
+  assert.deepEqual(context.videoPauseCalls, ["case-video"]);
+
+  const invalidContext = loadDetailInteractionPage({
+    caseItem: {
+      ...videoCase,
+      id: "invalid_video_case",
+      videoUrl: "http://cdn.example.com/case.mp4",
+    },
+  });
+  assert.equal(await invalidContext.page.loadCase("invalid_video_case"), true);
+  assert.equal(invalidContext.page.data.caseVideo, null);
+});
+
+await asyncTest("detail video failure is recoverable and telemetry excludes business data", async () => {
+  const videoCase = {
+    id: "private_video_case",
+    title: "视频案例",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+    videoUrl: "https://cdn.example.com/private-case.mp4",
+  };
+  const context = loadDetailInteractionPage({ caseItem: videoCase });
+  await context.page.loadCase("private_video_case");
+
+  context.page.onVideoError();
+  assert.equal(context.page.data.videoFailed, true);
+  const fault = context.clientFaults.find(
+    (item) => item.stage === "video_playback_error"
+  );
+  assert.ok(fault);
+  assert.equal(fault.type, "media_error");
+  assert.equal(Object.hasOwn(fault, "id"), false);
+  assert.equal(Object.hasOwn(fault, "caseId"), false);
+  assert.equal(Object.hasOwn(fault, "url"), false);
+  context.page.retryVideo();
+  assert.equal(context.page.data.videoFailed, false);
+});
+
 await asyncTest("detail case loading ignores stale requests and cleans up on unload", async () => {
   const pending = new Map();
   const context = loadDetailInteractionPage({
@@ -534,6 +634,36 @@ await asyncTest("detail network failures do not fan out to the legacy reader", a
   assert.equal(await context.page.loadCase("case_1"), false);
   assert.equal(legacyCalls, 0);
   assert.match(context.page.data.errorMessage, /暂时读取不到/);
+});
+
+await asyncTest("detail legacy fallback never bypasses the video display switch", async () => {
+  const unavailable = Object.assign(new Error("catalog unavailable"), {
+    code: "FUNCTION_NOT_FOUND",
+  });
+  const context = loadDetailInteractionPage({
+    fetchCaseDetail: async () => {
+      throw unavailable;
+    },
+    fetchCaseById: async () => ({
+      id: "legacy_video_case",
+      title: "legacy video",
+      packageTypes: [],
+      styles: [],
+      scenes: [],
+      gallery: [],
+      videoFileID: "cloud://production.bucket/video.mp4",
+      videoUrl: "https://media.example.com/video.mp4",
+      videoPosterFileID: "cloud://production.bucket/poster.webp",
+      videoPoster: "https://media.example.com/poster.webp",
+      videoDurationSeconds: 60,
+      videoFileSizeBytes: 1024,
+    }),
+  });
+
+  assert.equal(await context.page.loadCase("legacy_video_case"), true);
+  assert.equal(context.page.data.caseVideo, null);
+  assert.equal(context.page.data.caseItem.videoUrl, "");
+  assert.equal(context.page.data.caseItem.videoPoster, "");
 });
 
 await asyncTest("detail reports fallback and final failures without business identifiers", async () => {

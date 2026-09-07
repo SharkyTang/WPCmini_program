@@ -26,6 +26,7 @@ const sdkMock = vi.hoisted(() => {
     storage: {
       from: vi.fn(),
     },
+    uploadFile: vi.fn(),
     database: vi.fn(() => database),
   };
   return {
@@ -51,6 +52,7 @@ beforeEach(() => {
   sdkMock.auth.getSession.mockClear();
   sdkMock.init.mockClear();
   sdkMock.app.callFunction.mockReset();
+  sdkMock.app.uploadFile.mockReset();
   sdkMock.app.database.mockClear();
   sdkMock.database.collection.mockClear();
   sdkMock.query.where.mockClear();
@@ -295,5 +297,161 @@ test("待清理作业只保留安全统计并过滤已完成项", async () => {
       clientMutationId: "mutation-purge-pending-1",
     },
     parse: true,
+  });
+});
+
+test("视频直传先获取服务端专用路径并上报真实进度", async () => {
+  sdkMock.app.callFunction.mockResolvedValueOnce({
+    result: {
+      ok: true,
+      uploadId: "upload-1",
+      cloudPath: "wine-packaging/videos/uid-1/case-1/upload-1.mp4",
+      expiresAt: "2026-09-07T15:00:00.000Z",
+    },
+  });
+  sdkMock.app.uploadFile.mockImplementationOnce(async (input) => {
+    input.onUploadProgress?.({ loaded: 50, total: 100 });
+    return { fileID: "cloud://test-env/wine-packaging/videos/uid-1/case-1/upload-1.mp4" };
+  });
+  const { CloudbaseAdminApi } = await import("./cloudbaseAdapter");
+  const api = new CloudbaseAdminApi();
+  const file = new File([new Uint8Array(100)], "case.mp4", { type: "video/mp4" });
+  const onProgress = vi.fn();
+
+  const result = await api.uploadCaseVideo("case-1", file, {
+    durationSeconds: 12,
+    width: 1920,
+    height: 1080,
+    fileSizeBytes: 100,
+  }, onProgress);
+
+  expect(sdkMock.app.callFunction).toHaveBeenCalledWith({
+    name: "caseAdmin",
+    data: {
+      action: "prepareVideoUpload",
+      id: "case-1",
+      kind: "video",
+      fileName: "case.mp4",
+    },
+    parse: true,
+  });
+  expect(sdkMock.app.uploadFile).toHaveBeenCalledWith(expect.objectContaining({
+    cloudPath: "wine-packaging/videos/uid-1/case-1/upload-1.mp4",
+    filePath: file,
+    method: "put",
+  }));
+  expect(onProgress).toHaveBeenNthCalledWith(1, {
+    loadedBytes: 0,
+    totalBytes: 100,
+    percent: 0,
+  });
+  expect(onProgress).toHaveBeenCalledWith({
+    loadedBytes: 50,
+    totalBytes: 100,
+    percent: 50,
+  });
+  expect(onProgress).toHaveBeenLastCalledWith({
+    loadedBytes: 100,
+    totalBytes: 100,
+    percent: 100,
+  });
+  expect(result).toMatchObject({
+    fileID: "cloud://test-env/wine-packaging/videos/uid-1/case-1/upload-1.mp4",
+    durationSeconds: 12,
+  });
+});
+
+test("案例更新将视频原子补丁放在顶层而不混入普通 case payload", async () => {
+  sdkMock.app.callFunction.mockResolvedValueOnce({
+    result: {
+      ok: true,
+      item: { _id: "case-1", title: "案例", version: 3 },
+    },
+  });
+  const { CloudbaseAdminApi } = await import("./cloudbaseAdapter");
+  const api = new CloudbaseAdminApi();
+
+  await api.updateCase("case-1", {
+    title: "更新后的案例",
+    videoUrl: "https://must-not-be-in-case.example/video.mp4",
+  }, 2, "mutation-1", {
+    mode: "external",
+    url: "https://cdn.example.com/video.mp4",
+    durationSeconds: 30,
+  });
+
+  expect(sdkMock.app.callFunction).toHaveBeenCalledWith({
+    name: "caseAdmin",
+    data: {
+      action: "updateCase",
+      id: "case-1",
+      case: { title: "更新后的案例" },
+      expectedVersion: 2,
+      clientMutationId: "mutation-1",
+      videoPatch: {
+        mode: "external",
+        url: "https://cdn.example.com/video.mp4",
+        durationSeconds: 30,
+      },
+    },
+    parse: true,
+  });
+});
+
+test("未引用文件清理保留失败和未分类项以便重试", async () => {
+  sdkMock.app.callFunction.mockResolvedValueOnce({
+    result: {
+      ok: true,
+      deletedFileIds: ["cloud://test-env/deleted.mp4", "cloud://test-env/conflict.mp4"],
+      skippedFileIds: ["cloud://test-env/skipped.mp4", "cloud://test-env/conflict.mp4", "cloud://other/ignored.mp4"],
+      failedFileIds: ["cloud://test-env/failed.mp4", "cloud://test-env/conflict.mp4"],
+    },
+  });
+  const { CloudbaseAdminApi } = await import("./cloudbaseAdapter");
+  const api = new CloudbaseAdminApi();
+
+  await expect(api.cleanupUnreferencedFiles([
+    "cloud://test-env/deleted.mp4",
+    "cloud://test-env/skipped.mp4",
+    "cloud://test-env/failed.mp4",
+    "cloud://test-env/unclassified.mp4",
+    "cloud://test-env/conflict.mp4",
+    "cloud://test-env/deleted.mp4",
+  ])).resolves.toEqual({
+    deletedFileIds: ["cloud://test-env/deleted.mp4"],
+    skippedFileIds: ["cloud://test-env/skipped.mp4"],
+    failedFileIds: [
+      "cloud://test-env/failed.mp4",
+      "cloud://test-env/unclassified.mp4",
+      "cloud://test-env/conflict.mp4",
+    ],
+  });
+  expect(sdkMock.app.callFunction).toHaveBeenCalledWith({
+    name: "caseAdmin",
+    data: {
+      action: "cleanupUnreferencedFiles",
+      fileIDs: [
+        "cloud://test-env/deleted.mp4",
+        "cloud://test-env/skipped.mp4",
+        "cloud://test-env/failed.mp4",
+        "cloud://test-env/unclassified.mp4",
+        "cloud://test-env/conflict.mp4",
+      ],
+    },
+    parse: true,
+  });
+});
+
+test("旧后端未返回清理明细时不把文件误判为已清理", async () => {
+  sdkMock.app.callFunction.mockResolvedValueOnce({ result: { ok: true } });
+  const { CloudbaseAdminApi } = await import("./cloudbaseAdapter");
+  const api = new CloudbaseAdminApi();
+
+  await expect(api.cleanupUnreferencedFiles([
+    "cloud://test-env/retry-later.mp4",
+  ])).resolves.toEqual({
+    deletedFileIds: [],
+    skippedFileIds: [],
+    failedFileIds: ["cloud://test-env/retry-later.mp4"],
   });
 });

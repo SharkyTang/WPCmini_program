@@ -49,14 +49,19 @@ const notificationCaseAdminData = loadCommonJsModule(notificationCaseAdminDataPa
 
 const {
   CASE_ADMIN_GALLERY_MAX,
+  CASE_ADMIN_VIDEO_DEFAULT_LIMITS,
   CASE_ADMIN_FORM_OPTIONS,
   buildCaseAdminPayload,
   buildCaseAdminOptionViews,
+  buildCaseAdminVideoPatch,
   buildCaseKeywords,
   createEmptyCaseForm,
   isCloudFileId,
+  normalizeCaseAdminItem,
   normalizeCaseAdminForm,
   normalizeCaseAdminHomepageDisplayItem,
+  validateCaseAdminVideoPosterSelection,
+  validateCaseAdminVideoSelection,
   validateCaseAdminForm,
 } = caseAdminData;
 
@@ -322,4 +327,127 @@ test("builds database payload with json value fields and leaves blank sort order
   assert.deepEqual(plain(payload.packageTypes), { values: ["整套包装"] });
   assert.deepEqual(plain(payload.homeSections), { values: [] });
   assert.deepEqual(plain(payload.keywords.values), ["测试案例", "白酒", "整套包装"]);
+});
+
+test("accepts the exact mobile video limits and rounds duration up", () => {
+  const result = validateCaseAdminVideoSelection(
+    {
+      tempFilePath: "/tmp/case-video.mp4",
+      size: 100 * 1024 * 1024,
+      mimeType: "video/mp4",
+    },
+    { duration: 119.2, width: 1920, height: 1080 },
+    CASE_ADMIN_VIDEO_DEFAULT_LIMITS
+  );
+
+  assert.equal(result.valid, true);
+  assert.equal(result.data.durationSeconds, 120);
+  assert.equal(result.data.size, 104857600);
+});
+
+test("rejects oversized, overlong, non-MP4, wrong MIME and 4K videos", () => {
+  const validFile = {
+    tempFilePath: "/tmp/case-video.mp4",
+    size: 104857600,
+    mimeType: "video/mp4",
+  };
+  const validMetadata = { duration: 120, width: 1080, height: 1920 };
+
+  assert.equal(
+    validateCaseAdminVideoSelection(
+      { ...validFile, size: 104857601 },
+      validMetadata
+    ).message,
+    "视频不能超过 100MB"
+  );
+  assert.equal(
+    validateCaseAdminVideoSelection(validFile, {
+      ...validMetadata,
+      duration: 120.01,
+    }).message,
+    "视频不能超过 120 秒"
+  );
+  assert.equal(
+    validateCaseAdminVideoSelection(
+      { ...validFile, tempFilePath: "/tmp/case-video.mov" },
+      validMetadata
+    ).message,
+    "请选择 MP4 格式的视频"
+  );
+  assert.equal(
+    validateCaseAdminVideoSelection(
+      { ...validFile, mimeType: "video/quicktime" },
+      validMetadata
+    ).message,
+    "视频文件类型必须为 MP4"
+  );
+  assert.equal(
+    validateCaseAdminVideoSelection(validFile, {
+      ...validMetadata,
+      width: 3840,
+      height: 2160,
+    }).message,
+    "视频分辨率不能超过 1080p"
+  );
+});
+
+test("validates optional poster type and five megabyte limit", () => {
+  const accepted = validateCaseAdminVideoPosterSelection({
+    tempFilePath: "/tmp/poster.webp",
+    size: 5 * 1024 * 1024,
+    mimeType: "image/webp",
+  });
+  const oversized = validateCaseAdminVideoPosterSelection({
+    tempFilePath: "/tmp/poster.png",
+    size: 5 * 1024 * 1024 + 1,
+    mimeType: "image/png",
+  });
+
+  assert.equal(accepted.valid, true);
+  assert.equal(oversized.valid, false);
+  assert.equal(oversized.message, "视频封面不能超过 5MB");
+});
+
+test("builds atomic upload, external and clear video patches only when dirty", () => {
+  const unchanged = buildCaseAdminVideoPatch({ dirty: false });
+  const upload = buildCaseAdminVideoPatch({
+    dirty: true,
+    source: "upload",
+    draft: {
+      uploadFileID: "cloud://env/wine-packaging/videos/video.mp4",
+      uploadDurationSeconds: 62,
+      uploadPosterFileID: "cloud://env/wine-packaging/videos/poster.webp",
+    },
+  });
+  const external = buildCaseAdminVideoPatch({
+    dirty: true,
+    source: "external",
+    draft: {
+      externalUrl: "https://cdn.example.com/video.mp4",
+      externalPosterUrl: "https://cdn.example.com/poster.jpg",
+      externalDurationSeconds: "88",
+    },
+  });
+  const cleared = buildCaseAdminVideoPatch({ dirty: true, removed: true });
+
+  assert.equal(unchanged.patch, null);
+  assert.deepEqual(plain(upload.patch), {
+    mode: "upload",
+    fileID: "cloud://env/wine-packaging/videos/video.mp4",
+    durationSeconds: 62,
+    posterFileID: "cloud://env/wine-packaging/videos/poster.webp",
+  });
+  assert.deepEqual(plain(external.patch), {
+    mode: "external",
+    url: "https://cdn.example.com/video.mp4",
+    durationSeconds: 88,
+    posterUrl: "https://cdn.example.com/poster.jpg",
+  });
+  assert.deepEqual(plain(cleared.patch), { mode: "clear" });
+});
+
+test("normalizes legacy cases without a version to the backend version baseline", () => {
+  assert.equal(normalizeCaseAdminItem({ _id: "legacy" }).version, 1);
+  assert.equal(normalizeCaseAdminItem({ _id: "current", version: "7" }).version, 7);
+  assert.equal(normalizeCaseAdminItem({ _id: "invalid", version: 0 }).version, 1);
 });

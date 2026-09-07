@@ -7,6 +7,12 @@ const {
 const caseData = require("../../utils/caseData");
 const { formatJoined } = caseData;
 const getSceneLabels = caseData.getSceneLabels || ((values) => values || []);
+const normalizeHttpsMediaUrl = caseData.normalizeHttpsMediaUrl || ((value) => {
+  const url = String(value || "").trim();
+  if (!url || url.length > 2048 || /\s/.test(url)) return "";
+  const match = /^https:\/\/([^/?#]+)(?:[/?#]|$)/i.exec(url);
+  return match && !match[1].includes("@") ? url : "";
+});
 const {
   CUSTOMER_SERVICE_SOURCE,
   buildCustomerMessageCard,
@@ -72,19 +78,6 @@ function buildInfoRows(caseItem) {
   ];
 }
 
-function buildDetailHeading(caseItem) {
-  const packageLabel = caseItem.packageTypes && caseItem.packageTypes[0];
-  const wineLabel = caseItem.wineType || "白酒";
-  return `${packageLabel || caseItem.title} · ${wineLabel}品牌视觉组合`;
-}
-
-function buildDetailSubtitle(caseItem) {
-  return formatJoined(
-    [caseItem.wineType, ...(caseItem.packageTypes || []), ...(caseItem.styles || [])].filter(Boolean),
-    "酒包装设计参考"
-  );
-}
-
 function buildGalleryItems(caseItem = {}) {
   const gallery = Array.isArray(caseItem.gallery) && caseItem.gallery.length
     ? caseItem.gallery
@@ -112,6 +105,54 @@ function buildGalleryItems(caseItem = {}) {
     }));
 }
 
+function stripLegacyFallbackVideo(caseItem = {}) {
+  const safeCaseItem = { ...caseItem };
+  [
+    "videoFileID",
+    "videoUrl",
+    "videoPosterFileID",
+    "videoPoster",
+    "videoDurationSeconds",
+    "videoFileSizeBytes",
+    "videoPreviewUrl",
+    "videoPosterPreviewUrl",
+  ].forEach((field) => {
+    delete safeCaseItem[field];
+  });
+  return safeCaseItem;
+}
+
+function formatVideoDuration(value) {
+  const durationSeconds = Number(value);
+  if (!Number.isSafeInteger(durationSeconds) || durationSeconds <= 0) return "";
+  const hours = Math.floor(durationSeconds / 3600);
+  const minutes = Math.floor((durationSeconds % 3600) / 60);
+  const seconds = durationSeconds % 60;
+  if (hours) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function buildCaseVideo(caseItem = {}, galleryItems = []) {
+  const src = normalizeHttpsMediaUrl(caseItem.videoUrl);
+  if (!src) return null;
+  const firstImage = galleryItems[0] || {};
+  const poster =
+    normalizeHttpsMediaUrl(caseItem.videoPoster)
+    || firstImage.heroUrl
+    || firstImage.displayUrl
+    || firstImage.renderUrl
+    || firstImage.thumbnailUrl
+    || "";
+  const durationText = formatVideoDuration(caseItem.videoDurationSeconds);
+  return {
+    src,
+    poster,
+    durationText,
+  };
+}
+
 function buildCaseView(caseItem = {}) {
   return {
     id: caseItem.id || caseItem._id || "",
@@ -122,7 +163,13 @@ function buildCaseView(caseItem = {}) {
     styles: caseItem.styles || [],
     priceLevel: caseItem.priceLevel || "",
     scenes: caseItem.scenes || [],
-    notes: caseItem.notes || "",
+    videoUrl: normalizeHttpsMediaUrl(caseItem.videoUrl),
+    videoPoster: normalizeHttpsMediaUrl(caseItem.videoPoster),
+    videoDurationSeconds:
+      Number.isSafeInteger(Number(caseItem.videoDurationSeconds))
+      && Number(caseItem.videoDurationSeconds) > 0
+        ? Number(caseItem.videoDurationSeconds)
+        : null,
   };
 }
 
@@ -209,14 +256,14 @@ Page({
     errorCanRetry: false,
     caseItem: null,
     infoRows: [],
-    detailHeading: "",
-    detailSubtitle: "",
     favorite: null,
     isFavorited: false,
     favoriteLoading: false,
     galleryItems: [],
     currentImageIndex: 0,
     currentImageUrl: "",
+    caseVideo: null,
+    videoFailed: false,
     customerServiceMessageCardEnabled: false,
     customerServiceMessageTitle: "",
     customerServiceMessagePath: "",
@@ -246,10 +293,12 @@ Page({
   },
 
   onHide() {
+    this.pauseCaseVideo();
     this.cancelDetailEntryLoading();
   },
 
   onUnload() {
+    this.pauseCaseVideo();
     this._alive = false;
     this.cancelDetailEntryLoading();
     cancelCaseLoading(this);
@@ -323,7 +372,7 @@ Page({
           fallbackUsed: true,
         });
         console.warn("详情聚合接口不可用，使用兼容读取", catalogError);
-        caseItem = await fetchCaseById(decodedId);
+        caseItem = stripLegacyFallbackVideo(await fetchCaseById(decodedId));
       }
       if (!canCommitCase(this, requestId)) return false;
       const galleryItems = buildGalleryItems(caseItem);
@@ -337,6 +386,7 @@ Page({
           : "",
       });
       const caseView = buildCaseView(caseItem);
+      const caseVideo = buildCaseVideo(caseItem, galleryItems);
       this._caseItem = caseItem;
       this._detailAwaitingHeroRequestId = galleryItems[0] && galleryItems[0].renderUrl
         ? requestId
@@ -358,13 +408,13 @@ Page({
         errorCanRetry: false,
         caseItem: caseView,
         infoRows: buildInfoRows(caseItem),
-        detailHeading: buildDetailHeading(caseItem),
-        detailSubtitle: buildDetailSubtitle(caseItem),
         galleryItems,
         currentImageIndex: 0,
         currentImageUrl: galleryItems[0]
           ? galleryItems[0].displayUrl || galleryItems[0].heroUrl || galleryItems[0].renderUrl
           : "",
+        caseVideo,
+        videoFailed: false,
         customerServiceMessageCardEnabled: customerServiceMessageCard.enabled,
         customerServiceMessageTitle: customerServiceMessageCard.title,
         customerServiceMessagePath: customerServiceMessageCard.path,
@@ -877,6 +927,39 @@ Page({
       || detailLoadRequestId !== this._detailAwaitingHeroRequestId
     ) return;
     this.finishDetailEntryLoading(detailLoadRequestId);
+  },
+
+  pauseCaseVideo() {
+    if (!this.data.caseVideo || typeof wx.createVideoContext !== "function") return false;
+    try {
+      const videoContext = wx.createVideoContext("case-video", this);
+      if (!videoContext || typeof videoContext.pause !== "function") return false;
+      videoContext.pause();
+      return true;
+    } catch (error) {
+      console.warn("案例视频暂停失败", error);
+      return false;
+    }
+  },
+
+  onVideoError() {
+    if (!isPageAlive(this) || !this.data.caseVideo) return;
+    safeSetData(this, { videoFailed: true });
+    reportClientFault({
+      type: "media_error",
+      route: "pages/detail/index",
+      stage: "video_playback_error",
+      action: "play_case_video",
+      requestKind: "native_video",
+      cacheState: "none",
+      fallbackUsed: true,
+      error: new Error("detail_video_playback_failed"),
+    });
+  },
+
+  retryVideo() {
+    if (!isPageAlive(this) || !this.data.caseVideo) return;
+    safeSetData(this, { videoFailed: false });
   },
 
   handleContact(event) {
