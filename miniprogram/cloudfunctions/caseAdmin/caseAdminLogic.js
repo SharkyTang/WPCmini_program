@@ -85,16 +85,6 @@ const CASE_IMAGE_SCALAR_FIELDS = [
   "coverBanner",
   "imageVariantVersion",
 ];
-const UPLOAD_JOB_STATUSES = [
-  "waiting",
-  "uploading",
-  "processing",
-  "creating",
-  "needs_tags",
-  "done",
-  "failed",
-];
-
 const VALID_CASE_ADMIN_ACTIONS = [
   "checkAccess",
   "getAdminConfig",
@@ -119,11 +109,6 @@ const VALID_CASE_ADMIN_ACTIONS = [
   "permanentlyDeleteCases",
   "retryPurgeCleanup",
   "listPendingPurgeJobs",
-  "registerUploadItems",
-  "updateUploadItemStatus",
-  "removeUploadItem",
-  "listSharedUploadItems",
-  "listAdminActivity",
 ];
 
 const ALLOWED_CASE_FIELDS = [
@@ -403,17 +388,6 @@ function getAdminDisplayName(actor, env = {}) {
   const configured = parseAdminDisplayNames(env.CASE_ADMIN_DISPLAY_NAMES);
   if (configured[actor.id]) return configured[actor.id];
   return actor.type === "cloudbase_uid" ? "网页管理员" : "微信管理员";
-}
-
-function normalizeUploadJobStatus(value) {
-  const status = trimText(value).toLowerCase();
-  return UPLOAD_JOB_STATUSES.includes(status) ? status : "";
-}
-
-function normalizeAdminListLimit(value, fallback = 50) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(1, Math.min(50, Math.floor(parsed)));
 }
 
 function normalizeValues(value) {
@@ -1611,7 +1585,6 @@ module.exports = {
   PAGE_SIZE_MAX,
   PINNED_CASE_LIMIT,
   SEARCH_FETCH_LIMIT,
-  UPLOAD_JOB_STATUSES,
   VIDEO_DURATION_SECONDS_MAX,
   VIDEO_POSTER_UPLOAD_BYTES,
   VIDEO_UPLOAD_BYTES,
@@ -1658,7 +1631,6 @@ module.exports = {
   isWebAdminUploadFile,
   isWebWriteEnabled,
   normalizeCaseIds,
-  normalizeAdminListLimit,
   normalizeClientMutationId,
   normalizeCloudFileIds,
   normalizeGalleryImages,
@@ -1669,7 +1641,6 @@ module.exports = {
   normalizePage,
   normalizePageSize,
   normalizeHomepageDisplaySlot,
-  normalizeUploadJobStatus,
   normalizeVisibilityFilter,
   paginateCaseItems,
   parseCloudbaseContext,

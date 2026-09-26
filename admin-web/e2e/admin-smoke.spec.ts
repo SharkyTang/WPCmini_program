@@ -257,6 +257,7 @@ test("编辑深链刷新可恢复，离开未保存内容会被拦截", async ({
 test("上传文件刷新后仍可继续，并可安全退出登录", async ({ page }) => {
   await signIn(page);
   await page.goto("/#/cases/upload");
+  await expect(page.getByRole("heading", { name: "管理员实时动态" })).toHaveCount(0);
 
   await page.locator('input[type="file"]').setInputFiles({
     name: "刷新恢复案例.png",
@@ -281,4 +282,29 @@ test("上传文件刷新后仍可继续，并可安全退出登录", async ({ pa
   await page.getByRole("button", { name: "管理员账户菜单" }).click();
   await page.getByText("退出登录", { exact: true }).click();
   await expect(page).toHaveURL(/\/#\/login$/);
+});
+
+test("多张图片仍可合并为一个案例并完成上传", async ({ page }) => {
+  await signIn(page);
+  await page.goto("/#/cases/upload");
+
+  const buffer = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  await page.locator('input[type="file"]').setInputFiles([
+    { name: "合并案例封面.png", mimeType: "image/png", buffer },
+    { name: "合并案例详情.png", mimeType: "image/png", buffer },
+  ]);
+  await expect(page.locator(".queue-item")).toHaveCount(2);
+  await page.locator(".queue-item").nth(0).getByRole("checkbox").check();
+  await page.locator(".queue-item").nth(1).getByRole("checkbox").check();
+  await page.getByRole("button", { name: "合并已选（2）" }).click();
+
+  await expect(page.locator(".queue-item")).toHaveCount(1);
+  await expect(page.locator(".queue-item")).toContainText("2 张图片");
+  await page.getByRole("button", { name: "开始上传" }).click();
+  await expect(page.getByText("待补标签", { exact: true })).toBeVisible({
+    timeout: 10_000,
+  });
 });

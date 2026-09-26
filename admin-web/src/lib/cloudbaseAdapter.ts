@@ -1,7 +1,5 @@
 import cloudbase from "@cloudbase/js-sdk";
 import type {
-  AdminActivityItem,
-  AdminActivitySubscription,
   AdminApi,
   AdminConfig,
   AuthSession,
@@ -18,12 +16,9 @@ import type {
   MutationResult,
   PendingPurgeJob,
   PermanentDeleteResult,
-  RegisterUploadItemInput,
-  SharedUploadItem,
   UploadedCaseImages,
   UploadedCaseVideo,
   UploadedVideoPoster,
-  UploadItemStatusPatch,
   UploadProgress,
   VideoFileMetadata,
   VideoPatch,
@@ -65,24 +60,6 @@ type StorageLike = {
   }>;
 };
 
-type RealtimeSnapshotLike = {
-  docs?: Record<string, unknown>[];
-};
-
-type RealtimeQueryLike = {
-  where: (query: Record<string, unknown>) => RealtimeQueryLike;
-  orderBy: (field: string, order: "asc" | "desc") => RealtimeQueryLike;
-  limit: (count: number) => RealtimeQueryLike;
-  watch: (options: {
-    onChange: (snapshot: RealtimeSnapshotLike) => void;
-    onError: (error: unknown) => void;
-  }) => AdminActivitySubscription;
-};
-
-type DatabaseLike = {
-  collection: (name: string) => RealtimeQueryLike;
-};
-
 type CloudbaseAppLike = {
   auth: AuthLike;
   callFunction: (input: {
@@ -99,7 +76,6 @@ type CloudbaseAppLike = {
     method?: "post" | "put";
     onUploadProgress?: (event: { loaded?: number; total?: number }) => void;
   }) => Promise<{ fileID?: string }>;
-  database: () => DatabaseLike;
 };
 
 const cloudConfig = {
@@ -181,56 +157,6 @@ function dateText(value: unknown): string {
   const candidate = record.$date ?? record.timestamp ?? record.seconds;
   if (typeof candidate !== "number") return "";
   return new Date(candidate < 10_000_000_000 ? candidate * 1000 : candidate).toISOString();
-}
-
-function textArray(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map(String).filter(Boolean);
-  const record = asRecord(value);
-  return Array.isArray(record?.values) ? record.values.map(String).filter(Boolean) : [];
-}
-
-function normalizeSharedUploadItem(value: unknown): SharedUploadItem {
-  const raw = asRecord(value) || {};
-  const actor = asRecord(raw.actor);
-  return {
-    id: String(raw._id || raw.id || raw.mutationId || ""),
-    mutationId: String(raw.mutationId || ""),
-    uploadBatchId: String(raw.uploadBatchId || raw.batchId || ""),
-    ownerUid: String(raw.ownerUid || raw.actorId || actor?.id || ""),
-    ownerLabel: String(
-      raw.ownerLabel || raw.ownerDisplayName || raw.actorDisplayName || raw.actorLabel || "管理员",
-    ),
-    title: String(raw.title || "未命名案例"),
-    imageCount: Math.max(0, Number(raw.imageCount || 0)),
-    packageTypes: textArray(raw.packageTypes),
-    scenes: textArray(raw.scenes),
-    status: String(raw.status || "waiting") as SharedUploadItem["status"],
-    updatedAt: dateText(raw.updatedAt || raw.createdAt),
-  };
-}
-
-function normalizeAdminActivity(value: unknown): AdminActivityItem {
-  const raw = asRecord(value) || {};
-  const actor = asRecord(raw.actor);
-  return {
-    id: String(
-      raw._id || raw.id || raw.eventId || `${raw.action || "activity"}-${raw.createdAt || ""}`,
-    ),
-    actorId: String(raw.actorId || raw.ownerUid || actor?.id || ""),
-    actorLabel: String(
-      raw.actorDisplayName || raw.actorLabel || raw.ownerLabel || "管理员",
-    ),
-    action: String(raw.action || "upload_queued") as AdminActivityItem["action"],
-    title: String(raw.title || raw.targetTitle || "未命名案例"),
-    caseId: raw.caseId ? String(raw.caseId) : undefined,
-    mutationId: raw.mutationId ? String(raw.mutationId) : undefined,
-    uploadBatchId: raw.uploadBatchId || raw.batchId
-      ? String(raw.uploadBatchId || raw.batchId)
-      : undefined,
-    imageCount: raw.imageCount === undefined ? undefined : Math.max(0, Number(raw.imageCount || 0)),
-    status: raw.status ? String(raw.status) as AdminActivityItem["status"] : undefined,
-    createdAt: dateText(raw.createdAt || raw.updatedAt),
-  };
 }
 
 function normalizePermanentDeleteResult(
@@ -683,75 +609,6 @@ export class CloudbaseAdminApi implements AdminApi {
     return (Array.isArray(result.items) ? result.items : [])
       .map(normalizePendingPurgeJob)
       .filter((job) => Boolean(job.cleanupJobId) && job.pendingFileCount > 0);
-  }
-
-  async registerUploadItems(items: RegisterUploadItemInput[]): Promise<void> {
-    if (!items.length) return;
-    await this.callAdmin({
-      action: "registerUploadItems",
-      items,
-    });
-  }
-
-  async updateUploadItemStatus(
-    mutationId: string,
-    patch: UploadItemStatusPatch,
-  ): Promise<void> {
-    await this.callAdmin({
-      action: "updateUploadItemStatus",
-      mutationId,
-      patch,
-      ...patch,
-    });
-  }
-
-  async removeUploadItem(mutationId: string): Promise<void> {
-    await this.callAdmin({
-      action: "removeUploadItem",
-      mutationId,
-    });
-  }
-
-  async listSharedUploadItems(limit = 50): Promise<SharedUploadItem[]> {
-    const result = await this.callAdmin<
-      ResultEnvelope & { items?: unknown[]; jobs?: unknown[] }
-    >({
-      action: "listSharedUploadItems",
-      limit: Math.min(50, Math.max(1, limit)),
-    });
-    return (result.items || result.jobs || []).map(normalizeSharedUploadItem);
-  }
-
-  async listAdminActivity(limit = 50): Promise<AdminActivityItem[]> {
-    const result = await this.callAdmin<
-      ResultEnvelope & { items?: unknown[]; activities?: unknown[] }
-    >({
-      action: "listAdminActivity",
-      limit: Math.min(50, Math.max(1, limit)),
-    });
-    return (result.items || result.activities || []).map(normalizeAdminActivity);
-  }
-
-  subscribeAdminActivity(
-    viewerUid: string,
-    onChange: (items: AdminActivityItem[]) => void,
-    onError: (error: unknown) => void,
-  ): AdminActivitySubscription {
-    return this.getApp()
-      .database()
-      .collection(
-        import.meta.env.VITE_ADMIN_ACTIVITY_COLLECTION?.trim() ||
-          "case_admin_activity_feed",
-      )
-      .where({ viewerUid })
-      .orderBy("createdAt", "desc")
-      .limit(50)
-      .watch({
-        onChange: (snapshot) => {
-          onChange((snapshot.docs || []).map(normalizeAdminActivity).slice(0, 50));
-        },
-        onError,
-      });
   }
 
   async reorderCases(

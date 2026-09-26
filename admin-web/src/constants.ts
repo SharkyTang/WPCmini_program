@@ -65,7 +65,6 @@ export const DEFAULT_CONFIG: AdminConfig = {
   },
   writeEnabled: true,
   permanentDeleteEnabled: false,
-  activitySyncEnabled: false,
   homeSectionOrders: {
     banner: [],
     popular: [],

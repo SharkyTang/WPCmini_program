@@ -11,15 +11,6 @@ const sdkMock = vi.hoisted(() => {
     signInWithPassword: vi.fn(),
     signOut: vi.fn(),
   });
-  const listener = { close: vi.fn() };
-  const query = {} as Record<string, ReturnType<typeof vi.fn>>;
-  query.where = vi.fn(() => query);
-  query.orderBy = vi.fn(() => query);
-  query.limit = vi.fn(() => query);
-  query.watch = vi.fn(() => listener);
-  const database = {
-    collection: vi.fn(() => query),
-  };
   const app = {
     auth,
     callFunction: vi.fn(),
@@ -27,14 +18,10 @@ const sdkMock = vi.hoisted(() => {
       from: vi.fn(),
     },
     uploadFile: vi.fn(),
-    database: vi.fn(() => database),
   };
   return {
     app,
     auth,
-    database,
-    listener,
-    query,
     init: vi.fn(() => app),
   };
 });
@@ -53,13 +40,6 @@ beforeEach(() => {
   sdkMock.init.mockClear();
   sdkMock.app.callFunction.mockReset();
   sdkMock.app.uploadFile.mockReset();
-  sdkMock.app.database.mockClear();
-  sdkMock.database.collection.mockClear();
-  sdkMock.query.where.mockClear();
-  sdkMock.query.orderBy.mockClear();
-  sdkMock.query.limit.mockClear();
-  sdkMock.query.watch.mockClear();
-  sdkMock.listener.close.mockClear();
 });
 
 afterEach(() => {
@@ -128,85 +108,6 @@ test("云函数 JSON 字符串返回值可被正确解析", async () => {
   await expect(api.getAdminConfig()).resolves.toMatchObject({
     writeEnabled: true,
   });
-});
-
-test("上传同步动作只发送轻量任务元数据", async () => {
-  sdkMock.app.callFunction.mockResolvedValue({ result: { ok: true } });
-  const { CloudbaseAdminApi } = await import("./cloudbaseAdapter");
-  const api = new CloudbaseAdminApi();
-
-  await api.registerUploadItems([{
-    mutationId: "mutation-1",
-    uploadBatchId: "batch-1",
-    title: "宴会案例",
-    imageCount: 2,
-    packageTypes: ["礼盒"],
-    scenes: ["宴会"],
-    status: "waiting",
-  }]);
-  await api.updateUploadItemStatus("mutation-1", {
-    status: "processing",
-    title: "宴会案例",
-    scenes: ["宴会"],
-  });
-
-  expect(sdkMock.app.callFunction).toHaveBeenNthCalledWith(1, {
-    name: "caseAdmin",
-    data: {
-      action: "registerUploadItems",
-      items: [expect.objectContaining({
-        mutationId: "mutation-1",
-        imageCount: 2,
-        scenes: ["宴会"],
-      })],
-    },
-    parse: true,
-  });
-  expect(sdkMock.app.callFunction).toHaveBeenNthCalledWith(2, {
-    name: "caseAdmin",
-    data: expect.objectContaining({
-      action: "updateUploadItemStatus",
-      mutationId: "mutation-1",
-      status: "processing",
-    }),
-    parse: true,
-  });
-});
-
-test("管理员动态按当前 viewerUid 建立只读实时监听", async () => {
-  const { CloudbaseAdminApi } = await import("./cloudbaseAdapter");
-  const api = new CloudbaseAdminApi();
-  const onChange = vi.fn();
-  const onError = vi.fn();
-
-  const subscription = api.subscribeAdminActivity("uid-1", onChange, onError);
-  const watchOptions = sdkMock.query.watch.mock.calls[0][0];
-  watchOptions.onChange({
-    docs: [{
-      eventId: "event-1",
-      actor: { type: "cloudbase_uid", id: "uid-2" },
-      actorDisplayName: "sharky",
-      action: "case_moved_to_trash",
-      title: "案例 A",
-      createdAt: "2026-08-15T01:00:00.000Z",
-    }],
-  });
-
-  expect(sdkMock.database.collection).toHaveBeenCalledWith("case_admin_activity_feed");
-  expect(sdkMock.query.where).toHaveBeenCalledWith({ viewerUid: "uid-1" });
-  expect(sdkMock.query.orderBy).toHaveBeenCalledWith("createdAt", "desc");
-  expect(sdkMock.query.limit).toHaveBeenCalledWith(50);
-  expect(onChange).toHaveBeenCalledWith([
-    expect.objectContaining({
-      id: "event-1",
-      actorId: "uid-2",
-      actorLabel: "sharky",
-      action: "case_moved_to_trash",
-    }),
-  ]);
-
-  subscription.close();
-  expect(sdkMock.listener.close).toHaveBeenCalledOnce();
 });
 
 test("永久删除适配层保留清理作业统计", async () => {

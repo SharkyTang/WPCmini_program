@@ -102,7 +102,6 @@ export interface AdminConfig {
   };
   writeEnabled: boolean;
   permanentDeleteEnabled: boolean;
-  activitySyncEnabled: boolean;
   homeSectionOrders: HomeSectionOrders;
 }
 
@@ -253,64 +252,6 @@ export interface ListPendingPurgeJobsRequest {
   clientMutationId?: string;
 }
 
-export interface RegisterUploadItemInput {
-  mutationId: string;
-  uploadBatchId: string;
-  title: string;
-  imageCount: number;
-  packageTypes: string[];
-  scenes: string[];
-  status: QueueStatus;
-}
-
-export interface UploadItemStatusPatch {
-  status: QueueStatus;
-  title?: string;
-  imageCount?: number;
-  packageTypes?: string[];
-  scenes?: string[];
-  caseId?: string;
-  error?: string;
-}
-
-export interface SharedUploadItem extends RegisterUploadItemInput {
-  id: string;
-  ownerUid: string;
-  ownerLabel: string;
-  updatedAt: string;
-}
-
-export type AdminActivityAction =
-  | "upload_queued"
-  | "upload_started"
-  | "upload_processing"
-  | "case_creating"
-  | "upload_completed"
-  | "case_created"
-  | "upload_failed"
-  | "upload_removed"
-  | "case_moved_to_trash"
-  | "case_restored"
-  | "case_permanently_deleted";
-
-export interface AdminActivityItem {
-  id: string;
-  actorId: string;
-  actorLabel: string;
-  action: AdminActivityAction;
-  title: string;
-  caseId?: string;
-  mutationId?: string;
-  uploadBatchId?: string;
-  imageCount?: number;
-  status?: QueueStatus;
-  createdAt: string;
-}
-
-export interface AdminActivitySubscription {
-  close(): void;
-}
-
 export interface AdminApi {
   readonly mode: "mock" | "cloudbase";
   readonly configured: boolean;
@@ -367,19 +308,6 @@ export interface AdminApi {
     onProgress?: (progress: FileUploadProgress) => void,
   ): Promise<UploadedVideoPoster>;
   cleanupUnreferencedFiles(fileIDs: string[]): Promise<CleanupUnreferencedFilesResult>;
-  registerUploadItems?(items: RegisterUploadItemInput[]): Promise<void>;
-  updateUploadItemStatus?(
-    mutationId: string,
-    patch: UploadItemStatusPatch,
-  ): Promise<void>;
-  removeUploadItem?(mutationId: string): Promise<void>;
-  listSharedUploadItems?(limit?: number): Promise<SharedUploadItem[]>;
-  listAdminActivity?(limit?: number): Promise<AdminActivityItem[]>;
-  subscribeAdminActivity?(
-    viewerUid: string,
-    onChange: (items: AdminActivityItem[]) => void,
-    onError: (error: unknown) => void,
-  ): AdminActivitySubscription;
 }
 
 export interface UploadQueueItem {

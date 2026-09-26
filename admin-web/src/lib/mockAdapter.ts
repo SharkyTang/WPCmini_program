@@ -1,7 +1,5 @@
 import { DEFAULT_CONFIG } from "../constants";
 import type {
-  AdminActivityAction,
-  AdminActivityItem,
   AdminApi,
   AdminConfig,
   AuthSession,
@@ -19,12 +17,9 @@ import type {
   ListCasesResponse,
   MutationResult,
   PendingPurgeJob,
-  RegisterUploadItemInput,
-  SharedUploadItem,
   UploadedCaseImages,
   UploadedCaseVideo,
   UploadedVideoPoster,
-  UploadItemStatusPatch,
   UploadProgress,
   VideoFileMetadata,
   VideoPatch,
@@ -39,13 +34,11 @@ const STORE_KEY = "wine-admin-demo-cases-v2";
 const ORDER_KEY = "wine-admin-demo-home-orders-v2";
 const SESSION_KEY = "wine-admin-demo-session-v1";
 const PURGE_JOB_KEY = "wine-admin-demo-purge-jobs-v1";
-const UPLOAD_JOB_KEY = "wine-admin-demo-upload-jobs-v1";
-const ACTIVITY_FEED_KEY = "wine-admin-demo-activity-feed-v1";
 const CONFIG_OVERRIDE_KEY = "wine-admin-demo-config-override-v1";
 const mockMediaFiles = new Map<string, { url: string; fileSizeBytes: number }>();
 
 function readConfigOverride(): Partial<
-  Pick<AdminConfig, "writeEnabled" | "permanentDeleteEnabled" | "activitySyncEnabled">
+  Pick<AdminConfig, "writeEnabled" | "permanentDeleteEnabled">
 > {
   try {
     const value = JSON.parse(localStorage.getItem(CONFIG_OVERRIDE_KEY) || "{}") as Record<
@@ -58,9 +51,6 @@ function readConfigOverride(): Partial<
         : {}),
       ...(typeof value.permanentDeleteEnabled === "boolean"
         ? { permanentDeleteEnabled: value.permanentDeleteEnabled }
-        : {}),
-      ...(typeof value.activitySyncEnabled === "boolean"
-        ? { activitySyncEnabled: value.activitySyncEnabled }
         : {}),
     };
   } catch {
@@ -104,72 +94,6 @@ function toMockPurgeResult(job: MockPurgeResult): MockPurgeResult {
     retainedReferencedCount: Number(job.retainedReferencedCount || 0),
     pendingFileCount: Number(job.pendingFileCount || 0),
   };
-}
-
-function readUploadJobs(): SharedUploadItem[] {
-  try {
-    return JSON.parse(localStorage.getItem(UPLOAD_JOB_KEY) || "[]") as SharedUploadItem[];
-  } catch {
-    return [];
-  }
-}
-
-function writeUploadJobs(jobs: SharedUploadItem[]): void {
-  localStorage.setItem(UPLOAD_JOB_KEY, JSON.stringify(jobs));
-}
-
-function readActivityFeed(): AdminActivityItem[] {
-  try {
-    return JSON.parse(localStorage.getItem(ACTIVITY_FEED_KEY) || "[]") as AdminActivityItem[];
-  } catch {
-    return [];
-  }
-}
-
-function appendActivity(
-  action: AdminActivityAction,
-  item: Pick<SharedUploadItem, "mutationId" | "uploadBatchId" | "title" | "imageCount" | "status">,
-  patch: UploadItemStatusPatch = { status: item.status },
-): void {
-  const activity: AdminActivityItem = {
-    id: `mock-activity-${crypto.randomUUID()}`,
-    actorId: "demo-admin",
-    actorLabel: "演示管理员",
-    action,
-    title: patch.title || item.title,
-    caseId: patch.caseId,
-    mutationId: item.mutationId,
-    uploadBatchId: item.uploadBatchId,
-    imageCount: patch.imageCount ?? item.imageCount,
-    status: patch.status,
-    createdAt: new Date().toISOString(),
-  };
-  localStorage.setItem(
-    ACTIVITY_FEED_KEY,
-    JSON.stringify([activity, ...readActivityFeed()].slice(0, 200)),
-  );
-}
-
-function appendCaseActivity(
-  action: Extract<
-    AdminActivityAction,
-    "case_moved_to_trash" | "case_restored" | "case_permanently_deleted"
-  >,
-  item: CaseRecord,
-): void {
-  const activity: AdminActivityItem = {
-    id: `mock-activity-${crypto.randomUUID()}`,
-    actorId: "demo-admin",
-    actorLabel: "演示管理员",
-    action,
-    title: item.title,
-    caseId: item.caseId,
-    createdAt: new Date().toISOString(),
-  };
-  localStorage.setItem(
-    ACTIVITY_FEED_KEY,
-    JSON.stringify([activity, ...readActivityFeed()].slice(0, 200)),
-  );
 }
 
 function getCaseFileIDs(item: CaseRecord): string[] {
@@ -337,7 +261,6 @@ export class MockAdminApi implements AdminApi {
         videoDisplayEnabled: true,
       },
       permanentDeleteEnabled: true,
-      activitySyncEnabled: true,
       ...readConfigOverride(),
       homeSectionOrders: readOrders(),
     };
@@ -595,7 +518,6 @@ export class MockAdminApi implements AdminApi {
       item.updatedAt = new Date().toISOString();
     });
     writeCases(cases);
-    selected.forEach((item) => appendCaseActivity("case_moved_to_trash", item));
     return { moved: selected.length };
   }
 
@@ -616,7 +538,6 @@ export class MockAdminApi implements AdminApi {
       item.updatedAt = new Date().toISOString();
     });
     writeCases(cases);
-    selected.forEach((item) => appendCaseActivity("case_restored", item));
     return { restored: selected.length };
   }
 
@@ -670,7 +591,6 @@ export class MockAdminApi implements AdminApi {
     writeCases(remaining);
     purgeJobs[clientMutationId] = job;
     writePurgeJobs(purgeJobs);
-    selected.forEach((item) => appendCaseActivity("case_permanently_deleted", item));
     return structuredClone(result);
   }
 
@@ -714,96 +634,6 @@ export class MockAdminApi implements AdminApi {
         updatedAt: job.updatedAt,
       }))
       .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
-  }
-
-  async registerUploadItems(items: RegisterUploadItemInput[]): Promise<void> {
-    ensureSession();
-    await delay(100);
-    if (!items.length || items.length > DEFAULT_CONFIG.limits.batch) {
-      throw new AdminApiError("INVALID_BATCH", `每次请选择 1–${DEFAULT_CONFIG.limits.batch} 个案例`);
-    }
-    const jobs = readUploadJobs();
-    const byMutationId = new Map(jobs.map((item) => [item.mutationId, item]));
-    items.forEach((input) => {
-      if (byMutationId.has(input.mutationId)) return;
-      const job: SharedUploadItem = {
-        ...input,
-        id: `mock-upload-${input.mutationId}`,
-        ownerUid: "demo-admin",
-        ownerLabel: "演示管理员",
-        updatedAt: new Date().toISOString(),
-      };
-      jobs.push(job);
-      byMutationId.set(job.mutationId, job);
-      appendActivity("upload_queued", job);
-    });
-    writeUploadJobs(jobs);
-  }
-
-  async updateUploadItemStatus(
-    mutationId: string,
-    patch: UploadItemStatusPatch,
-  ): Promise<void> {
-    ensureSession();
-    await delay(80);
-    const jobs = readUploadJobs();
-    const index = jobs.findIndex((item) => item.mutationId === mutationId);
-    if (index < 0) throw new AdminApiError("UPLOAD_JOB_NOT_FOUND", "同步任务不存在");
-    const previous = jobs[index];
-    const next: SharedUploadItem = {
-      ...previous,
-      title: patch.title ?? previous.title,
-      imageCount: patch.imageCount ?? previous.imageCount,
-      packageTypes: patch.packageTypes ?? previous.packageTypes,
-      scenes: patch.scenes ?? previous.scenes,
-      status: patch.status,
-      updatedAt: new Date().toISOString(),
-    };
-    jobs[index] = next;
-    writeUploadJobs(jobs);
-    if (previous.status === patch.status) return;
-    const actionByStatus: Partial<Record<UploadItemStatusPatch["status"], AdminActivityAction>> = {
-      uploading: "upload_started",
-      processing: "upload_processing",
-      needs_tags: "case_created",
-      done: "case_created",
-      failed: "upload_failed",
-    };
-    const action = actionByStatus[patch.status];
-    if (action) appendActivity(action, next, patch);
-  }
-
-  async removeUploadItem(mutationId: string): Promise<void> {
-    ensureSession();
-    await delay(80);
-    const jobs = readUploadJobs();
-    const item = jobs.find((candidate) => candidate.mutationId === mutationId);
-    if (!item) return;
-    if (!["waiting", "failed"].includes(item.status)) {
-      throw new AdminApiError("UPLOAD_JOB_ACTIVE", "处理中或已建档任务不能从共享动态移除");
-    }
-    writeUploadJobs(jobs.filter((candidate) => candidate.mutationId !== mutationId));
-    appendActivity("upload_removed", item);
-  }
-
-  async listSharedUploadItems(limit = 50): Promise<SharedUploadItem[]> {
-    ensureSession();
-    await delay(60);
-    return structuredClone(
-      readUploadJobs()
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-        .slice(0, Math.max(1, Math.min(limit, 50))),
-    );
-  }
-
-  async listAdminActivity(limit = 50): Promise<AdminActivityItem[]> {
-    ensureSession();
-    await delay(60);
-    return structuredClone(
-      readActivityFeed()
-        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-        .slice(0, Math.max(1, Math.min(limit, 50))),
-    );
   }
 
   async reorderCases(

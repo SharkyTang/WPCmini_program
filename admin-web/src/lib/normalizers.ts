@@ -238,7 +238,6 @@ export function normalizeAdminConfig(value: unknown): AdminConfig {
     },
     writeEnabled: raw.writeEnabled === true,
     permanentDeleteEnabled: raw.permanentDeleteEnabled === true,
-    activitySyncEnabled: raw.activitySyncEnabled === true,
     homeSectionOrders: normalizeOrders(raw.homeSectionOrders || raw.orders || raw.homeSectionOrder),
   };
 }

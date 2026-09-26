@@ -41,14 +41,12 @@ const {
   isVideoUploadFileForActor,
   isWebWriteEnabled,
   normalizeCaseIds,
-  normalizeAdminListLimit,
   normalizeClientMutationId,
   normalizeCloudFileIds,
   normalizeHomepageDisplaySlot,
   normalizeHttpsMediaUrl,
   normalizePage,
   normalizePageSize,
-  normalizeUploadJobStatus,
   normalizeVisibilityFilter,
   paginateCaseItems,
   resolveAdminActor,
@@ -83,10 +81,6 @@ const PURGE_GUARD_LEASE_MS = 30 * 60 * 1000;
 // the guard active until its lease expires. This prevents an ambiguous,
 // still-in-flight request from racing a newly introduced image reference.
 const PURGE_DELETE_CALL_TIMEOUT_MS = 45 * 1000;
-const UPLOAD_JOB_COLLECTION = "case_admin_upload_jobs";
-const ACTIVITY_FEED_COLLECTION = "case_admin_activity_feed";
-const ACTIVITY_OUTBOX_VIEWER_UID = "__server_outbox__";
-const ACTIVITY_OUTBOX_REPAIR_LIMIT = 10;
 const ADMIN_RECORD_RETENTION_LIMIT = 50;
 const VIDEO_UPLOAD_INTENT_COLLECTION = "case_admin_video_upload_intents";
 const VIDEO_UPLOAD_INTENT_TTL_MS = 30 * 60 * 1000;
@@ -105,16 +99,6 @@ const WEB_WRITE_ACTIONS = new Set([
   "cleanupUnreferencedFiles",
   "prepareVideoUpload",
   "permanentlyDeleteCases",
-  "registerUploadItems",
-  "updateUploadItemStatus",
-  "removeUploadItem",
-]);
-const ACTIVITY_SYNC_ACTIONS = new Set([
-  "registerUploadItems",
-  "updateUploadItemStatus",
-  "removeUploadItem",
-  "listSharedUploadItems",
-  "listAdminActivity",
 ]);
 const PERMANENT_DELETE_ACTIONS = new Set([
   "permanentlyDeleteCases",
@@ -163,10 +147,6 @@ function getExpectedVersion(event, id) {
   return event && event.expectedVersion;
 }
 
-function isActivitySyncEnabled() {
-  return isWebWriteEnabled(process.env.ADMIN_ACTIVITY_SYNC_ENABLED);
-}
-
 function isPermanentDeleteEnabled() {
   return isWebWriteEnabled(process.env.ADMIN_PERMANENT_DELETE_ENABLED);
 }
@@ -190,10 +170,6 @@ function getDeterministicDocumentId(prefix, value) {
     .digest("hex")
     .slice(0, 40);
   return `${prefix}_${digest}`;
-}
-
-function getUploadJobDocumentId(actor, mutationId) {
-  return getDeterministicDocumentId("upload", `${actor.id}:${mutationId}`);
 }
 
 function getPurgeJobDocumentId(actor, clientMutationId) {
@@ -345,243 +321,6 @@ function requireWebActor(actor) {
   return actor && actor.type === "cloudbase_uid"
     ? null
     : fail("WEB_ADMIN_REQUIRED", "此操作仅支持电脑后台管理员");
-}
-
-function getActivityViewers() {
-  return getEnvList(process.env.CASE_ADMIN_UIDS);
-}
-
-function buildSanitizedActivityPayload(activity, actor, eventId) {
-  const actorType = trimText(actor && actor.type);
-  const actorId = trimText(actor && actor.id);
-  return {
-    eventId: trimText(eventId),
-    actor: actorType && actorId ? { type: actorType, id: actorId } : null,
-    actorDisplayName: trimText(activity && activity.actorDisplayName).slice(0, 80)
-      || getAdminDisplayName(actor, process.env),
-    action: trimText(activity && activity.action),
-    targetType: trimText(activity && activity.targetType) || "case",
-    targetId: trimText(activity && activity.targetId),
-    title: trimText(activity && activity.title).slice(0, 120),
-    caseId: trimText(activity && activity.caseId).slice(0, 80),
-    batchId: trimText(activity && activity.batchId).slice(0, 120),
-    mutationId: trimText(activity && activity.mutationId).slice(0, 120),
-    status: normalizeUploadJobStatus(activity && activity.status),
-    imageCount: Math.max(0, Math.min(9, Number(activity && activity.imageCount) || 0)),
-  };
-}
-
-function getActivityOutboxDocumentId(eventId) {
-  return getDeterministicDocumentId("outbox", eventId);
-}
-
-async function persistActivityOutbox(payload) {
-  const documentId = getActivityOutboxDocumentId(payload.eventId);
-  let lastError = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await db.collection(ACTIVITY_FEED_COLLECTION).doc(documentId).set({
-        data: {
-          ...payload,
-          viewerUid: ACTIVITY_OUTBOX_VIEWER_UID,
-          serverOutbox: true,
-          createdAt: db.serverDate(),
-          updatedAt: db.serverDate(),
-        },
-      });
-      return documentId;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw lastError || new Error("管理员动态补偿记录写入失败");
-}
-
-async function fanoutSanitizedActivity(payload, viewers = getActivityViewers()) {
-  if (!viewers.length) {
-    return [{
-      status: "rejected",
-      reason: new Error("管理员动态接收者尚未配置"),
-    }];
-  }
-  const results = await Promise.allSettled(viewers.map(async (viewerUid) => {
-    const documentId = getDeterministicDocumentId(
-      "feed",
-      `${payload.eventId}:${viewerUid}`
-    );
-    await db.collection(ACTIVITY_FEED_COLLECTION).doc(documentId).set({
-      data: {
-        ...payload,
-        viewerUid,
-        createdAt: db.serverDate(),
-      },
-    });
-  }));
-  return results.filter((result) => result.status === "rejected");
-}
-
-async function removeActivityOutbox(documentId) {
-  try {
-    await db.collection(ACTIVITY_FEED_COLLECTION).doc(documentId).remove();
-    return true;
-  } catch (error) {
-    if (isDocumentNotFoundError(error)) return true;
-    console.warn("case admin activity outbox removal deferred", error);
-    return false;
-  }
-}
-
-async function writeAdminActivity(activity, actor, dedupeKey) {
-  if (!isActivitySyncEnabled()) return false;
-  const viewers = getActivityViewers();
-  if (!viewers.length) return false;
-  const eventId = getDeterministicDocumentId("activity", dedupeKey);
-  const payload = buildSanitizedActivityPayload(activity, actor, eventId);
-  const outboxId = await persistActivityOutbox(payload);
-  const failures = await fanoutSanitizedActivity(payload, viewers);
-  if (failures.length) {
-    const error = new Error(`管理员动态有 ${failures.length} 个副本待修复`);
-    error.code = "ACTIVITY_FANOUT_PARTIAL";
-    error.causes = failures.map((result) => result.reason);
-    throw error;
-  }
-  await removeActivityOutbox(outboxId);
-  return true;
-}
-
-async function repairAdminActivityOutboxesSafe() {
-  try {
-    const response = await db
-      .collection(ACTIVITY_FEED_COLLECTION)
-      .where({ viewerUid: ACTIVITY_OUTBOX_VIEWER_UID })
-      .orderBy("createdAt", "asc")
-      .limit(ACTIVITY_OUTBOX_REPAIR_LIMIT)
-      .get();
-    for (const item of response.data || []) {
-      if (!item || item.serverOutbox !== true || !trimText(item.eventId)) continue;
-      try {
-        const payload = buildSanitizedActivityPayload(
-          item,
-          item.actor,
-          item.eventId
-        );
-        const failures = await fanoutSanitizedActivity(payload);
-        if (!failures.length) {
-          await removeActivityOutbox(item._id || getActivityOutboxDocumentId(item.eventId));
-        }
-      } catch (error) {
-        console.warn("case admin activity outbox repair deferred", error);
-      }
-    }
-  } catch (error) {
-    // Polling endpoints must continue to serve their primary data even when
-    // activity repair is temporarily unavailable.
-    console.warn("case admin activity outbox scan deferred", error);
-  }
-}
-
-async function writeAdminActivitySafe(activity, actor, dedupeKey) {
-  try {
-    return await writeAdminActivity(activity, actor, dedupeKey);
-  } catch (error) {
-    // Activity synchronization must never turn a committed case mutation into
-    // a client-visible failure. The list endpoint/polling will recover later.
-    console.warn("case admin activity write deferred", error);
-    return false;
-  }
-}
-
-function normalizeStringList(value, allowedValues) {
-  const input = Array.isArray(value)
-    ? value
-    : value && Array.isArray(value.values)
-      ? value.values
-      : [];
-  const allowed = new Set(allowedValues || []);
-  return Array.from(new Set(
-    input.map(trimText).filter((item) => item && allowed.has(item))
-  ));
-}
-
-function normalizeUploadJobInput(input = {}) {
-  const mutation = normalizeClientMutationId(input.mutationId || input.clientMutationId);
-  if (!mutation.valid || !mutation.value) {
-    return {
-      valid: false,
-      code: mutation.code || "MUTATION_ID_REQUIRED",
-      message: mutation.message || "上传任务必须携带任务编号",
-    };
-  }
-  const uploadBatch = normalizeUploadBatchId(
-    input.uploadBatchId,
-    "",
-    true
-  );
-  if (!uploadBatch.valid) return uploadBatch;
-  const imageCount = Number(input.imageCount);
-  if (!Number.isInteger(imageCount) || imageCount < 1 || imageCount > CASE_GALLERY_MAX) {
-    return {
-      valid: false,
-      code: "INVALID_IMAGE_COUNT",
-      message: `单个上传任务必须包含 1-${CASE_GALLERY_MAX} 张图片`,
-    };
-  }
-  const status = normalizeUploadJobStatus(input.status || "waiting");
-  if (!status) {
-    return { valid: false, code: "INVALID_UPLOAD_STATUS", message: "上传任务状态无效" };
-  }
-  return {
-    valid: true,
-    data: {
-      mutationId: mutation.value,
-      uploadBatchId: uploadBatch.value,
-      title: (trimText(input.title) || "未命名案例").slice(0, 120),
-      imageCount,
-      packageTypes: normalizeStringList(input.packageTypes, CASE_ADMIN_OPTIONS.packageTypes),
-      scenes: normalizeStringList(input.scenes, CASE_ADMIN_OPTIONS.scenes),
-      status,
-    },
-  };
-}
-
-function isAllowedUploadStatusTransition(currentStatus, nextStatus) {
-  if (currentStatus === nextStatus) return true;
-  if (currentStatus === "done") return false;
-  if (currentStatus === "needs_tags") return nextStatus === "done";
-  if (currentStatus === "failed") {
-    return [
-      "waiting",
-      "uploading",
-      "processing",
-      "creating",
-      "needs_tags",
-      "done",
-    ].includes(nextStatus);
-  }
-  if (nextStatus === "failed") return true;
-  const ranks = {
-    waiting: 0,
-    uploading: 1,
-    processing: 2,
-    creating: 3,
-    needs_tags: 4,
-    done: 5,
-  };
-  return Number.isInteger(ranks[currentStatus])
-    && Number.isInteger(ranks[nextStatus])
-    && ranks[nextStatus] > ranks[currentStatus];
-}
-
-function getUploadActivityAction(status, fallback = "upload_updated") {
-  return ({
-    waiting: "upload_queued",
-    uploading: "upload_started",
-    processing: "upload_processing",
-    creating: "case_creating",
-    needs_tags: "upload_completed",
-    done: "upload_completed",
-    failed: "upload_failed",
-  })[status] || fallback;
 }
 
 function loadOfficialCloudbaseApp() {
@@ -862,9 +601,6 @@ async function getAdminConfig(actor) {
   const writeEnabled = actor && actor.type === "cloudbase_uid"
     ? isWebWriteEnabled(process.env.ADMIN_WEB_WRITE_ENABLED)
     : true;
-  const activitySyncEnabled = Boolean(
-    actor && actor.type === "cloudbase_uid" && isActivitySyncEnabled()
-  );
   const permanentDeleteEnabled = Boolean(
     actor && actor.type === "cloudbase_uid" && isPermanentDeleteEnabled()
   );
@@ -892,9 +628,7 @@ async function getAdminConfig(actor) {
         videoDisplayEnabled: isVideoDisplayEnabled(),
       },
       writeEnabled,
-      activitySyncEnabled,
       permanentDeleteEnabled,
-      actorDisplayName: getAdminDisplayName(actor, process.env),
       homeSectionOrders,
       upload: {
         acceptedExtensions: [".jpg", ".jpeg", ".png", ".webp"],
@@ -1471,336 +1205,6 @@ async function getCaseImageUrls(event) {
   return ok({ urls });
 }
 
-async function registerUploadItems(event, actor) {
-  const actorError = requireWebActor(actor);
-  if (actorError) return actorError;
-  const rawItems = Array.isArray(event.items) ? event.items : [];
-  if (!rawItems.length || rawItems.length > CASE_BATCH_MAX) {
-    return fail(
-      "INVALID_UPLOAD_ITEMS",
-      `每次必须登记 1-${CASE_BATCH_MAX} 个上传任务`
-    );
-  }
-  const normalizedItems = [];
-  const seenMutationIds = new Set();
-  for (const rawItem of rawItems) {
-    const normalized = normalizeUploadJobInput(rawItem);
-    if (!normalized.valid) return failFromValidation(normalized);
-    if (seenMutationIds.has(normalized.data.mutationId)) {
-      return fail("DUPLICATE_MUTATION_ID", "同一批任务中不能包含重复任务编号");
-    }
-    seenMutationIds.add(normalized.data.mutationId);
-    normalizedItems.push(normalized.data);
-  }
-
-  const createdItems = [];
-  const existingItems = [];
-  const removedItems = [];
-  try {
-    await withTransaction(async (transaction) => {
-      createdItems.length = 0;
-      existingItems.length = 0;
-      removedItems.length = 0;
-      const rows = [];
-      for (const item of normalizedItems) {
-        const id = getUploadJobDocumentId(actor, item.mutationId);
-        const ref = transaction.collection(UPLOAD_JOB_COLLECTION).doc(id);
-        const existing = await getDocumentOrNull(UPLOAD_JOB_COLLECTION, id, transaction);
-        rows.push({ id, ref, item, existing });
-      }
-      for (const row of rows) {
-        if (row.existing) {
-          if (row.existing.tombstone === true || row.existing.status === "removed") {
-            removedItems.push({ ...row.existing, _id: row.id });
-          } else {
-            existingItems.push({ ...row.existing, _id: row.id });
-          }
-          continue;
-        }
-        const data = {
-          ...row.item,
-          ownerUid: actor.id,
-          ownerActor: actor,
-          ownerDisplayName: getAdminDisplayName(actor, process.env),
-          createdAt: db.serverDate(),
-          updatedAt: db.serverDate(),
-        };
-        await row.ref.set({ data });
-        createdItems.push({ _id: row.id, ...data });
-      }
-    }, { required: true });
-  } catch (error) {
-    if (error.code) return failFromValidation(error);
-    throw error;
-  }
-
-  await Promise.all(createdItems.concat(existingItems).map((item) => writeAdminActivitySafe({
-    action: getUploadActivityAction(item.status),
-    targetType: "upload_job",
-    targetId: item._id,
-    title: item.title,
-    batchId: item.uploadBatchId,
-    mutationId: item.mutationId,
-    status: item.status,
-    imageCount: item.imageCount,
-  }, actor, `upload-register:${actor.id}:${item.mutationId}`)));
-  await Promise.all(removedItems.map((item) => writeAdminActivitySafe({
-    action: "upload_removed",
-    targetType: "upload_job",
-    targetId: item._id,
-    title: item.title,
-    batchId: item.uploadBatchId,
-    mutationId: item.mutationId,
-    status: "removed",
-    imageCount: item.imageCount,
-  }, actor, `upload-remove:${actor.id}:${item.mutationId}`)));
-
-  return ok({
-    registered: createdItems.length,
-    existing: existingItems.length,
-    removed: removedItems.length,
-    items: createdItems.concat(existingItems),
-  });
-}
-
-async function updateUploadItemStatus(event, actor) {
-  const actorError = requireWebActor(actor);
-  if (actorError) return actorError;
-  const mutation = normalizeClientMutationId(event.mutationId || event.clientMutationId);
-  if (!mutation.valid || !mutation.value) {
-    return failFromValidation(mutation.valid
-      ? { code: "MUTATION_ID_REQUIRED", message: "缺少上传任务编号" }
-      : mutation);
-  }
-  const nextStatus = normalizeUploadJobStatus(event.status);
-  if (!nextStatus) return fail("INVALID_UPLOAD_STATUS", "上传任务状态无效");
-  const id = getUploadJobDocumentId(actor, mutation.value);
-  let nextItem = null;
-  try {
-    await withTransaction(async (transaction) => {
-      const ref = transaction.collection(UPLOAD_JOB_COLLECTION).doc(id);
-      const current = await getDocumentOrNull(UPLOAD_JOB_COLLECTION, id, transaction);
-      if (!current) {
-        const error = new Error("上传任务不存在或已移除");
-        error.code = "UPLOAD_JOB_NOT_FOUND";
-        throw error;
-      }
-      if (trimText(current.ownerUid) !== actor.id) {
-        const error = new Error("只能更新自己创建的上传任务");
-        error.code = "UPLOAD_JOB_FORBIDDEN";
-        throw error;
-      }
-      if (current.tombstone === true || current.status === "removed") {
-        const error = new Error("上传任务已被移除");
-        error.code = "UPLOAD_JOB_REMOVED";
-        throw error;
-      }
-      if (!isAllowedUploadStatusTransition(current.status, nextStatus)) {
-        const error = new Error("上传任务状态变化无效，请刷新后重试");
-        error.code = "INVALID_UPLOAD_STATUS_TRANSITION";
-        throw error;
-      }
-      const patch = {
-        status: nextStatus,
-        updatedAt: db.serverDate(),
-      };
-      if (Object.prototype.hasOwnProperty.call(event, "title")) {
-        patch.title = (trimText(event.title) || current.title || "未命名案例").slice(0, 120);
-      }
-      if (Object.prototype.hasOwnProperty.call(event, "caseId")) {
-        patch.caseId = trimText(event.caseId).slice(0, 80);
-      }
-      if (Object.prototype.hasOwnProperty.call(event, "createdId")) {
-        patch.caseDocumentId = trimText(event.createdId).slice(0, 120);
-      }
-      if (Object.prototype.hasOwnProperty.call(event, "error")) {
-        patch.errorMessage = trimText(event.error).slice(0, 300);
-      }
-      await ref.update({ data: patch });
-      nextItem = { ...current, ...patch, _id: id };
-    }, { required: true });
-  } catch (error) {
-    if (error.code) return fail(error.code, error.message);
-    throw error;
-  }
-
-  await writeAdminActivitySafe({
-    action: getUploadActivityAction(nextStatus),
-    targetType: "upload_job",
-    targetId: id,
-    title: nextItem.title,
-    caseId: nextItem.caseId,
-    batchId: nextItem.uploadBatchId,
-    mutationId: nextItem.mutationId,
-    status: nextStatus,
-    imageCount: nextItem.imageCount,
-  }, actor, `upload-status:${actor.id}:${mutation.value}:${nextStatus}`);
-  return ok({ updated: 1, item: nextItem });
-}
-
-async function removeUploadItem(event, actor) {
-  const actorError = requireWebActor(actor);
-  if (actorError) return actorError;
-  const mutation = normalizeClientMutationId(event.mutationId || event.clientMutationId);
-  if (!mutation.valid || !mutation.value) {
-    return failFromValidation(mutation.valid
-      ? { code: "MUTATION_ID_REQUIRED", message: "缺少上传任务编号" }
-      : mutation);
-  }
-  const id = getUploadJobDocumentId(actor, mutation.value);
-  let removedItem = null;
-  let removed = 0;
-  try {
-    await withTransaction(async (transaction) => {
-      const ref = transaction.collection(UPLOAD_JOB_COLLECTION).doc(id);
-      const current = await getDocumentOrNull(UPLOAD_JOB_COLLECTION, id, transaction);
-      if (!current) {
-        const data = {
-          mutationId: mutation.value,
-          ownerUid: actor.id,
-          ownerActor: actor,
-          ownerDisplayName: getAdminDisplayName(actor, process.env),
-          title: "已移除的上传任务",
-          imageCount: 0,
-          status: "removed",
-          tombstone: true,
-          removedAt: db.serverDate(),
-          createdAt: db.serverDate(),
-          updatedAt: db.serverDate(),
-        };
-        removedItem = { ...data, _id: id };
-        removed = 1;
-        await ref.set({ data });
-        return;
-      }
-      if (trimText(current.ownerUid) !== actor.id) {
-        const error = new Error("只能移除自己创建的上传任务");
-        error.code = "UPLOAD_JOB_FORBIDDEN";
-        throw error;
-      }
-      if (current.tombstone === true || current.status === "removed") {
-        removedItem = { ...current, _id: id };
-        return;
-      }
-      if (!["waiting", "failed"].includes(current.status)) {
-        const error = new Error("只能移除等待中或失败的上传任务");
-        error.code = "UPLOAD_JOB_BUSY";
-        throw error;
-      }
-      const tombstone = {
-        ...current,
-        status: "removed",
-        tombstone: true,
-        removedAt: db.serverDate(),
-        updatedAt: db.serverDate(),
-      };
-      removedItem = { ...tombstone, _id: id };
-      removed = 1;
-      await ref.set({
-        data: tombstone,
-      });
-    }, { required: true });
-  } catch (error) {
-    if (error.code) return fail(error.code, error.message);
-    throw error;
-  }
-  await writeAdminActivitySafe({
-    action: "upload_removed",
-    targetType: "upload_job",
-    targetId: id,
-    title: removedItem.title,
-    batchId: removedItem.uploadBatchId,
-    mutationId: removedItem.mutationId,
-    status: removedItem.status,
-    imageCount: removedItem.imageCount,
-  }, actor, `upload-remove:${actor.id}:${mutation.value}`);
-  return ok({ removed, mutationId: mutation.value });
-}
-
-async function listSharedUploadItems(event, actor) {
-  const actorError = requireWebActor(actor);
-  if (actorError) return actorError;
-  await repairAdminActivityOutboxesSafe();
-  const limit = normalizeAdminListLimit(event.limit, ADMIN_RECORD_RETENTION_LIMIT);
-  const items = [];
-  let skip = 0;
-  while (items.length < limit) {
-    const response = await db.collection(UPLOAD_JOB_COLLECTION)
-      .orderBy("updatedAt", "desc")
-      .skip(skip)
-      .limit(CASE_SCAN_BATCH_SIZE)
-      .get();
-    const batch = response.data || [];
-    batch.forEach((item) => {
-      if (
-        items.length < limit
-        && item.tombstone !== true
-        && item.status !== "removed"
-      ) items.push(item);
-    });
-    if (batch.length < CASE_SCAN_BATCH_SIZE || items.length >= limit) break;
-    skip += batch.length;
-  }
-  return ok({
-    items,
-    limit,
-  });
-}
-
-async function listAdminActivity(event, actor) {
-  const actorError = requireWebActor(actor);
-  if (actorError) return actorError;
-  await repairAdminActivityOutboxesSafe();
-  const limit = normalizeAdminListLimit(event.limit, ADMIN_RECORD_RETENTION_LIMIT);
-  const response = await db
-    .collection(ACTIVITY_FEED_COLLECTION)
-    .where({ viewerUid: actor.id })
-    .orderBy("createdAt", "desc")
-    .limit(limit)
-    .get();
-  return ok({ items: response.data || [], limit });
-}
-
-async function completeUploadJobForCaseSafe(actor, mutationId, created, caseData) {
-  if (!isActivitySyncEnabled() || !actor || actor.type !== "cloudbase_uid") return;
-  const id = getUploadJobDocumentId(actor, mutationId);
-  try {
-    const current = await getDocumentOrNull(UPLOAD_JOB_COLLECTION, id);
-    if (
-      current
-      && trimText(current.ownerUid) === actor.id
-      && current.tombstone !== true
-      && current.status !== "removed"
-    ) {
-      const status = caseData.packageTypes
-        && Array.isArray(caseData.packageTypes.values)
-        && caseData.packageTypes.values.length
-        ? "done"
-        : "needs_tags";
-      await db.collection(UPLOAD_JOB_COLLECTION).doc(id).update({
-        data: {
-          status,
-          caseId: created.caseId,
-          caseDocumentId: created.id,
-          updatedAt: db.serverDate(),
-        },
-      });
-    }
-    await writeAdminActivitySafe({
-      action: "case_created",
-      targetType: "case",
-      targetId: created.id,
-      title: caseData.title,
-      caseId: created.caseId,
-      mutationId,
-      status: "done",
-      imageCount: Array.isArray(caseData.galleryImages) ? caseData.galleryImages.length : 0,
-    }, actor, `case-create:${created.id}:${created.version || 1}`);
-  } catch (error) {
-    console.warn("upload completion synchronization deferred", error);
-  }
-}
-
 async function findCaseByMutationId(clientMutationId) {
   if (!clientMutationId) return null;
   const response = await db
@@ -2086,14 +1490,6 @@ async function createCase(event, actor) {
         fallbackNumber: getCaseIdNumber(defaults.defaultCaseId),
         preserveSortOrder: Object.prototype.hasOwnProperty.call(input, "sortOrder"),
       });
-      if (!atomicResult.idempotentReplay) {
-        await completeUploadJobForCaseSafe(
-          actor,
-          mutationResult.value,
-          atomicResult,
-          result.data
-        );
-      }
       return ok(atomicResult);
     } catch (error) {
       console.error("atomic web case create error", error);
@@ -2127,19 +1523,6 @@ async function createCase(event, actor) {
     );
   }
   await bumpCatalogRevision();
-
-  await writeAdminActivitySafe({
-    action: "case_created",
-    targetType: "case",
-    targetId: response._id,
-    title: result.data.title,
-    caseId: result.data.caseId,
-    mutationId: mutationResult.value,
-    status: "done",
-    imageCount: Array.isArray(result.data.galleryImages)
-      ? result.data.galleryImages.length
-      : 0,
-  }, actor, `case-create:${response._id}:1`);
 
   return ok({
     id: response._id,
@@ -3047,13 +2430,6 @@ async function permanentlyDeleteCases(event, actor) {
   if (!job) return fail("PURGE_JOB_NOT_FOUND", "永久删除任务不存在");
   if (created) {
     await bumpCatalogRevision();
-    await Promise.all((job.caseSummaries || []).map((item) => writeAdminActivitySafe({
-      action: "case_permanently_deleted",
-      targetType: "case",
-      targetId: item.id,
-      title: item.title,
-      caseId: item.caseId,
-    }, actor, `case-purge:${jobId}:${item.id}`)));
   }
   try {
     return ok(await runPurgeCleanup(job));
@@ -3363,13 +2739,6 @@ async function moveCasesToTrash(event, actor) {
   );
   if (!applied.ok) return failFromValidation(applied.error);
   await bumpCatalogRevision();
-  await Promise.all(items.map((item) => writeAdminActivitySafe({
-    action: "case_moved_to_trash",
-    targetType: "case",
-    targetId: item._id,
-    title: item.title,
-    caseId: item.caseId,
-  }, actor, `case-trash:${item._id}:${applied.versions[item._id]}`)));
   return ok({
     moved: plans.length,
     ids: idsResult.ids,
@@ -3411,13 +2780,6 @@ async function restoreCases(event, actor) {
   );
   if (!applied.ok) return failFromValidation(applied.error);
   await bumpCatalogRevision();
-  await Promise.all(items.map((item) => writeAdminActivitySafe({
-    action: "case_restored",
-    targetType: "case",
-    targetId: item._id,
-    title: item.title,
-    caseId: item.caseId,
-  }, actor, `case-restore:${item._id}:${applied.versions[item._id]}`)));
   return ok({ restored: plans.length, ids: idsResult.ids, versions: applied.versions });
 }
 
@@ -3657,9 +3019,6 @@ exports.main = async (event = {}) => {
   ) {
     return fail("WEB_WRITE_DISABLED", "电脑后台当前为只读模式");
   }
-  if (ACTIVITY_SYNC_ACTIONS.has(action) && !isActivitySyncEnabled()) {
-    return fail("ACTIVITY_SYNC_DISABLED", "管理员实时同步功能尚未开启");
-  }
   if (PERMANENT_DELETE_ACTIONS.has(action) && !isPermanentDeleteEnabled()) {
     return fail("PERMANENT_DELETE_DISABLED", "回收站永久删除功能尚未开启");
   }
@@ -3689,15 +3048,6 @@ exports.main = async (event = {}) => {
     if (action === "listPendingPurgeJobs") {
       return await listPendingPurgeJobs(event, actor);
     }
-    if (action === "registerUploadItems") return await registerUploadItems(event, actor);
-    if (action === "updateUploadItemStatus") {
-      return await updateUploadItemStatus(event, actor);
-    }
-    if (action === "removeUploadItem") return await removeUploadItem(event, actor);
-    if (action === "listSharedUploadItems") {
-      return await listSharedUploadItems(event, actor);
-    }
-    if (action === "listAdminActivity") return await listAdminActivity(event, actor);
     if (action === "cleanupUnreferencedFiles") {
       return await cleanupUnreferencedFiles(event, actor);
     }

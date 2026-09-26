@@ -40,8 +40,6 @@ const {
   isWebAdminUploadFile,
   normalizeClientMutationId,
   normalizeCloudFileIds,
-  normalizeAdminListLimit,
-  normalizeUploadJobStatus,
   parseAdminDisplayNames,
   pickAllowedCaseFields,
   sanitizeCasePayload,
@@ -107,7 +105,7 @@ test("keeps the case-specific WeChat admin allowlist with legacy fallback", () =
   }), true);
 });
 
-test("parses administrator display names and upload synchronization values", () => {
+test("parses administrator display names", () => {
   assert.deepEqual(plain(parseAdminDisplayNames(
     '{"uid-mother":"sharky","uid-owner":"administrator","blank":""}'
   )), {
@@ -125,10 +123,6 @@ test("parses administrator display names and upload synchronization values", () 
     { type: "cloudbase_uid", id: "uid-mother" },
     { CASE_ADMIN_DISPLAY_NAMES: '{"uid-mother":"sharky"}' }
   ), "sharky");
-  assert.equal(normalizeUploadJobStatus(" PROCESSING "), "processing");
-  assert.equal(normalizeUploadJobStatus("unknown"), "");
-  assert.equal(normalizeAdminListLimit(500), 50);
-  assert.equal(normalizeAdminListLimit(0), 1);
 });
 
 test("validates web upload ownership and task ids", () => {
@@ -193,11 +187,6 @@ test("declares supported case admin actions", () => {
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("permanentlyDeleteCases"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("retryPurgeCleanup"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listPendingPurgeJobs"), true);
-  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("registerUploadItems"), true);
-  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("updateUploadItemStatus"), true);
-  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("removeUploadItem"), true);
-  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listSharedUploadItems"), true);
-  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listAdminActivity"), true);
 });
 
 test("accepts complete v2 image arrays and rejects incomplete banners", () => {

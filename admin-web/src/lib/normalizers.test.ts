@@ -87,12 +87,10 @@ describe("normalizers", () => {
     const config = normalizeAdminConfig({
       writeEnabled: false,
       permanentDeleteEnabled: true,
-      activitySyncEnabled: true,
       limits: { gallery: 6 },
     });
     expect(config.writeEnabled).toBe(false);
     expect(config.permanentDeleteEnabled).toBe(true);
-    expect(config.activitySyncEnabled).toBe(true);
     expect(config.limits.gallery).toBe(6);
     expect(config.limits.videoUploadBytes).toBe(100 * 1024 * 1024);
     expect(config.limits.videoDurationSeconds).toBe(120);
@@ -107,7 +105,6 @@ describe("normalizers", () => {
   it("keeps writes disabled when an old or partial response omits the flag", () => {
     expect(normalizeAdminConfig({}).writeEnabled).toBe(false);
     expect(normalizeAdminConfig({}).permanentDeleteEnabled).toBe(false);
-    expect(normalizeAdminConfig({}).activitySyncEnabled).toBe(false);
     expect(normalizeAdminConfig({ writeEnabled: true }).writeEnabled).toBe(true);
     expect(normalizeAdminConfig({
       features: { videoUploadEnabled: true, videoDisplayEnabled: true },

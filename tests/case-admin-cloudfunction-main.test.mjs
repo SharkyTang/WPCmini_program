@@ -138,8 +138,6 @@ function loadCaseAdminFunction(options = {}) {
     home_banners: clone(options.banners || []),
     catalog_meta: clone(options.catalogMeta || []),
     case_admin_purge_jobs: clone(options.purgeJobs || []),
-    case_admin_upload_jobs: clone(options.uploadJobs || []),
-    case_admin_activity_feed: clone(options.activityFeed || []),
     case_admin_video_upload_intents: clone(options.videoUploadIntents || []),
   };
 
@@ -397,7 +395,6 @@ function loadCaseAdminFunction(options = {}) {
         ADMIN_OPENIDS: options.adminOpenids || "admin_openid",
         CASE_ADMIN_UIDS: options.adminUids || "",
         ADMIN_WEB_WRITE_ENABLED: options.webWriteEnabled || "",
-        ADMIN_ACTIVITY_SYNC_ENABLED: options.activitySyncEnabled || "",
         ADMIN_PERMANENT_DELETE_ENABLED: options.permanentDeleteEnabled || "",
         CASE_ADMIN_DISPLAY_NAMES: options.adminDisplayNames || "",
         VIDEO_UPLOAD_ENABLED: options.videoUploadEnabled || "",
@@ -2254,22 +2251,19 @@ await test("reorderCases rolls back committed chunks after an unclassified trans
   );
 });
 
-await test("admin config exposes independent activity and permanent-delete feature gates", async () => {
+await test("admin config exposes the permanent-delete feature gate", async () => {
   const uid = "web-admin-1";
   const loaded = loadCaseAdminFunction({
     wxContext: {},
     userInfo: { uid, openId: "", isAnonymous: false },
     adminUids: `${uid},web-admin-2`,
     webWriteEnabled: "true",
-    activitySyncEnabled: "true",
     permanentDeleteEnabled: "true",
     adminDisplayNames: '{"web-admin-1":"administrator","web-admin-2":"sharky"}',
   });
   const result = await loaded.main({ action: "getAdminConfig" });
   assert.equal(result.ok, true);
-  assert.equal(result.config.activitySyncEnabled, true);
   assert.equal(result.config.permanentDeleteEnabled, true);
-  assert.equal(result.config.actorDisplayName, "administrator");
   assert.deepEqual(result.config.options.scenes, [
     "婚宴",
     "百日/满月",
@@ -2285,449 +2279,6 @@ await test("admin config exposes independent activity and permanent-delete featu
   ]);
 });
 
-await test("upload synchronization fans out sanitized activity and remains owner-operated", async () => {
-  const uid = "web-admin-1";
-  const loaded = loadCaseAdminFunction({
-    wxContext: {},
-    userInfo: { uid, openId: "", isAnonymous: false },
-    adminUids: `${uid},web-admin-2`,
-    webWriteEnabled: "true",
-    activitySyncEnabled: "true",
-    adminDisplayNames: '{"web-admin-1":"administrator","web-admin-2":"sharky"}',
-  });
-  const registered = await loaded.main({
-    action: "registerUploadItems",
-    items: [
-      {
-        mutationId: "upload-one",
-        uploadBatchId: "batch-one",
-        title: "婚宴案例",
-        imageCount: 2,
-        packageTypes: ["礼盒"],
-        scenes: ["婚宴"],
-        status: "waiting",
-      },
-      {
-        mutationId: "upload-two",
-        uploadBatchId: "batch-one",
-        title: "待移除案例",
-        imageCount: 1,
-        packageTypes: [],
-        scenes: [],
-        status: "waiting",
-      },
-    ],
-  });
-  assert.equal(registered.ok, true);
-  assert.equal(registered.registered, 2);
-  assert.equal(loaded.collections.case_admin_upload_jobs.length, 2);
-  assert.equal(loaded.collections.case_admin_activity_feed.length, 4);
-  assert.equal(
-    loaded.collections.case_admin_activity_feed.every(
-      (item) => !Object.keys(item).some((key) => /file|blob|url/i.test(key))
-    ),
-    true
-  );
-  assert.deepEqual(
-    loaded.collections.case_admin_upload_jobs[0].scenes,
-    ["婚宴"]
-  );
-
-  const replay = await loaded.main({
-    action: "registerUploadItems",
-    items: [{
-      mutationId: "upload-one",
-      uploadBatchId: "batch-one",
-      title: "婚宴案例",
-      imageCount: 2,
-      packageTypes: ["礼盒"],
-      scenes: ["婚宴"],
-      status: "waiting",
-    }],
-  });
-  assert.equal(replay.registered, 0);
-  assert.equal(replay.existing, 1);
-  assert.equal(loaded.collections.case_admin_activity_feed.length, 4);
-
-  const updated = await loaded.main({
-    action: "updateUploadItemStatus",
-    mutationId: "upload-one",
-    status: "uploading",
-  });
-  assert.equal(updated.ok, true);
-  assert.equal(updated.item.status, "uploading");
-  assert.equal(loaded.collections.case_admin_activity_feed.length, 6);
-
-  const busyRemoval = await loaded.main({
-    action: "removeUploadItem",
-    mutationId: "upload-one",
-  });
-  assert.equal(busyRemoval.code, "UPLOAD_JOB_BUSY");
-  const removed = await loaded.main({
-    action: "removeUploadItem",
-    mutationId: "upload-two",
-  });
-  assert.equal(removed.ok, true);
-  assert.equal(loaded.collections.case_admin_upload_jobs.length, 2);
-  assert.equal(
-    loaded.collections.case_admin_upload_jobs.find(
-      (item) => item.mutationId === "upload-two"
-    ).tombstone,
-    true
-  );
-
-  const lateRegister = await loaded.main({
-    action: "registerUploadItems",
-    items: [{
-      mutationId: "upload-two",
-      uploadBatchId: "batch-one",
-      title: "迟到的登记",
-      imageCount: 1,
-      packageTypes: [],
-      scenes: [],
-      status: "waiting",
-    }],
-  });
-  assert.equal(lateRegister.registered, 0);
-  assert.equal(lateRegister.existing, 0);
-  assert.equal(lateRegister.removed, 1);
-
-  const removeBeforeRegister = await loaded.main({
-    action: "removeUploadItem",
-    mutationId: "remove-before-register",
-  });
-  assert.equal(removeBeforeRegister.ok, true);
-  const blockedLateRegister = await loaded.main({
-    action: "registerUploadItems",
-    items: [{
-      mutationId: "remove-before-register",
-      uploadBatchId: "batch-one",
-      title: "不应重建",
-      imageCount: 1,
-      packageTypes: [],
-      scenes: [],
-      status: "waiting",
-    }],
-  });
-  assert.equal(blockedLateRegister.removed, 1);
-  assert.equal((await loaded.main({
-    action: "updateUploadItemStatus",
-    mutationId: "remove-before-register",
-    status: "uploading",
-  })).code, "UPLOAD_JOB_REMOVED");
-
-  assert.equal((await loaded.main({
-    action: "updateUploadItemStatus",
-    mutationId: "upload-one",
-    status: "creating",
-  })).ok, true);
-  assert.equal((await loaded.main({
-    action: "updateUploadItemStatus",
-    mutationId: "upload-one",
-    status: "processing",
-  })).code, "INVALID_UPLOAD_STATUS_TRANSITION");
-  assert.equal((await loaded.main({
-    action: "updateUploadItemStatus",
-    mutationId: "upload-one",
-    status: "failed",
-  })).ok, true);
-  assert.equal((await loaded.main({
-    action: "updateUploadItemStatus",
-    mutationId: "upload-one",
-    status: "processing",
-  })).ok, true);
-  assert.equal((await loaded.main({
-    action: "updateUploadItemStatus",
-    mutationId: "upload-one",
-    status: "done",
-  })).ok, true);
-  assert.equal((await loaded.main({
-    action: "updateUploadItemStatus",
-    mutationId: "upload-one",
-    status: "failed",
-  })).code, "INVALID_UPLOAD_STATUS_TRANSITION");
-
-  const shared = await loaded.main({ action: "listSharedUploadItems", limit: 50 });
-  const activity = await loaded.main({ action: "listAdminActivity", limit: 50 });
-  assert.equal(shared.items.length, 1);
-  assert.equal(activity.items.every((item) => item.viewerUid === uid), true);
-  assert.equal(activity.items.some((item) => item.action === "upload_removed"), true);
-});
-
-await test("shared upload listing scans past tombstones without returning them", async () => {
-  const uid = "web-admin-1";
-  const tombstones = Array.from({ length: 120 }, (_, index) => ({
-    _id: `upload-0${String(index).padStart(3, "0")}`,
-    mutationId: `removed-${index}`,
-    ownerUid: uid,
-    status: "removed",
-    tombstone: true,
-    updatedAt: "2099-01-01T00:00:00.000Z",
-  }));
-  const active = Array.from({ length: 60 }, (_, index) => ({
-    // The ten newest rows deliberately sort after the old rows by _id. A hash
-    // cursor that fills the limit first would miss them.
-    _id: index >= 50
-      ? `upload-z${String(index).padStart(3, "0")}`
-      : `upload-b${String(index).padStart(3, "0")}`,
-    mutationId: `active-${index}`,
-    ownerUid: uid,
-    status: index % 2 ? "processing" : "waiting",
-    updatedAt: new Date(Date.UTC(
-      2026,
-      index >= 50 ? 7 : 0,
-      1,
-      0,
-      index
-    )).toISOString(),
-  }));
-  const loaded = loadCaseAdminFunction({
-    wxContext: {},
-    userInfo: { uid, openId: "", isAnonymous: false },
-    adminUids: uid,
-    webWriteEnabled: "true",
-    activitySyncEnabled: "true",
-    uploadJobs: tombstones.concat(active),
-  });
-  const result = await loaded.main({ action: "listSharedUploadItems", limit: 50 });
-  assert.equal(result.ok, true);
-  assert.equal(result.items.length, 50);
-  assert.equal(result.items[0].mutationId, "active-59");
-  assert.equal(result.items.some((item) => item.mutationId === "active-50"), true);
-  assert.equal(result.items.some((item) => item.mutationId === "active-0"), false);
-  assert.equal(
-    result.items.some((item) => item.tombstone === true || item.status === "removed"),
-    false
-  );
-  assert.equal(
-    loaded.calls.some(
-      (call) => call.collectionName === "case_admin_upload_jobs"
-        && call.type === "skip"
-        && call.value === 100
-    ),
-    true
-  );
-});
-
-await test("activity fanout repairs missing viewer copies on idempotent replays", async () => {
-  const uid = "web-admin-1";
-  let failSecondViewerOnce = true;
-  const loaded = loadCaseAdminFunction({
-    wxContext: {},
-    userInfo: { uid, openId: "", isAnonymous: false },
-    adminUids: `${uid},web-admin-2`,
-    webWriteEnabled: "true",
-    activitySyncEnabled: "true",
-    documentSetHook({ collectionName, payload }) {
-      if (
-        failSecondViewerOnce
-        && collectionName === "case_admin_activity_feed"
-        && payload.data.viewerUid === "web-admin-2"
-      ) {
-        failSecondViewerOnce = false;
-        throw new Error("single viewer write failed");
-      }
-    },
-  });
-  const registration = {
-    action: "registerUploadItems",
-    items: [{
-      mutationId: "fanout-repair",
-      uploadBatchId: "batch-fanout",
-      title: "动态修复",
-      imageCount: 1,
-      packageTypes: [],
-      scenes: [],
-      status: "waiting",
-    }],
-  };
-  assert.equal((await loaded.main(registration)).ok, true);
-  assert.equal(loaded.collections.case_admin_activity_feed.length, 2);
-  assert.equal(
-    loaded.collections.case_admin_activity_feed.some(
-      (item) => item.viewerUid === "__server_outbox__" && item.serverOutbox === true
-    ),
-    true
-  );
-  const replay = await loaded.main(registration);
-  assert.equal(replay.ok, true);
-  assert.equal(replay.existing, 1);
-  assert.equal(loaded.collections.case_admin_activity_feed.length, 2);
-
-  const statusEvent = {
-    action: "updateUploadItemStatus",
-    mutationId: "fanout-repair",
-    status: "uploading",
-  };
-  assert.equal((await loaded.main(statusEvent)).ok, true);
-  const missingIndex = loaded.collections.case_admin_activity_feed.findIndex(
-    (item) => item.action === "upload_started" && item.viewerUid === "web-admin-2"
-  );
-  assert.notEqual(missingIndex, -1);
-  loaded.collections.case_admin_activity_feed.splice(missingIndex, 1);
-  assert.equal((await loaded.main(statusEvent)).ok, true);
-  const uploadStarted = loaded.collections.case_admin_activity_feed.filter(
-    (item) => item.action === "upload_started"
-  );
-  assert.equal(uploadStarted.length, 2);
-  assert.equal(new Set(uploadStarted.map((item) => item.viewerUid)).size, 2);
-});
-
-await test("server case mutations create deterministic shared activities", async () => {
-  const uid = "web-admin-1";
-  const source = `cloud://env/wine-packaging/admin-web/${uid}/batch-live/source.jpg`;
-  const loaded = loadCaseAdminFunction({
-    wxContext: {},
-    userInfo: { uid, openId: "", isAnonymous: false },
-    adminUids: `${uid},web-admin-2`,
-    webWriteEnabled: "true",
-    activitySyncEnabled: "true",
-    catalogMeta: [{ _id: "current", revision: 1, nextCaseNumber: 1 }],
-  });
-  await loaded.main({
-    action: "registerUploadItems",
-    items: [{
-      mutationId: "live-task",
-      uploadBatchId: "batch-live",
-      title: "同步案例",
-      imageCount: 1,
-      packageTypes: [],
-      scenes: ["送礼"],
-      status: "waiting",
-    }],
-  });
-  const created = await loaded.main({
-    action: "createCase",
-    clientMutationId: "live-task",
-    uploadBatchId: "batch-live",
-    case: {
-      title: "同步案例",
-      packageTypes: [],
-      scenes: ["送礼"],
-      ...buildVariantSet(source),
-      isVisible: false,
-    },
-  });
-  assert.equal(created.ok, true);
-  assert.equal(loaded.collections.case_admin_upload_jobs[0].status, "needs_tags");
-  assert.equal(
-    loaded.collections.case_admin_activity_feed.filter(
-      (item) => item.action === "case_created"
-    ).length,
-    2
-  );
-
-  const moved = await loaded.main({
-    action: "moveCasesToTrash",
-    ids: [created.id],
-    expectedVersions: { [created.id]: 1 },
-  });
-  const restored = await loaded.main({
-    action: "restoreCases",
-    ids: [created.id],
-    expectedVersions: { [created.id]: moved.versions[created.id] },
-  });
-  assert.equal(restored.ok, true);
-  const actions = loaded.collections.case_admin_activity_feed.map((item) => item.action);
-  assert.equal(actions.includes("case_moved_to_trash"), true);
-  assert.equal(actions.includes("case_restored"), true);
-});
-
-await test("case activity outbox repairs partial fanout from both polling endpoints", async () => {
-  const uid = "web-admin-1";
-  let failAction = "case_moved_to_trash";
-  const loaded = loadCaseAdminFunction({
-    wxContext: {},
-    userInfo: { uid, openId: "", isAnonymous: false },
-    adminUids: `${uid},web-admin-2`,
-    webWriteEnabled: "true",
-    activitySyncEnabled: "true",
-    cases: [{
-      _id: "case-outbox",
-      title: "案例动态补偿",
-      caseId: "case_906",
-      packageTypes: { values: ["礼盒"] },
-      isVisible: false,
-      version: 1,
-    }],
-    documentSetHook({ collectionName, payload }) {
-      if (
-        failAction
-        && collectionName === "case_admin_activity_feed"
-        && payload.data.viewerUid === "web-admin-2"
-        && payload.data.action === failAction
-      ) {
-        failAction = "";
-        throw new Error("viewer copy temporarily unavailable");
-      }
-    },
-  });
-  const moved = await loaded.main({
-    action: "moveCasesToTrash",
-    ids: ["case-outbox"],
-    expectedVersions: { "case-outbox": 1 },
-  });
-  assert.equal(moved.ok, true);
-  const firstOutbox = loaded.collections.case_admin_activity_feed.find(
-    (item) => item.viewerUid === "__server_outbox__"
-  );
-  assert.equal(firstOutbox.serverOutbox, true);
-  assert.equal(
-    Object.keys(firstOutbox).some((key) => /file|blob|url/i.test(key)),
-    false
-  );
-  assert.equal(JSON.stringify(firstOutbox).includes("cloud://"), false);
-
-  assert.equal((await loaded.main({
-    action: "listSharedUploadItems",
-    limit: 50,
-  })).ok, true);
-  assert.equal(
-    loaded.collections.case_admin_activity_feed.some(
-      (item) => item.viewerUid === "__server_outbox__"
-    ),
-    false
-  );
-  assert.equal(
-    loaded.collections.case_admin_activity_feed.filter(
-      (item) => item.action === "case_moved_to_trash"
-    ).length,
-    2
-  );
-
-  failAction = "case_restored";
-  const restored = await loaded.main({
-    action: "restoreCases",
-    ids: ["case-outbox"],
-    expectedVersions: { "case-outbox": moved.versions["case-outbox"] },
-  });
-  assert.equal(restored.ok, true);
-  assert.equal(
-    loaded.collections.case_admin_activity_feed.some(
-      (item) => item.viewerUid === "__server_outbox__"
-    ),
-    true
-  );
-  const activity = await loaded.main({ action: "listAdminActivity", limit: 50 });
-  assert.equal(activity.ok, true);
-  assert.equal(
-    loaded.collections.case_admin_activity_feed.some(
-      (item) => item.viewerUid === "__server_outbox__"
-    ),
-    false
-  );
-  for (const action of ["case_moved_to_trash", "case_restored"]) {
-    const copies = loaded.collections.case_admin_activity_feed.filter(
-      (item) => item.action === action
-    );
-    assert.equal(copies.length, 2);
-    assert.equal(new Set(copies.map((item) => item.viewerUid)).size, 2);
-  }
-  await loaded.main({ action: "listSharedUploadItems", limit: 50 });
-  await loaded.main({ action: "listAdminActivity", limit: 50 });
-  assert.equal(loaded.collections.case_admin_activity_feed.length, 4);
-});
-
 await test("permanent delete prevalidates the full batch and safely removes only unreferenced files", async () => {
   const uid = "web-admin-1";
   const unused = "cloud://env/wine-packaging/admin-web/old/batch/unused.jpg";
@@ -2738,7 +2289,6 @@ await test("permanent delete prevalidates the full batch and safely removes only
     userInfo: { uid, openId: "", isAnonymous: false },
     adminUids: `${uid},web-admin-2`,
     webWriteEnabled: "true",
-    activitySyncEnabled: "true",
     permanentDeleteEnabled: "true",
     cases: [
       {
@@ -2792,13 +2342,6 @@ await test("permanent delete prevalidates the full batch and safely removes only
     ).status,
     "idle"
   );
-  assert.equal(
-    loaded.collections.case_admin_activity_feed.filter(
-      (item) => item.action === "case_permanently_deleted"
-    ).length,
-    2
-  );
-
   const replay = await loaded.main(event);
   assert.equal(replay.ok, true);
   assert.equal(replay.deletedFileCount, 1);
@@ -3538,7 +3081,7 @@ await test("a cleanup retry fails closed when another purge owns the global guar
   );
 });
 
-await test("new feature actions honor web-only access, write gate and their independent switches", async () => {
+await test("permanent delete honors web-only access and its feature switch", async () => {
   const uid = "web-admin-1";
   const disabled = loadCaseAdminFunction({
     wxContext: {},
@@ -3546,7 +3089,6 @@ await test("new feature actions honor web-only access, write gate and their inde
     adminUids: uid,
     webWriteEnabled: "true",
   });
-  assert.equal((await disabled.main({ action: "listAdminActivity" })).code, "ACTIVITY_SYNC_DISABLED");
   assert.equal((await disabled.main({
     action: "permanentlyDeleteCases",
     ids: ["x"],
@@ -3560,13 +3102,8 @@ await test("new feature actions honor web-only access, write gate and their inde
     wxContext: {},
     userInfo: { uid, openId: "", isAnonymous: false },
     adminUids: uid,
-    activitySyncEnabled: "true",
     permanentDeleteEnabled: "true",
   });
-  assert.equal((await readOnly.main({
-    action: "registerUploadItems",
-    items: [],
-  })).code, "WEB_WRITE_DISABLED");
   assert.equal((await readOnly.main({
     action: "retryPurgeCleanup",
     jobId: `purge_${"a".repeat(40)}`,
