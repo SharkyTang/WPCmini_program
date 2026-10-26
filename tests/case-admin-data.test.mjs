@@ -39,17 +39,29 @@ const appJsonPath = resolve(__dirname, "../miniprogram/miniprogram/app.json");
 const caseAdminData = loadCommonJsModule(caseAdminDataPath, {
   "../../../utils/caseData": caseData,
 });
+const notificationCaseAdminDataPath = resolve(
+  __dirname,
+  "../miniprogram/miniprogram/pages/notification-cases/utils/caseAdminData.js"
+);
+const notificationCaseAdminData = loadCommonJsModule(notificationCaseAdminDataPath, {
+  "../../../utils/caseData": caseData,
+});
 
 const {
   CASE_ADMIN_GALLERY_MAX,
+  CASE_ADMIN_VIDEO_DEFAULT_LIMITS,
   CASE_ADMIN_FORM_OPTIONS,
   buildCaseAdminPayload,
   buildCaseAdminOptionViews,
+  buildCaseAdminVideoPatch,
   buildCaseKeywords,
   createEmptyCaseForm,
   isCloudFileId,
+  normalizeCaseAdminItem,
   normalizeCaseAdminForm,
   normalizeCaseAdminHomepageDisplayItem,
+  validateCaseAdminVideoPosterSelection,
+  validateCaseAdminVideoSelection,
   validateCaseAdminForm,
 } = caseAdminData;
 
@@ -74,6 +86,7 @@ test("creates hidden empty case form defaults", () => {
   assert.equal(form.isVisible, false);
   assert.equal(form.sortOrder, "");
   assert.deepEqual(plain(form.packageTypes), []);
+  assert.deepEqual(plain(form.scenes), []);
   assert.deepEqual(plain(form.statuses), []);
   assert.deepEqual(plain(form.homeSections), []);
   assert.deepEqual(plain(form.galleryImages), []);
@@ -93,7 +106,19 @@ test("exposes case admin form options by field key", () => {
   ]);
   assert.ok(CASE_ADMIN_FORM_OPTIONS.styles.options.includes("国风"));
   assert.ok(CASE_ADMIN_FORM_OPTIONS.priceLevel.options.includes("品质款"));
-  assert.ok(CASE_ADMIN_FORM_OPTIONS.scenes.options.includes("送礼"));
+  assert.deepEqual(plain(CASE_ADMIN_FORM_OPTIONS.scenes.options), [
+    "婚宴",
+    "百日/满月",
+    "生日宴",
+    "寿宴",
+    "乔迁宴",
+    "送礼",
+    "商务招待",
+    "节庆礼赠",
+    "企业纪念",
+    "商超陈列",
+    "电商展示",
+  ]);
   assert.deepEqual(plain(CASE_ADMIN_FORM_OPTIONS.statuses.options), ["热门产品", "最新产品"]);
   assert.equal(CASE_ADMIN_FORM_OPTIONS.statuses.options.includes("推荐"), false);
   assert.deepEqual(
@@ -145,6 +170,38 @@ test("builds selected option view models for case admin form chips", () => {
   assert.equal(findOption("statuses", "热门产品").selected, true);
   assert.equal(findOption("homeSections", "popular").selected, true);
   assert.equal(findOption("homeSections", "popular").label, "热门产品显示");
+});
+
+test("case admin scene chips use display labels and save internal values", () => {
+  const optionViews = buildCaseAdminOptionViews({ scenes: ["婚宴"] });
+  const wedding = optionViews.scenes.find((option) => option.value === "婚宴");
+  const payload = buildCaseAdminPayload({
+    title: "喜宴礼盒",
+    coverImage: "cloud://cloud1/file.jpg",
+    packageTypes: ["礼盒"],
+    scenes: ["婚宴"],
+  });
+
+  assert.deepEqual(plain(wedding), {
+    value: "婚宴",
+    label: "婚宴/喜宴",
+    selected: true,
+  });
+  assert.deepEqual(plain(payload.scenes), { values: ["婚宴"] });
+  assert.equal(payload.keywords.values.includes("婚宴"), true);
+  assert.equal(payload.keywords.values.includes("婚宴/喜宴"), false);
+});
+
+test("notification case admin duplicate uses the same scene catalog and labels", () => {
+  assert.deepEqual(
+    plain(notificationCaseAdminData.CASE_ADMIN_FORM_OPTIONS.scenes.options),
+    plain(CASE_ADMIN_FORM_OPTIONS.scenes.options)
+  );
+  const wedding = notificationCaseAdminData
+    .buildCaseAdminOptionViews({ scenes: ["婚宴"] })
+    .scenes.find((option) => option.value === "婚宴");
+  assert.equal(wedding.label, "婚宴/喜宴");
+  assert.equal(wedding.value, "婚宴");
 });
 
 test("keeps the database document id for editable homepage cases", () => {
@@ -270,4 +327,127 @@ test("builds database payload with json value fields and leaves blank sort order
   assert.deepEqual(plain(payload.packageTypes), { values: ["整套包装"] });
   assert.deepEqual(plain(payload.homeSections), { values: [] });
   assert.deepEqual(plain(payload.keywords.values), ["测试案例", "白酒", "整套包装"]);
+});
+
+test("accepts the exact mobile video limits and rounds duration up", () => {
+  const result = validateCaseAdminVideoSelection(
+    {
+      tempFilePath: "/tmp/case-video.mp4",
+      size: 100 * 1024 * 1024,
+      mimeType: "video/mp4",
+    },
+    { duration: 119.2, width: 1920, height: 1080 },
+    CASE_ADMIN_VIDEO_DEFAULT_LIMITS
+  );
+
+  assert.equal(result.valid, true);
+  assert.equal(result.data.durationSeconds, 120);
+  assert.equal(result.data.size, 104857600);
+});
+
+test("rejects oversized, overlong, non-MP4, wrong MIME and 4K videos", () => {
+  const validFile = {
+    tempFilePath: "/tmp/case-video.mp4",
+    size: 104857600,
+    mimeType: "video/mp4",
+  };
+  const validMetadata = { duration: 120, width: 1080, height: 1920 };
+
+  assert.equal(
+    validateCaseAdminVideoSelection(
+      { ...validFile, size: 104857601 },
+      validMetadata
+    ).message,
+    "视频不能超过 100MB"
+  );
+  assert.equal(
+    validateCaseAdminVideoSelection(validFile, {
+      ...validMetadata,
+      duration: 120.01,
+    }).message,
+    "视频不能超过 120 秒"
+  );
+  assert.equal(
+    validateCaseAdminVideoSelection(
+      { ...validFile, tempFilePath: "/tmp/case-video.mov" },
+      validMetadata
+    ).message,
+    "请选择 MP4 格式的视频"
+  );
+  assert.equal(
+    validateCaseAdminVideoSelection(
+      { ...validFile, mimeType: "video/quicktime" },
+      validMetadata
+    ).message,
+    "视频文件类型必须为 MP4"
+  );
+  assert.equal(
+    validateCaseAdminVideoSelection(validFile, {
+      ...validMetadata,
+      width: 3840,
+      height: 2160,
+    }).message,
+    "视频分辨率不能超过 1080p"
+  );
+});
+
+test("validates optional poster type and five megabyte limit", () => {
+  const accepted = validateCaseAdminVideoPosterSelection({
+    tempFilePath: "/tmp/poster.webp",
+    size: 5 * 1024 * 1024,
+    mimeType: "image/webp",
+  });
+  const oversized = validateCaseAdminVideoPosterSelection({
+    tempFilePath: "/tmp/poster.png",
+    size: 5 * 1024 * 1024 + 1,
+    mimeType: "image/png",
+  });
+
+  assert.equal(accepted.valid, true);
+  assert.equal(oversized.valid, false);
+  assert.equal(oversized.message, "视频封面不能超过 5MB");
+});
+
+test("builds atomic upload, external and clear video patches only when dirty", () => {
+  const unchanged = buildCaseAdminVideoPatch({ dirty: false });
+  const upload = buildCaseAdminVideoPatch({
+    dirty: true,
+    source: "upload",
+    draft: {
+      uploadFileID: "cloud://env/wine-packaging/videos/video.mp4",
+      uploadDurationSeconds: 62,
+      uploadPosterFileID: "cloud://env/wine-packaging/videos/poster.webp",
+    },
+  });
+  const external = buildCaseAdminVideoPatch({
+    dirty: true,
+    source: "external",
+    draft: {
+      externalUrl: "https://cdn.example.com/video.mp4",
+      externalPosterUrl: "https://cdn.example.com/poster.jpg",
+      externalDurationSeconds: "88",
+    },
+  });
+  const cleared = buildCaseAdminVideoPatch({ dirty: true, removed: true });
+
+  assert.equal(unchanged.patch, null);
+  assert.deepEqual(plain(upload.patch), {
+    mode: "upload",
+    fileID: "cloud://env/wine-packaging/videos/video.mp4",
+    durationSeconds: 62,
+    posterFileID: "cloud://env/wine-packaging/videos/poster.webp",
+  });
+  assert.deepEqual(plain(external.patch), {
+    mode: "external",
+    url: "https://cdn.example.com/video.mp4",
+    durationSeconds: 88,
+    posterUrl: "https://cdn.example.com/poster.jpg",
+  });
+  assert.deepEqual(plain(cleared.patch), { mode: "clear" });
+});
+
+test("normalizes legacy cases without a version to the backend version baseline", () => {
+  assert.equal(normalizeCaseAdminItem({ _id: "legacy" }).version, 1);
+  assert.equal(normalizeCaseAdminItem({ _id: "current", version: "7" }).version, 7);
+  assert.equal(normalizeCaseAdminItem({ _id: "invalid", version: 0 }).version, 1);
 });

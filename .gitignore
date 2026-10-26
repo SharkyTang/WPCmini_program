@@ -2,8 +2,10 @@
 .case-variant-backfill.json
 .case-variant-v2-backfill.json
 .env.local
+.env.inquiry.local
 node_modules/
 export/
 optimized-images/
 tmp/
 backups/
+codex-daily-brief-*.md

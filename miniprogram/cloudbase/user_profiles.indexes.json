@@ -1,0 +1,14 @@
+{
+  "user_profiles": [
+    {
+      "name": "openid_1_unique",
+      "unique": true,
+      "fields": [
+        {
+          "field": "openid",
+          "order": "asc"
+        }
+      ]
+    }
+  ]
+}

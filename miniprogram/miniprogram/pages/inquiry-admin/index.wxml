@@ -12,6 +12,25 @@
   </view>
 
   <block wx:else>
+    <view wx:if="{{hasSummary}}" class="summary-grid">
+      <view class="summary-card summary-card-primary">
+        <view class="summary-value">{{summary.newCount}}</view>
+        <view class="summary-label">新需求</view>
+      </view>
+      <view class="summary-card">
+        <view class="summary-value">{{summary.unclaimedCount === null ? '-' : summary.unclaimedCount}}</view>
+        <view class="summary-label">未认领</view>
+      </view>
+      <view class="summary-card">
+        <view class="summary-value">{{summary.mineCount}}</view>
+        <view class="summary-label">我跟进</view>
+      </view>
+    </view>
+    <view wx:if="{{summary.emailAlertHasIssue}}" class="alert-banner">
+      邮件提醒有异常，请检查通知配置或任务状态。
+    </view>
+    <view wx:if="{{summaryErrorMessage}}" class="summary-error">{{summaryErrorMessage}}</view>
+
     <scroll-view class="status-scroll" scroll-x>
       <view class="status-row">
         <view
@@ -26,10 +45,23 @@
       </view>
     </scroll-view>
 
+    <view class="claim-filter-row">
+      <view
+        wx:for="{{claimFilterOptions}}"
+        wx:key="value"
+        class="claim-filter {{activeClaimFilter === item.value ? 'claim-filter-active' : ''}}"
+        data-filter="{{item.value}}"
+        bindtap="selectClaimFilter"
+      >
+        {{item.label}}
+      </view>
+    </view>
+
     <view class="search-card">
       <input
         class="search-input"
         value="{{keyword}}"
+        maxlength="80"
         placeholder="搜索联系方式、案例编号、标题、说明"
         confirm-type="search"
         bindinput="onKeywordInput"
@@ -61,11 +93,18 @@
         bindtap="openDetail"
       >
         <view class="card-top">
-          <view class="status-badge status-{{item.status}}">{{item.statusLabel}}</view>
+          <view class="badge-row">
+            <view class="status-badge status-{{item.status}}">{{item.statusLabel}}</view>
+            <view class="claim-badge claim-{{item.claimState}}">{{item.claimLabel}}</view>
+            <view wx:if="{{item.notificationFailed}}" class="warning-badge">{{item.notificationLabel}}</view>
+          </view>
           <view class="created-time">{{item.createdAtText}}</view>
         </view>
         <view class="contact-label">客户联系方式 · {{item.contactTypeLabel}}</view>
         <view class="contact-line">{{item.contact || '未填写'}}</view>
+        <view wx:if="{{item.contactTypeNeedsConfirmation}}" class="legacy-warning">
+          旧数据推断待确认
+        </view>
         <view class="meta-grid">
           <view class="meta-item">包装 · {{item.packageSummary || '未选择'}}</view>
           <view class="meta-item">风格 · {{item.styleSummary || '未选择'}}</view>
@@ -77,9 +116,16 @@
           参考案例：{{item.caseId || '-'}} {{item.caseTitle}}
         </view>
         <view class="content-preview">{{item.contentPreview || '无补充说明'}}</view>
+        <view wx:if="{{item.lastReply}}" class="last-reply">
+          最近回复：{{item.lastReply.contentPreview || '已回复'}}
+        </view>
       </view>
       <view wx:if="{{loadingMore}}" class="list-tip">正在加载更多...</view>
       <view wx:elif="{{!hasMore}}" class="list-tip">已显示全部需求</view>
+    </view>
+
+    <view wx:if="{{lastRefreshedAtText}}" class="refresh-tip">
+      页面可见时每 30 秒自动更新 · {{lastRefreshedAtText}}
     </view>
   </block>
 </view>

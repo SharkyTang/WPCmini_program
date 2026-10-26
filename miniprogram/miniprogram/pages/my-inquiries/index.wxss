@@ -1,0 +1,50 @@
+page {
+  min-height: 100%;
+  background: #f5efe4;
+  color: #241d16;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+}
+
+.page {
+  min-height: 100vh;
+  padding: 58rpx 30rpx 90rpx;
+  box-sizing: border-box;
+}
+
+.hero { margin-bottom: 26rpx; }
+.page-title { font-size: 44rpx; line-height: 1.2; font-weight: 800; }
+.page-subtitle { margin-top: 10rpx; color: #766b60; font-size: 25rpx; }
+.unread-summary { margin-top: 16rpx; color: #9a6125; font-size: 22rpx; font-weight: 700; }
+
+.state-card,
+.card {
+  border: 2rpx solid rgba(223, 207, 183, 0.86);
+  border-radius: 8rpx;
+  background: #fffdf8;
+  box-shadow: 0 10rpx 24rpx rgba(72, 49, 25, 0.07);
+  box-sizing: border-box;
+}
+
+.state-card { padding: 44rpx 28rpx; color: #766b60; text-align: center; }
+.state-title { color: #241d16; font-size: 29rpx; font-weight: 800; }
+.state-text { margin-top: 10rpx; font-size: 23rpx; line-height: 1.55; }
+.state-action { margin: 24rpx auto 0; width: 230rpx; height: 68rpx; border-radius: 34rpx; background: #241d16; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 24rpx; font-weight: 800; }
+
+.list { display: flex; flex-direction: column; gap: 18rpx; }
+.card { position: relative; padding: 24rpx; overflow: hidden; }
+.card:active { opacity: 0.86; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
+.status { height: 44rpx; padding: 0 16rpx; border-radius: 22rpx; background: #b77a2d; color: #fff; display: flex; align-items: center; font-size: 21rpx; font-weight: 800; }
+.status-contacted { background: #2d7253; }
+.status-processing { background: #2d7253; }
+.status-done { background: #8c8176; }
+.status-invalid { background: #9d2b22; }
+.created-at { color: #8c8176; font-size: 21rpx; }
+.card-title { margin-top: 18rpx; font-size: 29rpx; line-height: 1.4; font-weight: 800; }
+.card-content { margin-top: 8rpx; color: #766b60; font-size: 23rpx; line-height: 1.5; }
+.reply-preview { margin-top: 18rpx; padding: 18rpx; border-radius: 8rpx; background: #e8f2eb; }
+.reply-label { color: #2d7253; font-size: 20rpx; font-weight: 800; }
+.reply-content { margin-top: 6rpx; color: #241d16; font-size: 23rpx; line-height: 1.5; }
+.unread-badge { position: absolute; top: 70rpx; right: 22rpx; min-width: 34rpx; height: 34rpx; padding: 0 8rpx; border-radius: 17rpx; background: #c0392b; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 18rpx; font-weight: 800; box-sizing: border-box; }
+.card-foot { margin-top: 18rpx; color: #9a6125; font-size: 22rpx; font-weight: 700; text-align: right; }
+.list-tip { padding: 20rpx 0 4rpx; color: #8c8176; font-size: 22rpx; text-align: center; }

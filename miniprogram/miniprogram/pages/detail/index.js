@@ -4,7 +4,15 @@ const {
   fetchCaseDetailPatch,
   isLegacyCatalogFallbackAllowed,
 } = require("../../utils/caseCatalogService");
-const { formatJoined } = require("../../utils/caseData");
+const caseData = require("../../utils/caseData");
+const { formatJoined } = caseData;
+const getSceneLabels = caseData.getSceneLabels || ((values) => values || []);
+const normalizeHttpsMediaUrl = caseData.normalizeHttpsMediaUrl || ((value) => {
+  const url = String(value || "").trim();
+  if (!url || url.length > 2048 || /\s/.test(url)) return "";
+  const match = /^https:\/\/([^/?#]+)(?:[/?#]|$)/i.exec(url);
+  return match && !match[1].includes("@") ? url : "";
+});
 const {
   CUSTOMER_SERVICE_SOURCE,
   buildCustomerMessageCard,
@@ -25,6 +33,11 @@ const {
   reportClientFault,
   reportPerformanceEvent,
 } = require("../../utils/errorTelemetry");
+const {
+  beginPageLoading,
+  finishPageLoading,
+  cancelPageLoading,
+} = require("../../utils/nativePageLoading");
 
 function reportDetailFault(stage, error, options = {}) {
   return reportClientFault({
@@ -48,7 +61,7 @@ function buildInfoRows(caseItem) {
     },
     {
       label: "适用场景",
-      value: formatJoined(caseItem.scenes),
+      value: formatJoined(getSceneLabels(caseItem.scenes)),
     },
     {
       label: "价位感",
@@ -63,19 +76,6 @@ function buildInfoRows(caseItem) {
       value: formatJoined(caseItem.wineType),
     },
   ];
-}
-
-function buildDetailHeading(caseItem) {
-  const packageLabel = caseItem.packageTypes && caseItem.packageTypes[0];
-  const wineLabel = caseItem.wineType || "白酒";
-  return `${packageLabel || caseItem.title} · ${wineLabel}品牌视觉组合`;
-}
-
-function buildDetailSubtitle(caseItem) {
-  return formatJoined(
-    [caseItem.wineType, ...(caseItem.packageTypes || []), ...(caseItem.styles || [])].filter(Boolean),
-    "酒包装设计参考"
-  );
 }
 
 function buildGalleryItems(caseItem = {}) {
@@ -105,6 +105,54 @@ function buildGalleryItems(caseItem = {}) {
     }));
 }
 
+function stripLegacyFallbackVideo(caseItem = {}) {
+  const safeCaseItem = { ...caseItem };
+  [
+    "videoFileID",
+    "videoUrl",
+    "videoPosterFileID",
+    "videoPoster",
+    "videoDurationSeconds",
+    "videoFileSizeBytes",
+    "videoPreviewUrl",
+    "videoPosterPreviewUrl",
+  ].forEach((field) => {
+    delete safeCaseItem[field];
+  });
+  return safeCaseItem;
+}
+
+function formatVideoDuration(value) {
+  const durationSeconds = Number(value);
+  if (!Number.isSafeInteger(durationSeconds) || durationSeconds <= 0) return "";
+  const hours = Math.floor(durationSeconds / 3600);
+  const minutes = Math.floor((durationSeconds % 3600) / 60);
+  const seconds = durationSeconds % 60;
+  if (hours) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function buildCaseVideo(caseItem = {}, galleryItems = []) {
+  const src = normalizeHttpsMediaUrl(caseItem.videoUrl);
+  if (!src) return null;
+  const firstImage = galleryItems[0] || {};
+  const poster =
+    normalizeHttpsMediaUrl(caseItem.videoPoster)
+    || firstImage.heroUrl
+    || firstImage.displayUrl
+    || firstImage.renderUrl
+    || firstImage.thumbnailUrl
+    || "";
+  const durationText = formatVideoDuration(caseItem.videoDurationSeconds);
+  return {
+    src,
+    poster,
+    durationText,
+  };
+}
+
 function buildCaseView(caseItem = {}) {
   return {
     id: caseItem.id || caseItem._id || "",
@@ -115,7 +163,13 @@ function buildCaseView(caseItem = {}) {
     styles: caseItem.styles || [],
     priceLevel: caseItem.priceLevel || "",
     scenes: caseItem.scenes || [],
-    notes: caseItem.notes || "",
+    videoUrl: normalizeHttpsMediaUrl(caseItem.videoUrl),
+    videoPoster: normalizeHttpsMediaUrl(caseItem.videoPoster),
+    videoDurationSeconds:
+      Number.isSafeInteger(Number(caseItem.videoDurationSeconds))
+      && Number(caseItem.videoDurationSeconds) > 0
+        ? Number(caseItem.videoDurationSeconds)
+        : null,
   };
 }
 
@@ -202,14 +256,14 @@ Page({
     errorCanRetry: false,
     caseItem: null,
     infoRows: [],
-    detailHeading: "",
-    detailSubtitle: "",
     favorite: null,
     isFavorited: false,
     favoriteLoading: false,
     galleryItems: [],
     currentImageIndex: 0,
     currentImageUrl: "",
+    caseVideo: null,
+    videoFailed: false,
     customerServiceMessageCardEnabled: false,
     customerServiceMessageTitle: "",
     customerServiceMessagePath: "",
@@ -227,6 +281,8 @@ Page({
     this._favoriteStateVersion = 0;
     this._caseItem = null;
     this._caseId = "";
+    this._detailLoadingRecord = null;
+    this._detailAwaitingHeroRequestId = 0;
     this._detailStartedAt = Date.now();
     void this.loadCase(options.id);
   },
@@ -236,8 +292,15 @@ Page({
     return this.resumePendingFavoriteAction();
   },
 
+  onHide() {
+    this.pauseCaseVideo();
+    this.cancelDetailEntryLoading();
+  },
+
   onUnload() {
+    this.pauseCaseVideo();
     this._alive = false;
+    this.cancelDetailEntryLoading();
     cancelCaseLoading(this);
     this._favoriteStateVersion = (this._favoriteStateVersion || 0) + 1;
     this._galleryPatchPromises = new Map();
@@ -269,20 +332,20 @@ Page({
   },
 
   async loadCase(id) {
+    if (this._alive === undefined) this._alive = true;
+    if (!this._galleryPatchPromises) this._galleryPatchPromises = new Map();
+    const requestId = beginCaseLoading(this);
+    this.beginDetailEntryLoading(requestId);
     if (!id) {
-      cancelCaseLoading(this);
       safeSetData(this, {
         loading: false,
         renderPhase: "error",
         errorMessage: "没有找到这个案例的 ID。",
         errorCanRetry: false,
-      });
+      }, () => this.finishDetailEntryLoading(requestId));
       return false;
     }
 
-    if (this._alive === undefined) this._alive = true;
-    if (!this._galleryPatchPromises) this._galleryPatchPromises = new Map();
-    const requestId = beginCaseLoading(this);
     this._favoriteStateVersion = (this._favoriteStateVersion || 0) + 1;
     safeSetData(this, {
       loading: true,
@@ -309,10 +372,13 @@ Page({
           fallbackUsed: true,
         });
         console.warn("详情聚合接口不可用，使用兼容读取", catalogError);
-        caseItem = await fetchCaseById(decodedId);
+        caseItem = stripLegacyFallbackVideo(await fetchCaseById(decodedId));
       }
       if (!canCommitCase(this, requestId)) return false;
       const galleryItems = buildGalleryItems(caseItem);
+      if (galleryItems[0]) {
+        galleryItems[0].entryLoadRequestId = requestId;
+      }
       const customerServiceMessageCard = buildCustomerMessageCard({
         caseItem,
         imageUrl: galleryItems[0]
@@ -320,7 +386,11 @@ Page({
           : "",
       });
       const caseView = buildCaseView(caseItem);
+      const caseVideo = buildCaseVideo(caseItem, galleryItems);
       this._caseItem = caseItem;
+      this._detailAwaitingHeroRequestId = galleryItems[0] && galleryItems[0].renderUrl
+        ? requestId
+        : 0;
       let deferredStarted = false;
       const startDeferredWork = () => {
         if (deferredStarted || !canCommitCase(this, requestId)) return;
@@ -338,13 +408,13 @@ Page({
         errorCanRetry: false,
         caseItem: caseView,
         infoRows: buildInfoRows(caseItem),
-        detailHeading: buildDetailHeading(caseItem),
-        detailSubtitle: buildDetailSubtitle(caseItem),
         galleryItems,
         currentImageIndex: 0,
         currentImageUrl: galleryItems[0]
           ? galleryItems[0].displayUrl || galleryItems[0].heroUrl || galleryItems[0].renderUrl
           : "",
+        caseVideo,
+        videoFailed: false,
         customerServiceMessageCardEnabled: customerServiceMessageCard.enabled,
         customerServiceMessageTitle: customerServiceMessageCard.title,
         customerServiceMessagePath: customerServiceMessageCard.path,
@@ -353,7 +423,12 @@ Page({
           source: CUSTOMER_SERVICE_SOURCE.DETAIL,
           caseItem,
         }),
-      }, startDeferredWork);
+      }, () => {
+        startDeferredWork();
+        if (!this._detailAwaitingHeroRequestId) {
+          this.finishDetailEntryLoading(requestId);
+        }
+      });
       return true;
     } catch (error) {
       if (!canCommitCase(this, requestId)) return false;
@@ -367,10 +442,46 @@ Page({
         renderPhase: "error",
         errorMessage: "暂时读取不到这个案例，请返回后重试。",
         errorCanRetry: true,
-      });
+      }, () => this.finishDetailEntryLoading(requestId));
       this.reportDetailReady("error");
       return false;
     }
+  },
+
+  beginDetailEntryLoading(requestId) {
+    if (!isPageAlive(this)) return null;
+    this.cancelDetailEntryLoading();
+    const token = beginPageLoading({
+      owner: "detail-entry",
+      title: "加载中",
+      mask: false,
+      delayMs: 120,
+      minVisibleMs: 300,
+      maxVisibleMs: 3000,
+    });
+    this._detailLoadingRecord = { requestId, token, finished: false };
+    return token;
+  },
+
+  finishDetailEntryLoading(requestId) {
+    const record = this._detailLoadingRecord;
+    if (!record || record.requestId !== requestId) return false;
+    if (record.finished) return false;
+    record.finished = true;
+    if (this._detailAwaitingHeroRequestId === requestId) {
+      this._detailAwaitingHeroRequestId = 0;
+    }
+    return finishPageLoading(record.token);
+  },
+
+  cancelDetailEntryLoading() {
+    const record = this._detailLoadingRecord;
+    if (!record) return false;
+    this._detailLoadingRecord = null;
+    if (this._detailAwaitingHeroRequestId === record.requestId) {
+      this._detailAwaitingHeroRequestId = 0;
+    }
+    return cancelPageLoading(record.token);
   },
 
   retryLoadCase() {
@@ -757,7 +868,22 @@ Page({
 
   onHeroImageError(event) {
     const index = Number(event && event.currentTarget && event.currentTarget.dataset.index);
+    const detailLoadRequestId = Number(
+      event && event.currentTarget && event.currentTarget.dataset.detailLoadRequestId
+    );
     if (!Number.isInteger(index)) return;
+    if (
+      index === 0
+      && detailLoadRequestId
+      && detailLoadRequestId !== this._activeCaseLoadRequestId
+    ) return;
+    if (
+      index === 0
+      && detailLoadRequestId
+      && detailLoadRequestId === this._detailAwaitingHeroRequestId
+    ) {
+      this.finishDetailEntryLoading(detailLoadRequestId);
+    }
     const current = this.data.galleryItems[index];
     if (!current) return;
     const originalUrl = current.renderUrl;
@@ -788,6 +914,52 @@ Page({
         : item
     );
     safeSetData(this, { galleryItems: failedItems });
+  },
+
+  onHeroImageLoad(event) {
+    const index = Number(event && event.currentTarget && event.currentTarget.dataset.index);
+    const detailLoadRequestId = Number(
+      event && event.currentTarget && event.currentTarget.dataset.detailLoadRequestId
+    );
+    if (
+      index !== 0
+      || !detailLoadRequestId
+      || detailLoadRequestId !== this._detailAwaitingHeroRequestId
+    ) return;
+    this.finishDetailEntryLoading(detailLoadRequestId);
+  },
+
+  pauseCaseVideo() {
+    if (!this.data.caseVideo || typeof wx.createVideoContext !== "function") return false;
+    try {
+      const videoContext = wx.createVideoContext("case-video", this);
+      if (!videoContext || typeof videoContext.pause !== "function") return false;
+      videoContext.pause();
+      return true;
+    } catch (error) {
+      console.warn("案例视频暂停失败", error);
+      return false;
+    }
+  },
+
+  onVideoError() {
+    if (!isPageAlive(this) || !this.data.caseVideo) return;
+    safeSetData(this, { videoFailed: true });
+    reportClientFault({
+      type: "media_error",
+      route: "pages/detail/index",
+      stage: "video_playback_error",
+      action: "play_case_video",
+      requestKind: "native_video",
+      cacheState: "none",
+      fallbackUsed: true,
+      error: new Error("detail_video_playback_failed"),
+    });
+  },
+
+  retryVideo() {
+    if (!isPageAlive(this) || !this.data.caseVideo) return;
+    safeSetData(this, { videoFailed: false });
   },
 
   handleContact(event) {

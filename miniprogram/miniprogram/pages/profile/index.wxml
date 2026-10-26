@@ -6,7 +6,15 @@
 
   <view class="user-card" bindtap="openProfileEditor">
     <view class="avatar">
-      <image wx:if="{{profileInfo.avatarUrl}}" class="avatar-image" src="{{profileInfo.avatarUrl}}" mode="aspectFill" />
+      <image
+        wx:if="{{profileInfo.avatarUrl}}"
+        class="avatar-image"
+        src="{{profileInfo.avatarUrl}}"
+        mode="aspectFill"
+        data-url="{{profileInfo.avatarUrl}}"
+        bindload="onProfileAvatarLoad"
+        binderror="onProfileAvatarError"
+      />
       <block wx:else>
         <view class="avatar-head"></view>
         <view class="avatar-body"></view>
@@ -32,6 +40,7 @@
         <view wx:else class="quick-item" data-key="{{item.key}}" bindtap="handleQuickAction">
           <image class="quick-icon-image" src="{{item.iconSrc}}" mode="aspectFit" />
           <view class="quick-title">{{item.title}}</view>
+          <view wx:if="{{item.key === 'notice' && myInquiryUnreadCount}}" class="quick-badge">{{myInquiryUnreadLabel}}</view>
         </view>
       </block>
     </view>
@@ -49,7 +58,14 @@
       </view>
     </view>
     <view class="inquiry-entry" bindtap="openInquiryForm">提交定制需求</view>
-    <view wx:if="{{hasInquiryAdminAccess}}" class="inquiry-admin-entry" bindtap="openInquiryAdmin">需求管理</view>
+    <view class="inquiry-admin-entry badge-entry" bindtap="openMyInquiries">
+      我的需求
+      <view wx:if="{{myInquiryUnreadCount}}" class="entry-badge">{{myInquiryUnreadLabel}}</view>
+    </view>
+    <view wx:if="{{hasInquiryAdminAccess}}" class="inquiry-admin-entry badge-entry" bindtap="openInquiryAdmin">
+      需求管理
+      <view wx:if="{{adminNewInquiryCount}}" class="entry-badge">{{adminNewInquiryLabel}}</view>
+    </view>
     <view wx:if="{{hasCaseAdminAccess}}" class="inquiry-admin-entry" bindtap="openCaseAdmin">案例管理</view>
     <view wx:if="{{hasNotificationAdminAccess}}" class="inquiry-admin-entry" bindtap="openNotificationAdmin">通知管理</view>
   </view>

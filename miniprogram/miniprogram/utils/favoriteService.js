@@ -198,9 +198,14 @@ async function toggleFavorite(caseItem, currentFavorite) {
   if (currentFavorite && currentFavorite._id) {
     const removed = await removeFavorite(currentFavorite._id);
     if (!removed) {
-      const error = new Error("收藏删除结果未生效");
-      error.code = "FAVORITE_REMOVE_NOT_APPLIED";
-      throw error;
+      const remainingFavorite = await fetchFavoriteForCase(caseItem, {
+        silentIdentity: true,
+      });
+      if (remainingFavorite) {
+        const error = new Error("收藏删除结果未生效");
+        error.code = "FAVORITE_REMOVE_NOT_APPLIED";
+        throw error;
+      }
     }
     return {
       isFavorited: false,

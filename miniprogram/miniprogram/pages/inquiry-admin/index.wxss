@@ -28,6 +28,59 @@ page {
   line-height: 1.45;
 }
 
+.summary-grid {
+  margin-bottom: 20rpx;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14rpx;
+}
+
+.summary-card {
+  padding: 20rpx 14rpx;
+  border: 2rpx solid var(--brand-line);
+  border-radius: 8rpx;
+  background: var(--brand-surface);
+  text-align: center;
+}
+
+.summary-card-primary {
+  border-color: var(--brand-gold);
+  background: var(--brand-gold-soft);
+}
+
+.summary-value {
+  color: var(--brand-ink);
+  font-size: 36rpx;
+  line-height: 1.1;
+  font-weight: 800;
+}
+
+.summary-label {
+  margin-top: 8rpx;
+  color: var(--brand-muted);
+  font-size: 21rpx;
+}
+
+.alert-banner,
+.summary-error {
+  margin-bottom: 18rpx;
+  padding: 18rpx 22rpx;
+  border-radius: 8rpx;
+  font-size: 22rpx;
+  line-height: 1.45;
+}
+
+.alert-banner {
+  border: 2rpx solid #d68b7d;
+  background: #fff1ed;
+  color: var(--brand-red);
+}
+
+.summary-error {
+  background: #f5ecdf;
+  color: #80531f;
+}
+
 .status-scroll {
   width: 100%;
   white-space: nowrap;
@@ -37,6 +90,30 @@ page {
   display: inline-flex;
   gap: 14rpx;
   padding-bottom: 18rpx;
+}
+
+.claim-filter-row {
+  margin: 0 0 18rpx;
+  display: flex;
+  gap: 12rpx;
+}
+
+.claim-filter {
+  min-height: 52rpx;
+  padding: 0 20rpx;
+  border-radius: 26rpx;
+  background: #eee6dc;
+  color: var(--brand-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.claim-filter-active {
+  background: var(--brand-green-soft);
+  color: var(--brand-green);
 }
 
 .status-pill {
@@ -170,9 +247,16 @@ page {
 
 .card-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16rpx;
+}
+
+.badge-row {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx;
 }
 
 .status-badge {
@@ -185,6 +269,37 @@ page {
   align-items: center;
   font-size: 21rpx;
   font-weight: 800;
+}
+
+.claim-badge,
+.warning-badge {
+  min-height: 42rpx;
+  padding: 0 14rpx;
+  border-radius: 21rpx;
+  display: flex;
+  align-items: center;
+  font-size: 19rpx;
+  font-weight: 800;
+}
+
+.claim-unclaimed {
+  background: #f4e8d6;
+  color: #9a6125;
+}
+
+.claim-claimed {
+  background: #ece8e3;
+  color: #766b60;
+}
+
+.claim-mine {
+  background: var(--brand-green-soft);
+  color: var(--brand-green);
+}
+
+.warning-badge {
+  background: #fff1ed;
+  color: var(--brand-red);
 }
 
 .status-new {
@@ -229,6 +344,13 @@ page {
   word-break: break-all;
 }
 
+.legacy-warning {
+  margin-top: 10rpx;
+  color: #a66018;
+  font-size: 21rpx;
+  font-weight: 700;
+}
+
 .meta-grid {
   margin-top: 18rpx;
   display: grid;
@@ -262,9 +384,26 @@ page {
   color: #241d16;
 }
 
+.last-reply {
+  margin-top: 14rpx;
+  padding: 14rpx 16rpx;
+  border-radius: 6rpx;
+  background: var(--brand-green-soft);
+  color: var(--brand-green);
+  font-size: 21rpx;
+  line-height: 1.45;
+}
+
 .list-tip {
   padding: 20rpx 0 6rpx;
   color: #8c8176;
   font-size: 22rpx;
+  text-align: center;
+}
+
+.refresh-tip {
+  padding: 26rpx 0 4rpx;
+  color: #a3978a;
+  font-size: 20rpx;
   text-align: center;
 }

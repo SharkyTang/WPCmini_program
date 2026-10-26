@@ -6,6 +6,7 @@ import {
   createCaseId,
   createEmptyRecord,
   ensureUniqueIds,
+  getSceneLabel,
   isSupportedImageFile,
   sanitizeRecord,
   setSingleValue,
@@ -35,6 +36,7 @@ assert.equal(record.uploadFileName, "case_001.jpg");
 assert.equal(record.originalFileName, "IMG_8237.png");
 assert.equal(record.originalSizeKB, 8300);
 assert.equal(record.wineType, "白酒");
+assert.deepEqual(record.scenes, []);
 assert.deepEqual(validateRecord(record), ["缺包装内容"]);
 assert.equal(CLASSIFICATION_CONFIG.wineType.label, "酒类");
 assert.equal(CLASSIFICATION_CONFIG.packageTypes.label, "包装");
@@ -43,6 +45,22 @@ assert.equal(CLASSIFICATION_CONFIG.scenes.label, "场景");
 assert.deepEqual(CLASSIFICATION_CONFIG.packageTypes.options, ["整套包装", "瓶标", "瓶子", "礼盒", "桶盒", "卡盒", "手提袋", "外箱"]);
 assert.deepEqual(CLASSIFICATION_CONFIG.priceLevel.options, ["基础款", "品质款", "高端款", "珍藏款"]);
 assert.deepEqual(CLASSIFICATION_CONFIG.styles.options, ["轻奢", "国风", "新中式", "复古", "简约", "商务", "时尚", "喜庆"]);
+assert.deepEqual(CLASSIFICATION_CONFIG.scenes.options, [
+  "婚宴",
+  "百日/满月",
+  "生日宴",
+  "寿宴",
+  "乔迁宴",
+  "送礼",
+  "商务招待",
+  "节庆礼赠",
+  "企业纪念",
+  "商超陈列",
+  "电商展示"
+]);
+assert.equal(getSceneLabel("婚宴"), "婚宴/喜宴");
+assert.equal(getSceneLabel("喜宴"), "婚宴/喜宴");
+assert.equal(getSceneLabel("寿宴"), "寿宴");
 assert.equal(CLASSIFICATION_CONFIG.styles.options.includes("高端"), false);
 assert.equal(CLASSIFICATION_CONFIG.styles.options.includes("国潮"), false);
 assert.equal(Object.hasOwn(CLASSIFICATION_CONFIG, "crafts"), false);
@@ -52,6 +70,24 @@ assert.equal(CLASSIFICATION_CONFIG.statuses.options.includes("新上传"), false
 
 let minimalTagged = toggleMultiValue(record, "packageTypes", "礼盒");
 assert.deepEqual(validateRecord(minimalTagged), []);
+
+const weddingTagged = toggleMultiValue(minimalTagged, "scenes", "婚宴/喜宴");
+assert.deepEqual(weddingTagged.scenes, ["婚宴"]);
+assert.deepEqual(buildExportRecord(weddingTagged).scenes, ["婚宴"]);
+assert.equal(buildKeywords(weddingTagged).includes("婚宴"), true);
+assert.equal(buildKeywords(weddingTagged).includes("婚宴/喜宴"), false);
+
+const addedSceneValues = ["百日/满月", "生日宴", "寿宴", "乔迁宴"];
+const addedScenesTagged = addedSceneValues.reduce(
+  (nextRecord, scene) => toggleMultiValue(nextRecord, "scenes", scene),
+  minimalTagged
+);
+assert.deepEqual(addedScenesTagged.scenes, addedSceneValues);
+assert.deepEqual(buildExportRecord(addedScenesTagged).scenes, addedSceneValues);
+assert.deepEqual(
+  buildKeywords(addedScenesTagged).filter((keyword) => addedSceneValues.includes(keyword)),
+  addedSceneValues
+);
 
 let tagged = { ...minimalTagged, title: "" };
 tagged = toggleMultiValue(tagged, "packageTypes", "礼盒");

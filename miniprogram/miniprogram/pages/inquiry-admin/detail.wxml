@@ -37,61 +37,114 @@
         </picker>
       </view>
 
+      <view class="claim-panel claim-panel-{{item.claimState}}">
+        <view>
+          <view class="claim-label">跟进人</view>
+          <view class="claim-value">{{item.claimLabel}}</view>
+          <view wx:if="{{item.claim.claimedAtText}}" class="claim-time">{{item.claim.claimedAtText}}</view>
+        </view>
+        <view class="claim-button {{savingClaim ? 'action-disabled' : ''}}" bindtap="handleClaimTap">
+          {{savingClaim ? '处理中...' : (item.claim.isMine ? '已由我跟进' : (item.claim.isClaimed ? '接手跟进' : '认领需求'))}}
+        </view>
+      </view>
+
       <view class="contact-card">
         <view class="contact-label">客户联系方式 · {{item.contactTypeLabel}}</view>
         <view class="contact-value">{{item.contact || '未填写'}}</view>
         <view class="contact-meta">来源：{{item.sourceLabel}}</view>
+        <view wx:if="{{item.contactTypeSourceLabel}}" class="contact-source {{item.contactTypeNeedsCorrection ? 'contact-source-warning' : ''}}">
+          {{item.contactTypeSourceLabel}}
+        </view>
       </view>
-      <view class="copy-button" bindtap="copyContact">{{item.contactCopyLabel}}</view>
+      <view class="contact-actions">
+        <view class="copy-button" bindtap="copyContact">{{item.contactCopyLabel}}</view>
+        <picker
+          range="{{contactTypeOptions}}"
+          range-key="label"
+          value="{{contactTypeIndex}}"
+          bindchange="onContactTypeChange"
+          disabled="{{correctingContactType}}"
+        >
+          <view class="outline-button">
+            {{correctingContactType ? '确认中...' : (item.contactTypeNeedsCorrection ? '标注联系类型' : '修正联系类型')}}
+          </view>
+        </picker>
+      </view>
+      <view wx:if="{{item.contactTypeNeedsConfirmation}}" class="legacy-contact-warning">
+        该联系方式类型由旧数据推断，请对照内容确认后再联系客户。
+      </view>
+    </view>
+
+    <view class="section reply-section">
+      <view class="section-kicker">CUSTOMER REPLY</view>
+      <view class="section-title">回复客户</view>
+      <view class="section-description">以下内容对客户可见，与内部备注分开保存。</view>
+      <scroll-view class="quick-reply-scroll" scroll-x>
+        <view class="quick-reply-row">
+          <view
+            wx:for="{{quickReplyOptions}}"
+            wx:key="id"
+            class="quick-reply"
+            data-index="{{index}}"
+            bindtap="selectQuickReply"
+          >
+            {{item.label}}
+          </view>
+        </view>
+      </scroll-view>
+      <textarea
+        class="reply-input"
+        value="{{replyContent}}"
+        maxlength="300"
+        placeholder="填写回复，例如：已经添加您微信好友了，麻烦留意好友申请。"
+        bindinput="onReplyInput"
+      />
+      <view class="note-count">{{replyLength}} / 300</view>
+      <view class="save-button {{sendingReply ? 'save-button-disabled' : ''}}" bindtap="sendReply">
+        {{sendingReply ? '发送中...' : '发送回复'}}
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-kicker">HISTORY</view>
+      <view class="section-title">跟进时间线</view>
+      <view wx:if="{{!timeline.length}}" class="section-description">暂无跟进记录</view>
+      <view wx:else class="timeline">
+        <view wx:for="{{timeline}}" wx:key="id" class="timeline-item timeline-{{item.type}}">
+          <view class="timeline-dot"></view>
+          <view class="timeline-body">
+            <view class="timeline-title">{{item.title}}</view>
+            <view wx:if="{{item.content}}" class="timeline-content">{{item.content}}</view>
+            <view class="timeline-time">{{item.createdAtText}}</view>
+          </view>
+        </view>
+      </view>
     </view>
 
     <view class="section">
       <view class="section-kicker">REQUEST</view>
       <view class="section-title">需求信息</view>
-      <view class="info-row">
-        <view class="info-label">来源</view>
-        <view class="info-value">{{item.sourceLabel}}</view>
-      </view>
-      <view class="info-row">
-        <view class="info-label">酒类</view>
-        <view class="info-value">{{item.wineType || '未选择'}}</view>
-      </view>
-      <view class="info-row">
-        <view class="info-label">包装内容</view>
-        <view class="info-value">{{item.packageSummary || '未选择'}}</view>
-      </view>
-      <view class="info-row">
-        <view class="info-label">风格</view>
-        <view class="info-value">{{item.styleSummary || '未选择'}}</view>
-      </view>
-      <view class="info-row">
-        <view class="info-label">价位感</view>
-        <view class="info-value">{{item.priceLevel || '未选择'}}</view>
-      </view>
-      <view class="info-row">
-        <view class="info-label">使用场景</view>
-        <view class="info-value">{{item.sceneSummary || '未选择'}}</view>
-      </view>
+      <view class="info-row"><view class="info-label">来源</view><view class="info-value">{{item.sourceLabel}}</view></view>
+      <view class="info-row"><view class="info-label">酒类</view><view class="info-value">{{item.wineType || '未选择'}}</view></view>
+      <view class="info-row"><view class="info-label">包装内容</view><view class="info-value">{{item.packageSummary || '未选择'}}</view></view>
+      <view class="info-row"><view class="info-label">风格</view><view class="info-value">{{item.styleSummary || '未选择'}}</view></view>
+      <view class="info-row"><view class="info-label">价位感</view><view class="info-value">{{item.priceLevel || '未选择'}}</view></view>
+      <view class="info-row"><view class="info-label">使用场景</view><view class="info-value">{{item.sceneSummary || '未选择'}}</view></view>
       <view class="content-box">{{item.content || '无补充说明'}}</view>
     </view>
 
     <view wx:if="{{item.caseDocId || item.caseId || item.caseTitle}}" class="section">
       <view class="section-kicker">REFERENCE</view>
       <view class="section-title">参考案例</view>
-      <view class="info-row">
-        <view class="info-label">案例编号</view>
-        <view class="info-value">{{item.caseId || '-'}}</view>
-      </view>
-      <view class="info-row">
-        <view class="info-label">案例标题</view>
-        <view class="info-value">{{item.caseTitle || '-'}}</view>
-      </view>
-      <view class="outline-button" bindtap="goToCaseDetail">查看参考案例</view>
+      <view class="info-row"><view class="info-label">案例编号</view><view class="info-value">{{item.caseId || '-'}}</view></view>
+      <view class="info-row"><view class="info-label">案例标题</view><view class="info-value">{{item.caseTitle || '-'}}</view></view>
+      <view class="outline-button standalone-button" bindtap="goToCaseDetail">查看参考案例</view>
     </view>
 
-    <view class="section">
-      <view class="section-kicker">ADMIN NOTE</view>
+    <view class="section admin-note-section">
+      <view class="section-kicker">ADMIN NOTE · INTERNAL ONLY</view>
       <view class="section-title">管理员备注</view>
+      <view class="section-description">仅管理员可见，不会发送给客户。</view>
       <textarea
         class="note-input"
         value="{{adminNote}}"

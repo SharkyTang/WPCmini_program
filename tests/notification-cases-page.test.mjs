@@ -18,7 +18,7 @@ const editWxmlPath = resolve(
   "../miniprogram/miniprogram/pages/notification-admin/edit.wxml"
 );
 
-function loadPage() {
+function loadPage(options = {}) {
   let page;
   const calls = { toasts: [], navigations: [] };
   const sandbox = {
@@ -29,7 +29,7 @@ function loadPage() {
       if (moduleName === "./utils/caseAdminService") {
         return {
           fetchRecentCaseAdminList: async () => ({
-            items: [],
+            items: options.recentItems || [],
             page: 1,
             hasMore: false,
           }),
@@ -39,13 +39,21 @@ function loadPage() {
         return {
           fetchPublishedLinkedCases: async () => ({
             announcement: { title: "产品上新" },
-            items: [],
+            items: options.publishedItems || [],
             unavailableCount: 0,
           }),
         };
       }
       if (moduleName === "../../utils/caseData") {
-        return { normalizeCaseRecord: (item) => ({ ...item, id: item._id, tags: [] }) };
+        return {
+          normalizeCaseRecord: (item) => ({
+            ...item,
+            id: item._id,
+            tags: item.tags || [],
+            scenes: item.scenes || [],
+          }),
+          getSceneLabel: (value) => (value === "婚宴" ? "婚宴/喜宴" : value),
+        };
       }
       if (moduleName === "../../utils/cloudData") {
         return { attachCaseImageUrls: async (items) => items };
@@ -117,4 +125,25 @@ await test("view mode opens the selected case detail", () => {
   page.setData({ mode: "view" });
   page.handleCardTap({ currentTarget: { dataset: { id: "case_doc_1" } } });
   assert.deepEqual(calls.navigations, ["/pages/detail/index?id=case_doc_1"]);
+});
+
+await test("notification case cards display the wedding alias", async () => {
+  const { page } = loadPage({
+    publishedItems: [
+      {
+        _id: "wedding_case",
+        title: "喜宴礼盒",
+        tags: ["婚宴"],
+        scenes: ["婚宴"],
+      },
+    ],
+  });
+
+  await page.loadPublishedCases("announcement_1");
+  assert.equal(page.data.cards[0].tagSummary, "婚宴/喜宴");
+  assert.equal(page.data.cards[0].sceneSummary, "婚宴/喜宴");
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(page.data.cards[0].scenes)),
+    ["婚宴"]
+  );
 });

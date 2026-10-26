@@ -27,13 +27,24 @@
           mode="aspectFill"
           src="{{item.renderImageUrl}}"
           bindload="onBannerImageLoad"
+          binderror="onBannerImageError"
           data-index="{{bannerIndex}}"
+          data-banner-id="{{item.id}}"
+          data-url="{{item.renderImageUrl}}"
+          data-media-epoch="{{item.mediaEpoch}}"
           lazy-load
         ></image>
+        <view
+          wx:elif="{{item.imageLoadState == 'failed'}}"
+          class="banner-image banner-placeholder image-retry-placeholder"
+          catchtap="retryHomeImages"
+          aria-role="button"
+          aria-label="图片加载失败，点击重试"
+        >图片加载失败，点击重试</view>
         <view wx:else class="banner-image banner-placeholder"></view>
         <view
           class="banner-title"
-          wx:if="{{item.title && bannerIndex == activeBannerIndex}}"
+          wx:if="{{item.title && item.imageLoadState != 'failed' && bannerIndex == activeBannerIndex}}"
         >{{item.title}}</view>
       </view>
     </swiper-item>
@@ -73,6 +84,7 @@
         <view wx:if="{{popularCases.length}}" class="product-grid">
           <view
             wx:for="{{popularCases}}"
+            wx:for-index="productIndex"
             wx:key="id"
             class="product-card"
             bindtap="navigateToCase"
@@ -83,8 +95,21 @@
               class="product-image"
               mode="aspectFill"
               src="{{item.coverImageUrl}}"
+              binderror="onProductImageError"
+              data-section="popularCases"
+              data-index="{{productIndex}}"
+              data-case-id="{{item.id}}"
+              data-url="{{item.coverImageUrl}}"
+              data-media-epoch="{{item.mediaEpoch}}"
               lazy-load
             ></image>
+            <view
+              wx:elif="{{item.imageLoadState == 'failed'}}"
+              class="product-placeholder image-retry-placeholder"
+              catchtap="retryHomeImages"
+              aria-role="button"
+              aria-label="图片加载失败，点击重试"
+            >图片加载失败，点击重试</view>
             <view wx:else class="product-placeholder">暂无图片</view>
             <view class="product-badge">{{item.homeBadge}}</view>
             <view class="product-title">{{item.title}}</view>
@@ -107,6 +132,7 @@
         <view wx:if="{{latestCases.length}}" class="product-grid">
           <view
             wx:for="{{latestCases}}"
+            wx:for-index="productIndex"
             wx:key="id"
             class="product-card"
             bindtap="navigateToCase"
@@ -117,8 +143,21 @@
               class="product-image"
               mode="aspectFill"
               src="{{item.coverImageUrl}}"
+              binderror="onProductImageError"
+              data-section="latestCases"
+              data-index="{{productIndex}}"
+              data-case-id="{{item.id}}"
+              data-url="{{item.coverImageUrl}}"
+              data-media-epoch="{{item.mediaEpoch}}"
               lazy-load
             ></image>
+            <view
+              wx:elif="{{item.imageLoadState == 'failed'}}"
+              class="product-placeholder image-retry-placeholder"
+              catchtap="retryHomeImages"
+              aria-role="button"
+              aria-label="图片加载失败，点击重试"
+            >图片加载失败，点击重试</view>
             <view wx:else class="product-placeholder">暂无图片</view>
             <view class="product-badge product-badge-latest">{{item.homeBadge}}</view>
             <view class="product-title">{{item.title}}</view>
@@ -126,6 +165,20 @@
           </view>
         </view>
         <view wx:else class="state-box">暂无最新产品</view>
+      </view>
+
+      <view
+        wx:if="{{!timelinePreview && (popularCases.length || latestCases.length)}}"
+        class="home-end-note"
+        bindtap="navigateToCategory"
+        data-sort=""
+        hover-class="home-end-note-active"
+        hover-stay-time="80"
+        aria-role="button"
+        aria-label="前往分类页查看更多案例"
+      >
+        <view class="home-end-title">已展示首页全部案例</view>
+        <view class="home-end-link">请前往分类页查看更多 ></view>
       </view>
     </block>
   </view>

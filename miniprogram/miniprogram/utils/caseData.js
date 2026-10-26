@@ -1,3 +1,29 @@
+const SCENE_VALUES = Object.freeze([
+  "婚宴",
+  "百日/满月",
+  "生日宴",
+  "寿宴",
+  "乔迁宴",
+  "送礼",
+  "商务招待",
+  "节庆礼赠",
+  "企业纪念",
+  "商超陈列",
+  "电商展示",
+]);
+
+const SCENE_LABELS = Object.freeze({
+  婚宴: "婚宴/喜宴",
+});
+
+function getSceneLabel(value) {
+  return SCENE_LABELS[value] || value || "";
+}
+
+function getSceneLabels(values) {
+  return normalizeValues(values).map(getSceneLabel);
+}
+
 const DEFAULT_FILTERS = [
   {
     key: "statuses",
@@ -33,7 +59,7 @@ const DEFAULT_FILTERS = [
     key: "scenes",
     title: "使用场景",
     type: "multi",
-    options: ["婚宴", "送礼", "商务招待", "节庆礼赠", "商超陈列", "电商展示", "企业纪念"],
+    options: SCENE_VALUES.slice(),
   },
 ];
 
@@ -125,6 +151,22 @@ function firstImage(value) {
 }
 
 const CASE_GALLERY_MAX = 9;
+const HTTPS_MEDIA_URL_MAX_LENGTH = 2048;
+
+function normalizeHttpsMediaUrl(value) {
+  const url = typeof value === "string" ? value.trim() : "";
+  if (!url || url.length > HTTPS_MEDIA_URL_MAX_LENGTH || /\s/.test(url)) return "";
+  const match = /^https:\/\/(\[[0-9a-f:.]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::(\d{1,5}))?(?:[/?#].*)?$/i.exec(url);
+  if (!match) return "";
+  const port = match[2] ? Number(match[2]) : 443;
+  return port > 0 && port <= 65535 ? url : "";
+}
+
+function normalizeVideoDurationSeconds(value) {
+  if (value === "" || value === null || value === undefined) return null;
+  const duration = Number(value);
+  return Number.isSafeInteger(duration) && duration > 0 ? duration : null;
+}
 
 function normalizeGalleryImages(value, fallbackImage = "") {
   const seen = new Set();
@@ -154,6 +196,7 @@ function normalizeCaseRecord(record = {}) {
     : galleryImages.slice();
   const galleryThumbnails = normalizeGalleryImages(record.galleryThumbnails);
   const galleryBanners = normalizeGalleryImages(record.galleryBanners);
+  const videoUrl = normalizeHttpsMediaUrl(record.videoUrl);
   const normalized = {
     ...record,
     id: record._id || record.caseId || "",
@@ -169,6 +212,11 @@ function normalizeCaseRecord(record = {}) {
     coverBanner:
       firstImage(record.coverBanner) || galleryBanners[0] || galleryImages[0] || legacyCoverImage,
     imageVariantVersion: Number(record.imageVariantVersion) || 0,
+    videoUrl,
+    videoPoster: videoUrl ? normalizeHttpsMediaUrl(record.videoPoster) : "",
+    videoDurationSeconds: videoUrl
+      ? normalizeVideoDurationSeconds(record.videoDurationSeconds)
+      : null,
     wineType: record.wineType || "白酒",
     priceLevel: normalizeDisplayValue("priceLevel", record.priceLevel || ""),
     notes: record.notes || record.description || "",
@@ -198,6 +246,7 @@ function normalizeCaseRecord(record = {}) {
     normalized.priceLevel,
     normalized.notes,
     ...normalized.tags,
+    ...getSceneLabels(normalized.scenes),
   ]
     .filter(Boolean)
     .join(" ")
@@ -289,13 +338,19 @@ function formatJoined(values, fallback = "未选择") {
 
 module.exports = {
   DEFAULT_FILTERS,
+  SCENE_LABELS,
+  SCENE_VALUES,
   HOME_SECTION_OPTIONS,
   HOME_SECTION_VALUES,
   MULTI_FIELDS,
   normalizeValues,
   normalizeDisplayValue,
   normalizeDisplayValues,
+  getSceneLabel,
+  getSceneLabels,
   firstImage,
+  normalizeHttpsMediaUrl,
+  normalizeVideoDurationSeconds,
   normalizeGalleryImages,
   normalizeCaseRecord,
   normalizeBannerRecord,

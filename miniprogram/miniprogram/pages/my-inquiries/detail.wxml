@@ -1,0 +1,56 @@
+<view class="page">
+  <view wx:if="{{loading}}" class="state-card">正在加载需求详情...</view>
+  <view wx:elif="{{errorMessage}}" class="state-card">
+    <view class="state-title">加载失败</view>
+    <view class="state-text">{{errorMessage}}</view>
+    <view class="state-action" bindtap="retry">重试</view>
+  </view>
+
+  <block wx:elif="{{item}}">
+    <view class="hero">
+      <view class="page-title">需求详情</view>
+      <view class="page-subtitle">{{item.createdAtText}}</view>
+    </view>
+
+    <view class="section status-section">
+      <view class="section-kicker">当前进度</view>
+      <view class="status status-{{item.status}}">{{item.statusLabel}}</view>
+      <view class="status-note">顾问回复会保存在本页，请留意“我的需求”红点。</view>
+      <view
+        wx:if="{{replySubscription.enabled}}"
+        class="outline-action {{subscribing ? 'action-disabled' : ''}}"
+        bindtap="subscribeReply"
+      >{{subscribing ? '正在开启...' : '订阅下一次回复提醒'}}</view>
+    </view>
+
+    <view class="section">
+      <view class="section-kicker">顾问回复</view>
+      <view class="section-title">跟进记录</view>
+      <view wx:if="{{!messages.length}}" class="empty-reply">需求已收到，顾问回复后会显示在这里。</view>
+      <view wx:else class="timeline">
+        <view wx:for="{{messages}}" wx:for-item="message" wx:key="id" class="message">
+          <view class="message-dot"></view>
+          <view class="message-body">
+            <view class="message-meta">顾问回复 · {{message.createdAtText}}</view>
+            <view class="message-content">{{message.content}}</view>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-kicker">需求内容</view>
+      <view class="section-title">提交信息</view>
+      <view class="info-row"><view class="info-label">酒类</view><view class="info-value">{{item.wineType || '未选择'}}</view></view>
+      <view class="info-row"><view class="info-label">包装</view><view class="info-value">{{item.packageSummary || '未选择'}}</view></view>
+      <view class="info-row"><view class="info-label">风格</view><view class="info-value">{{item.styleSummary || '未选择'}}</view></view>
+      <view class="info-row"><view class="info-label">价位</view><view class="info-value">{{item.priceLevel || '未选择'}}</view></view>
+      <view class="info-row"><view class="info-label">场景</view><view class="info-value">{{item.sceneSummary || '未选择'}}</view></view>
+      <view class="content-box">{{item.content || '无补充说明'}}</view>
+      <view class="contact-box">
+        <view class="contact-label">{{item.contactTypeLabel}}</view>
+        <view class="contact-value">{{item.contact}}</view>
+      </view>
+    </view>
+  </block>
+</view>

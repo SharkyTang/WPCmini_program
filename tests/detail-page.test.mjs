@@ -32,7 +32,7 @@ function test(name, fn) {
   }
 }
 
-test("detail page renders a skeleton without a blocking native overlay", () => {
+test("detail page keeps its skeleton and adds non-blocking native loading", () => {
   const wxml = readFileSync(wxmlPath, "utf8");
   const source = readFileSync(pagePath, "utf8");
 
@@ -43,7 +43,9 @@ test("detail page renders a skeleton without a blocking native overlay", () => {
   assert.equal(wxml.includes("正在读取案例"), true);
   assert.equal(wxml.includes('bindtap="retryLoadCase"'), true);
   assert.equal(wxml.includes("重新加载"), true);
-  assert.equal(source.includes("wx.showLoading"), false);
+  assert.equal(source.includes('require("../../utils/nativePageLoading")'), true);
+  assert.equal(wxml.includes('bindload="onHeroImageLoad"'), true);
+  assert.equal(wxml.includes('binderror="onHeroImageError"'), true);
 });
 
 test("detail consult action opens official customer service", () => {
@@ -113,6 +115,31 @@ test("detail page supports a gallery and native image preview", () => {
   assert.equal(source.includes("wx.saveImageToPhotosAlbum"), false);
 });
 
+test("detail V2 exposes clear image guidance and keeps video outside the gallery", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+  const wxss = readFileSync(wxssPath, "utf8");
+
+  assert.equal(wxml.includes("点击查看大图"), true);
+  assert.equal(wxml.includes('type="search"'), true);
+  assert.equal(wxml.includes("← 左右滑动查看更多图片 →"), true);
+  assert.match(
+    wxml,
+    /<view wx:if="\{\{galleryItems\.length > 1\}\}" class="gallery-swipe-tip">/
+  );
+  assert.equal(wxml.includes('wx:if="{{caseVideo}}" class="video-card"'), true);
+  assert.equal(wxml.includes('<block wx:if="{{!videoFailed}}">'), true);
+  assert.equal(wxml.includes('<video\n          id="case-video"'), true);
+  assert.equal(wxml.includes('autoplay="{{false}}"'), true);
+  assert.equal(wxml.includes('loop="{{false}}"'), true);
+  assert.equal(wxml.includes('poster="{{caseVideo.poster}}"'), true);
+  assert.equal(wxml.indexOf('class="video-card"') > wxml.indexOf('class="gallery-swipe-tip"'), true);
+  assert.equal(wxml.indexOf('class="info-card"') > wxml.indexOf('class="video-card"'), true);
+  assert.equal(wxml.includes('class="notes-card"'), false);
+  assert.match(wxss, /\.hero-favorite\s*\{[\s\S]*?top:\s*18rpx;/);
+  assert.match(wxss, /\.image-preview-tip\s*\{[\s\S]*?background:\s*rgba\(36, 29, 22, 0\.78\);/);
+  assert.match(wxss, /\.info-case-title\s*\{[\s\S]*?white-space:\s*normal;/);
+});
+
 async function asyncTest(name, fn) {
   try {
     await fn();
@@ -129,8 +156,10 @@ function loadDetailInteractionPage(options = {}) {
   const resumeSources = [];
   const toasts = [];
   const nativeLoadingEvents = [];
+  let nativeLoadingSequence = 0;
   const previewCalls = [];
   const clientFaults = [];
+  const videoPauseCalls = [];
   const caseItem = options.caseItem || {
     id: "case_1",
     title: "鎏金礼盒",
@@ -177,6 +206,8 @@ function loadDetailInteractionPage(options = {}) {
         return {
           formatJoined: (values, fallback = "") =>
             (Array.isArray(values) ? values : [values]).filter(Boolean).join("/") || fallback,
+          getSceneLabels: (values) =>
+            (values || []).map((value) => (value === "婚宴" ? "婚宴/喜宴" : value)),
         };
       }
       if (moduleName === "../../utils/customerServiceData") {
@@ -246,6 +277,23 @@ function loadDetailInteractionPage(options = {}) {
           reportPerformanceEvent: () => false,
         };
       }
+      if (moduleName === "../../utils/nativePageLoading") {
+        return options.nativePageLoading || {
+          beginPageLoading(payload) {
+            const token = { id: ++nativeLoadingSequence };
+            nativeLoadingEvents.push({ type: "begin", payload, token });
+            return token;
+          },
+          finishPageLoading(token) {
+            nativeLoadingEvents.push({ type: "finish", token });
+            return true;
+          },
+          cancelPageLoading(token) {
+            nativeLoadingEvents.push({ type: "cancel", token });
+            return true;
+          },
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     wx: {
@@ -260,6 +308,13 @@ function loadDetailInteractionPage(options = {}) {
       },
       previewImage(payload) {
         previewCalls.push(payload);
+      },
+      createVideoContext(id) {
+        return {
+          pause() {
+            videoPauseCalls.push(id);
+          },
+        };
       },
       nextTick(callback) {
         callback();
@@ -289,6 +344,7 @@ function loadDetailInteractionPage(options = {}) {
     nativeLoadingEvents,
     previewCalls,
     clientFaults,
+    videoPauseCalls,
   };
 }
 
@@ -339,11 +395,30 @@ test("detail image tap opens the selected image in the native gallery", () => {
   );
 });
 
-await asyncTest("detail case reads avoid the native loading overlay on success and failure", async () => {
+await asyncTest("detail case reads use one non-blocking loading session on success and failure", async () => {
   const success = loadDetailInteractionPage();
 
   assert.equal(await success.page.loadCase("case_1"), true);
-  assert.deepEqual(JSON.parse(JSON.stringify(success.nativeLoadingEvents)), []);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(success.nativeLoadingEvents.map((event) => event.type))),
+    ["begin", "finish"]
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(success.nativeLoadingEvents[0].payload)),
+    {
+      owner: "detail-entry",
+      title: "加载中",
+      mask: false,
+      delayMs: 120,
+      minVisibleMs: 300,
+      maxVisibleMs: 3000,
+    }
+  );
+  success.page.onHide();
+  assert.deepEqual(
+    success.nativeLoadingEvents.map((event) => event.type),
+    ["begin", "finish", "cancel"]
+  );
 
   const unavailable = new Error("catalog unavailable");
   unavailable.code = "FUNCTION_NOT_FOUND";
@@ -359,7 +434,152 @@ await asyncTest("detail case reads avoid the native loading overlay on success a
   assert.equal(await failure.page.loadCase("case_2"), false);
   assert.equal(failure.page.data.loading, false);
   assert.match(failure.page.data.errorMessage, /暂时读取不到/);
-  assert.deepEqual(JSON.parse(JSON.stringify(failure.nativeLoadingEvents)), []);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(failure.nativeLoadingEvents.map((event) => event.type))),
+    ["begin", "finish"]
+  );
+});
+
+await asyncTest("detail waits for the current Hero image and ignores stale image events", async () => {
+  const heroCase = {
+    id: "hero_case",
+    title: "Hero 案例",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+    gallery: [
+      {
+        index: 0,
+        fileID: "cloud://hero",
+        displayUrl: "https://hero",
+        thumbnailUrl: "https://thumb",
+      },
+    ],
+  };
+  const context = loadDetailInteractionPage({
+    caseItem: heroCase,
+    fetchCaseDetail: async () => heroCase,
+  });
+
+  assert.equal(await context.page.loadCase("hero_case"), true);
+  const staleRequestId = context.page.data.galleryItems[0].entryLoadRequestId;
+  assert.equal(await context.page.loadCase("hero_case_latest"), true);
+  const requestId = context.page.data.galleryItems[0].entryLoadRequestId;
+  assert.equal(requestId > staleRequestId, true);
+  assert.deepEqual(
+    context.nativeLoadingEvents.map((event) => event.type),
+    ["begin", "cancel", "begin"]
+  );
+  const currentRenderUrl = context.page.data.galleryItems[0].renderUrl;
+  context.page.onHeroImageLoad({
+    currentTarget: {
+      dataset: { index: 0, detailLoadRequestId: staleRequestId },
+    },
+  });
+  context.page.onHeroImageError({
+    currentTarget: {
+      dataset: { index: 0, detailLoadRequestId: staleRequestId },
+    },
+  });
+  assert.deepEqual(
+    context.nativeLoadingEvents.map((event) => event.type),
+    ["begin", "cancel", "begin"]
+  );
+  assert.equal(context.page.data.galleryItems[0].renderUrl, currentRenderUrl);
+  assert.equal(context.page.data.galleryItems[0].imageRetryCount, 0);
+
+  context.page.onHeroImageLoad({
+    currentTarget: {
+      dataset: { index: 0, detailLoadRequestId: requestId },
+    },
+  });
+  assert.deepEqual(
+    context.nativeLoadingEvents.map((event) => event.type),
+    ["begin", "cancel", "begin", "finish"]
+  );
+});
+
+await asyncTest("detail shows the wedding label without rewriting the case scene", async () => {
+  const context = loadDetailInteractionPage({
+    caseItem: {
+      id: "wedding_case",
+      title: "婚礼礼盒",
+      packageTypes: ["礼盒"],
+      styles: [],
+      scenes: ["婚宴"],
+    },
+  });
+
+  assert.equal(await context.page.loadCase("wedding_case"), true);
+  const sceneRow = context.page.data.infoRows.find((row) => row.label === "适用场景");
+  assert.equal(sceneRow.value, "婚宴/喜宴");
+  assert.deepEqual(JSON.parse(JSON.stringify(context.page.data.caseItem.scenes)), ["婚宴"]);
+});
+
+await asyncTest("detail only builds an optional HTTPS video and falls back to the first image poster", async () => {
+  const videoCase = {
+    id: "video_case",
+    title: "视频案例",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+    videoUrl: "https://cdn.example.com/case.mp4",
+    videoPoster: "",
+    videoDurationSeconds: 88,
+    gallery: [{
+      index: 0,
+      displayUrl: "https://cdn.example.com/cover.jpg",
+    }],
+  };
+  const context = loadDetailInteractionPage({ caseItem: videoCase });
+
+  assert.equal(await context.page.loadCase("video_case"), true);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.page.data.caseVideo)),
+    {
+      src: "https://cdn.example.com/case.mp4",
+      poster: "https://cdn.example.com/cover.jpg",
+      durationText: "01:28",
+    }
+  );
+  context.page.onHide();
+  assert.deepEqual(context.videoPauseCalls, ["case-video"]);
+
+  const invalidContext = loadDetailInteractionPage({
+    caseItem: {
+      ...videoCase,
+      id: "invalid_video_case",
+      videoUrl: "http://cdn.example.com/case.mp4",
+    },
+  });
+  assert.equal(await invalidContext.page.loadCase("invalid_video_case"), true);
+  assert.equal(invalidContext.page.data.caseVideo, null);
+});
+
+await asyncTest("detail video failure is recoverable and telemetry excludes business data", async () => {
+  const videoCase = {
+    id: "private_video_case",
+    title: "视频案例",
+    packageTypes: [],
+    styles: [],
+    scenes: [],
+    videoUrl: "https://cdn.example.com/private-case.mp4",
+  };
+  const context = loadDetailInteractionPage({ caseItem: videoCase });
+  await context.page.loadCase("private_video_case");
+
+  context.page.onVideoError();
+  assert.equal(context.page.data.videoFailed, true);
+  const fault = context.clientFaults.find(
+    (item) => item.stage === "video_playback_error"
+  );
+  assert.ok(fault);
+  assert.equal(fault.type, "media_error");
+  assert.equal(Object.hasOwn(fault, "id"), false);
+  assert.equal(Object.hasOwn(fault, "caseId"), false);
+  assert.equal(Object.hasOwn(fault, "url"), false);
+  context.page.retryVideo();
+  assert.equal(context.page.data.videoFailed, false);
 });
 
 await asyncTest("detail case loading ignores stale requests and cleans up on unload", async () => {
@@ -414,6 +634,36 @@ await asyncTest("detail network failures do not fan out to the legacy reader", a
   assert.equal(await context.page.loadCase("case_1"), false);
   assert.equal(legacyCalls, 0);
   assert.match(context.page.data.errorMessage, /暂时读取不到/);
+});
+
+await asyncTest("detail legacy fallback never bypasses the video display switch", async () => {
+  const unavailable = Object.assign(new Error("catalog unavailable"), {
+    code: "FUNCTION_NOT_FOUND",
+  });
+  const context = loadDetailInteractionPage({
+    fetchCaseDetail: async () => {
+      throw unavailable;
+    },
+    fetchCaseById: async () => ({
+      id: "legacy_video_case",
+      title: "legacy video",
+      packageTypes: [],
+      styles: [],
+      scenes: [],
+      gallery: [],
+      videoFileID: "cloud://production.bucket/video.mp4",
+      videoUrl: "https://media.example.com/video.mp4",
+      videoPosterFileID: "cloud://production.bucket/poster.webp",
+      videoPoster: "https://media.example.com/poster.webp",
+      videoDurationSeconds: 60,
+      videoFileSizeBytes: 1024,
+    }),
+  });
+
+  assert.equal(await context.page.loadCase("legacy_video_case"), true);
+  assert.equal(context.page.data.caseVideo, null);
+  assert.equal(context.page.data.caseItem.videoUrl, "");
+  assert.equal(context.page.data.caseItem.videoPoster, "");
 });
 
 await asyncTest("detail reports fallback and final failures without business identifiers", async () => {
@@ -690,6 +940,34 @@ await asyncTest("detail favorite requests access and performs immediately when r
   );
 });
 
+await asyncTest("an existing favorite can be removed directly from the detail page", async () => {
+  const currentFavorite = { _id: "favorite_existing" };
+  const toggleInputs = [];
+  const context = loadDetailInteractionPage({
+    favorite: currentFavorite,
+    async toggleFavorite(caseItem, favorite) {
+      toggleInputs.push({ caseItem, favorite });
+      return {
+        action: "removed",
+        favorite: null,
+        isFavorited: false,
+      };
+    },
+  });
+
+  await context.page.toggleFavorite();
+
+  assert.equal(toggleInputs.length, 1);
+  assert.equal(toggleInputs[0].favorite._id, "favorite_existing");
+  assert.equal(context.page.data.favoriteLoading, false);
+  assert.equal(context.page.data.favorite, null);
+  assert.equal(context.page.data.isFavorited, false);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.toasts)),
+    [{ title: "已取消收藏", icon: "success" }]
+  );
+});
+
 await asyncTest("cancelling the access prompt unlocks the favorite action for the next tap", async () => {
   let toggleCalls = 0;
   const context = loadDetailInteractionPage({
@@ -913,6 +1191,13 @@ await asyncTest("detail loads one display image and upgrades only the selected t
       if (moduleName === "../../utils/errorTelemetry") {
         return { reportPerformanceEvent: () => false };
       }
+      if (moduleName === "../../utils/nativePageLoading") {
+        return {
+          beginPageLoading: () => ({}),
+          finishPageLoading: () => true,
+          cancelPageLoading: () => true,
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     wx: {
@@ -1039,6 +1324,13 @@ await asyncTest("detail shares the selected case with a direct-entry path", asyn
       }
       if (moduleName === "../../utils/errorTelemetry") {
         return { reportPerformanceEvent: () => false };
+      }
+      if (moduleName === "../../utils/nativePageLoading") {
+        return {
+          beginPageLoading: () => ({}),
+          finishPageLoading: () => true,
+          cancelPageLoading: () => true,
+        };
       }
       throw new Error(`Unexpected require: ${moduleName}`);
     },

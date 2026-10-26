@@ -1,6 +1,8 @@
 const { fetchRecentCaseAdminList } = require("./utils/caseAdminService");
 const { fetchPublishedLinkedCases } = require("./utils/notificationAdminService");
-const { normalizeCaseRecord } = require("../../utils/caseData");
+const caseData = require("../../utils/caseData");
+const { normalizeCaseRecord } = caseData;
+const getSceneLabel = caseData.getSceneLabel || ((value) => value || "");
 const { attachCaseImageUrls } = require("../../utils/cloudData");
 
 const PAGE_SIZE = 20;
@@ -11,7 +13,9 @@ function buildCaseCard(item = {}, selectedIds = []) {
   return {
     ...item,
     id,
-    tagSummary: (item.tags || []).slice(0, 3).join(" / "),
+    tagSummary: (item.tags || []).slice(0, 3).map(getSceneLabel).join(" / "),
+    sceneSummary:
+      item.sceneSummary || (item.scenes || []).map(getSceneLabel).join(" / "),
     selected: selectedIds.includes(id),
   };
 }

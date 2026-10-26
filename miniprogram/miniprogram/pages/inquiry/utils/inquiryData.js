@@ -1,6 +1,11 @@
-const { DEFAULT_FILTERS, normalizeValues } = require("../../../utils/caseData");
+const {
+  DEFAULT_FILTERS,
+  getSceneLabel,
+  normalizeValues,
+} = require("../../../utils/caseData");
 
 const INQUIRY_COLLECTION = "inquiries";
+const INQUIRY_SCHEMA_VERSION = 2;
 const CONTENT_MIN_LENGTH = 5;
 const CONTENT_MAX_LENGTH = 800;
 const CONTACT_MAX_LENGTH = 120;
@@ -55,8 +60,16 @@ function getInquiryOptionGroups() {
     }));
 }
 
+function getInquiryOptionLabel(field, value) {
+  return field === "scenes" ? getSceneLabel(value) : value;
+}
+
 function normalizeInquiryDraft(draft = {}) {
+  const schemaVersion = Number(draft.inquirySchemaVersion);
   return {
+    inquirySchemaVersion: Number.isInteger(schemaVersion) && schemaVersion > 0
+      ? schemaVersion
+      : INQUIRY_SCHEMA_VERSION,
     source: trimText(draft.source),
     caseDocId: trimText(draft.caseDocId || draft.id || draft._id),
     caseId: trimText(draft.caseId),
@@ -117,11 +130,22 @@ function validateInquiryDraft(draft = {}) {
     };
   }
 
-  // 旧客户端没有 contactType，继续沿用通用联系方式校验；非空非法值不入库。
+  // 新版客户端必须带合法类型；旧版兼容只保留在云函数入口，避免新版
+  // 页面把缺失类型的错误拖到提交后才反馈。
   if (rawContactType && !normalized.contactType) {
     return {
       valid: false,
       message: "联系方式类型无效",
+    };
+  }
+
+  if (
+    normalized.inquirySchemaVersion >= INQUIRY_SCHEMA_VERSION
+    && !normalized.contactType
+  ) {
+    return {
+      valid: false,
+      message: "请选择联系方式类型",
     };
   }
 
@@ -166,6 +190,7 @@ function buildInquiryDraftFromCase(caseItem = {}) {
 function buildInquiryRecord(draft = {}, context = {}) {
   const normalized = normalizeInquiryDraft(draft);
   return {
+    inquirySchemaVersion: normalized.inquirySchemaVersion,
     source: trimText(context.source || normalized.source) || "profile",
     caseDocId: normalized.caseDocId,
     caseId: normalized.caseId,
@@ -191,6 +216,7 @@ function buildInquiryRecord(draft = {}, context = {}) {
 
 module.exports = {
   INQUIRY_COLLECTION,
+  INQUIRY_SCHEMA_VERSION,
   CONTENT_MIN_LENGTH,
   CONTENT_MAX_LENGTH,
   CONTACT_MAX_LENGTH,
@@ -198,6 +224,7 @@ module.exports = {
   CONTACT_TYPE_VALUES,
   buildInquiryDraftFromCase,
   buildInquiryRecord,
+  getInquiryOptionLabel,
   getInquiryOptionGroups,
   isValidEmail,
   isValidPhone,

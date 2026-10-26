@@ -53,6 +53,186 @@
       <view class="field-hint">最多 {{galleryMax}} 张；第一张为封面，可通过箭头调整顺序。图片会上传到云存储。</view>
     </view>
 
+    <block wx:if="{{isEdit}}">
+      <view class="form-section-title">展示视频</view>
+      <view class="video-upload-card">
+        <view class="video-source-header">
+          <view
+            class="video-source-option {{videoSource === 'upload' ? 'video-source-option-active' : ''}} {{!videoUploadEnabled || saving ? 'video-source-option-disabled' : ''}}"
+            data-source="upload"
+            bindtap="onVideoSourceSelect"
+          >
+            上传 MP4
+          </view>
+          <view class="video-advanced-toggle {{saving ? 'video-source-option-disabled' : ''}}" bindtap="onVideoAdvancedToggle">
+            高级设置 · HTTPS 外链 {{videoAdvancedOpen ? '收起' : '展开'}}
+          </view>
+        </view>
+
+        <view wx:if="{{videoSource === 'upload'}}" class="video-upload-body">
+          <view wx:if="{{!videoUploadEnabled}}" class="video-disabled-hint">云视频上传暂未开启；已有视频仍可预览或移除，也可以在高级设置中使用 HTTPS 外链。</view>
+          <video
+            wx:if="{{videoDraft.uploadPreviewUrl}}"
+            class="video-admin-preview"
+            src="{{videoDraft.uploadPreviewUrl}}"
+            poster="{{videoDraft.uploadPosterPreviewUrl || coverImageUrl}}"
+            controls="{{true}}"
+            object-fit="cover"
+            binderror="onVideoPreviewError"
+          />
+          <view wx:else class="video-empty-state">
+            <view class="video-empty-title">还没有展示视频</view>
+            <view class="field-hint">从手机相册选择 MP4，不开放现场拍摄。</view>
+          </view>
+
+          <view wx:if="{{videoDraft.uploadFileID}}" class="video-meta-row">
+            <text>{{videoDraft.uploadDurationSeconds}} 秒</text>
+            <text wx:if="{{videoFileSizeLabel}}">{{videoFileSizeLabel}}</text>
+            <text>最高 1080p</text>
+          </view>
+          <view wx:if="{{videoUploading}}" class="video-progress-block">
+            <view class="video-progress-track">
+              <view class="video-progress-value" style="width: {{videoUploadProgress}}%;"></view>
+            </view>
+            <view class="field-hint">视频上传中 {{videoUploadProgress}}%</view>
+          </view>
+          <view wx:if="{{videoUploadError}}" class="video-error-text">{{videoUploadError}}</view>
+          <view class="video-action-row">
+            <button
+              class="video-action-button video-action-primary"
+              loading="{{videoUploading}}"
+              disabled="{{saving || !videoUploadEnabled || videoUploading || posterUploading}}"
+              bindtap="chooseCaseVideo"
+            >
+              {{videoDraft.uploadFileID ? '替换视频' : '从相册选择视频'}}
+            </button>
+            <button
+              wx:if="{{videoUploadError}}"
+              class="video-action-button"
+              disabled="{{saving || videoUploading}}"
+              bindtap="retryVideoUpload"
+            >
+              重试上传
+            </button>
+            <button
+              wx:if="{{videoDraft.uploadFileID}}"
+              class="video-action-button video-action-danger"
+              disabled="{{saving || videoUploading || posterUploading}}"
+              bindtap="removeCaseVideo"
+            >
+              移除视频
+            </button>
+          </view>
+          <view class="field-hint">仅支持 MP4，最大 100MB、最长 120 秒、1080p；建议 H.264 + AAC。</view>
+
+          <view wx:if="{{videoDraft.uploadFileID}}" class="video-poster-section">
+            <view class="field-label">自定义视频封面（可选）</view>
+            <image
+              wx:if="{{videoDraft.uploadPosterPreviewUrl}}"
+              class="video-poster-preview"
+              src="{{videoDraft.uploadPosterPreviewUrl}}"
+              mode="aspectFill"
+            />
+            <view wx:else class="field-hint">未上传时使用案例第一张图片。</view>
+            <view wx:if="{{posterUploading}}" class="field-hint">封面上传中 {{posterUploadProgress}}%</view>
+            <view wx:if="{{posterUploadError}}" class="video-error-text">{{posterUploadError}}</view>
+            <view class="video-action-row">
+              <button
+                class="video-action-button"
+                loading="{{posterUploading}}"
+                disabled="{{saving || !videoUploadEnabled || videoUploading || posterUploading}}"
+                bindtap="chooseVideoPoster"
+              >
+                {{videoDraft.uploadPosterFileID ? '替换封面' : '上传封面'}}
+              </button>
+              <button
+                wx:if="{{posterUploadError}}"
+                class="video-action-button"
+                disabled="{{saving || !videoUploadEnabled || posterUploading}}"
+                bindtap="retryVideoPosterUpload"
+              >
+                重试封面
+              </button>
+              <button
+                wx:if="{{videoDraft.uploadPosterFileID}}"
+                class="video-action-button video-action-danger"
+                disabled="{{saving || posterUploading}}"
+                bindtap="removeVideoPoster"
+              >
+                移除封面
+              </button>
+            </view>
+            <view class="field-hint">支持 JPEG、PNG、WebP，最大 5MB。</view>
+          </view>
+        </view>
+
+        <view wx:if="{{videoAdvancedOpen}}" class="video-external-panel">
+          <view
+            class="video-source-option {{videoSource === 'external' ? 'video-source-option-active' : ''}} {{saving ? 'video-source-option-disabled' : ''}}"
+            data-source="external"
+            bindtap="onVideoSourceSelect"
+          >
+            使用 HTTPS 外链
+          </view>
+          <block wx:if="{{videoSource === 'external'}}">
+            <video
+              wx:if="{{videoDraft.externalUrl}}"
+              class="video-admin-preview video-external-preview"
+              src="{{videoDraft.externalUrl}}"
+              poster="{{videoDraft.externalPosterUrl || coverImageUrl}}"
+              controls="{{true}}"
+              object-fit="cover"
+              binderror="onVideoPreviewError"
+            />
+            <view wx:if="{{videoUploadError}}" class="video-error-text">{{videoUploadError}}</view>
+            <view class="field video-external-field">
+              <view class="field-label">视频地址 *</view>
+              <input
+                class="text-input"
+                type="text"
+                disabled="{{saving}}"
+                value="{{videoDraft.externalUrl}}"
+                placeholder="https://example.com/video.mp4"
+                bindinput="onExternalVideoUrlInput"
+              />
+            </view>
+            <view class="field video-external-field">
+              <view class="field-label">封面地址</view>
+              <input
+                class="text-input"
+                type="text"
+                disabled="{{saving}}"
+                value="{{videoDraft.externalPosterUrl}}"
+                placeholder="https://example.com/poster.jpg"
+                bindinput="onExternalPosterUrlInput"
+              />
+            </view>
+            <view class="field video-external-field">
+              <view class="field-label">时长（秒）</view>
+              <input
+                class="text-input"
+                type="number"
+                disabled="{{saving}}"
+                value="{{videoDraft.externalDurationSeconds}}"
+                placeholder="可不填，最多 120"
+                bindinput="onExternalDurationInput"
+              />
+            </view>
+            <button
+              wx:if="{{videoDraft.externalUrl}}"
+              class="video-action-button video-action-danger"
+              disabled="{{saving || videoUploading || posterUploading}}"
+              bindtap="removeCaseVideo"
+            >
+              移除视频
+            </button>
+          </block>
+        </view>
+
+        <view wx:if="{{videoDirty}}" class="video-unsaved-hint">视频修改将在点击“保存修改”后生效。</view>
+      </view>
+    </block>
+
     <view class="field">
       <view class="field-label">标题 *</view>
       <input class="text-input" value="{{form.title}}" placeholder="例如：国风礼盒包装" bindinput="onTitleInput" />
@@ -230,7 +410,7 @@
     <button
       class="save-button"
       loading="{{saving}}"
-      disabled="{{saving || uploading || imageProcessingFailed}}"
+      disabled="{{saving || uploading || videoUploading || posterUploading || imageProcessingFailed}}"
       bindtap="saveCase"
     >
       {{isEdit ? '保存修改' : '创建案例'}}

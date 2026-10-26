@@ -1,0 +1,327 @@
+export type HomeSection = "banner" | "popular" | "latest";
+export type TagField = "packageTypes" | "styles" | "priceLevel" | "scenes" | "statuses";
+export type TagMode = "append" | "remove" | "replace";
+export type QueueStatus =
+  | "waiting"
+  | "uploading"
+  | "processing"
+  | "creating"
+  | "needs_tags"
+  | "done"
+  | "failed";
+
+export interface HomeSectionOrders {
+  banner: string[];
+  popular: string[];
+  latest: string[];
+}
+
+export interface AdminActor {
+  type: "wechat_openid" | "cloudbase_uid";
+  id: string;
+}
+
+export interface CaseRecord {
+  _id: string;
+  id: string;
+  title: string;
+  caseId: string;
+  coverImage: string;
+  coverThumbnail: string;
+  coverBanner: string;
+  coverImageUrl: string;
+  galleryImages: string[];
+  sourceGalleryImages: string[];
+  galleryThumbnails: string[];
+  galleryBanners: string[];
+  galleryImageUrls: string[];
+  imageVariantVersion: number;
+  wineType: string;
+  packageTypes: string[];
+  styles: string[];
+  priceLevel: string;
+  scenes: string[];
+  statuses: string[];
+  homeSections: HomeSection[];
+  homeSectionOrder: Partial<Record<HomeSection, number>>;
+  sortOrder: number;
+  videoFileID?: string;
+  videoUrl?: string;
+  videoPreviewUrl?: string;
+  videoPosterFileID?: string;
+  videoPoster?: string;
+  videoPosterPreviewUrl?: string;
+  videoDurationSeconds?: number | null;
+  videoFileSizeBytes?: number | null;
+  notes: string;
+  isVisible: boolean;
+  isPinned: boolean;
+  version: number;
+  deletedAt: string | null;
+  deletedBy?: AdminActor | null;
+  createdAt: string;
+  updatedAt: string;
+  clientMutationId?: string;
+}
+
+export type CaseDraft = Omit<
+  CaseRecord,
+  | "_id"
+  | "id"
+  | "coverImageUrl"
+  | "galleryImageUrls"
+  | "createdAt"
+  | "updatedAt"
+  | "deletedAt"
+  | "version"
+> & {
+  version?: number;
+};
+
+export interface AdminConfig {
+  options: {
+    wineTypes: string[];
+    packageTypes: string[];
+    styles: string[];
+    priceLevels: string[];
+    scenes: string[];
+    statuses: string[];
+  };
+  limits: {
+    gallery: number;
+    batch: number;
+    uploadBytes: number;
+    videoUploadBytes: number;
+    videoDurationSeconds: number;
+    videoPosterUploadBytes: number;
+    homepage: Record<HomeSection, number>;
+  };
+  features: {
+    videoUploadEnabled: boolean;
+    videoDisplayEnabled: boolean;
+  };
+  writeEnabled: boolean;
+  permanentDeleteEnabled: boolean;
+  homeSectionOrders: HomeSectionOrders;
+}
+
+export interface CaseFilters {
+  keyword: string;
+  packageTypes: string[];
+  styles: string[];
+  priceLevel: string[];
+  scenes: string[];
+  statuses: string[];
+  homeSections: HomeSection[];
+  visibility: "all" | "visible" | "hidden";
+  isPinned: "all" | "pinned" | "unpinned";
+  trash: boolean;
+}
+
+export interface ListCasesRequest {
+  page: number;
+  pageSize: number;
+  filters: CaseFilters;
+  sort?: {
+    field: "sortOrder" | "updatedAt" | "createdAt";
+    direction: "asc" | "desc";
+  };
+}
+
+export interface ListCasesResponse {
+  items: CaseRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+export interface BatchPatchRequest {
+  ids: string[];
+  patch?: Partial<
+    Pick<
+      CaseRecord,
+      "isVisible" | "isPinned" | "packageTypes" | "styles" | "priceLevel" | "scenes" | "statuses"
+    >
+  >;
+  tags?: Partial<Record<TagField, string[]>>;
+  tagMode?: TagMode;
+  expectedVersions?: Record<string, number>;
+}
+
+export interface ImageVariant {
+  sourceFileID: string;
+  displayFileID: string;
+  thumbnailFileID: string;
+  bannerFileID: string;
+}
+
+export interface UploadedCaseImages {
+  sources: string[];
+  variants: ImageVariant[];
+}
+
+export interface UploadProgress {
+  completed: number;
+  total: number;
+  stage: "uploading" | "processing";
+}
+
+export interface FileUploadProgress {
+  loadedBytes: number;
+  totalBytes: number;
+  percent: number;
+}
+
+export interface CleanupUnreferencedFilesResult {
+  deletedFileIds: string[];
+  skippedFileIds: string[];
+  failedFileIds: string[];
+}
+
+export interface VideoFileMetadata {
+  durationSeconds: number;
+  width: number;
+  height: number;
+  fileSizeBytes: number;
+}
+
+export interface UploadedCaseVideo extends VideoFileMetadata {
+  fileID: string;
+}
+
+export interface UploadedVideoPoster {
+  fileID: string;
+  fileSizeBytes: number;
+}
+
+export type VideoPatch =
+  | {
+      mode: "upload";
+      fileID: string;
+      durationSeconds: number;
+      posterFileID?: string;
+    }
+  | {
+      mode: "external";
+      url: string;
+      durationSeconds?: number | null;
+      posterUrl?: string;
+    }
+  | { mode: "clear" };
+
+export interface AdminUser {
+  id: string;
+  label: string;
+  email?: string;
+}
+
+export interface AuthSession {
+  user: AdminUser;
+}
+
+export interface CreateCaseResult {
+  id: string;
+  caseId: string;
+  version: number;
+  duplicate?: boolean;
+}
+
+export interface MutationResult {
+  updated?: number;
+  restored?: number;
+  moved?: number;
+}
+
+export interface PermanentDeleteResult {
+  deleted: number;
+  cleanupJobId: string;
+  deletedFileCount: number;
+  retainedReferencedCount: number;
+  pendingFileCount: number;
+}
+
+export interface PendingPurgeJob extends PermanentDeleteResult {
+  clientMutationId: string;
+  status: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ListPendingPurgeJobsRequest {
+  clientMutationId?: string;
+}
+
+export interface AdminApi {
+  readonly mode: "mock" | "cloudbase";
+  readonly configured: boolean;
+  getSession(): Promise<AuthSession | null>;
+  signIn(account: string, password: string): Promise<AuthSession>;
+  signOut(): Promise<void>;
+  checkAccess(): Promise<void>;
+  getAdminConfig(): Promise<AdminConfig>;
+  listCases(request: ListCasesRequest): Promise<ListCasesResponse>;
+  getCase(id: string): Promise<CaseRecord>;
+  createCase(
+    data: Partial<CaseDraft>,
+    clientMutationId: string,
+    uploadBatchId?: string,
+  ): Promise<CreateCaseResult>;
+  updateCase(
+    id: string,
+    data: Partial<CaseDraft>,
+    expectedVersion: number,
+    clientMutationId: string,
+    videoPatch?: VideoPatch,
+  ): Promise<CaseRecord>;
+  batchPatchCases(request: BatchPatchRequest): Promise<MutationResult>;
+  moveCasesToTrash(ids: string[], expectedVersions: Record<string, number>): Promise<MutationResult>;
+  restoreCases(ids: string[], expectedVersions: Record<string, number>): Promise<MutationResult>;
+  permanentlyDeleteCases?(
+    ids: string[],
+    expectedVersions: Record<string, number>,
+    clientMutationId: string,
+  ): Promise<PermanentDeleteResult>;
+  retryPurgeCleanup?(jobId: string): Promise<PermanentDeleteResult>;
+  listPendingPurgeJobs?(
+    request?: ListPendingPurgeJobsRequest,
+  ): Promise<PendingPurgeJob[]>;
+  reorderCases(orderedIds: string[], expectedVersions: Record<string, number>): Promise<void>;
+  setHomeSectionOrder(
+    orders: HomeSectionOrders,
+    expectedVersions: Record<string, number>,
+  ): Promise<void>;
+  uploadCaseImages(
+    files: File[],
+    batchId: string,
+    onProgress?: (progress: UploadProgress) => void,
+  ): Promise<UploadedCaseImages>;
+  uploadCaseVideo(
+    caseId: string,
+    file: File,
+    metadata: VideoFileMetadata,
+    onProgress?: (progress: FileUploadProgress) => void,
+  ): Promise<UploadedCaseVideo>;
+  uploadVideoPoster(
+    caseId: string,
+    file: File,
+    onProgress?: (progress: FileUploadProgress) => void,
+  ): Promise<UploadedVideoPoster>;
+  cleanupUnreferencedFiles(fileIDs: string[]): Promise<CleanupUnreferencedFilesResult>;
+}
+
+export interface UploadQueueItem {
+  id: string;
+  mutationId: string;
+  uploadBatchId: string;
+  files: File[];
+  previews: string[];
+  title: string;
+  packageTypes: string[];
+  scenes: string[];
+  status: QueueStatus;
+  progress: number;
+  error: string;
+  createdId?: string;
+  createdCaseId?: string;
+}

@@ -10,6 +10,7 @@ const {
   chunkList,
   collectDetailImageFileIds,
   collectDetailPatchFileIds,
+  collectDetailVideoFileIds,
   collectHomeImageFileIds,
   collectInitialDetailImageFileIds,
   getCardImageFileId,
@@ -42,7 +43,9 @@ const HOME_INDEXED_MODE = "indexed_v2";
 
 function isEnvironmentFlagEnabled(name) {
   if (typeof process === "undefined" || !process.env) return false;
-  return String(process.env[name] || "").trim().toLowerCase() === "true";
+  return ["1", "true", "yes", "on"].includes(
+    String(process.env[name] || "").trim().toLowerCase()
+  );
 }
 
 function ok(data = {}) {
@@ -51,6 +54,14 @@ function ok(data = {}) {
 
 function fail(code, message) {
   return { ok: false, code, message };
+}
+
+function stripPublicVideo(item = {}) {
+  const result = { ...item };
+  delete result.videoUrl;
+  delete result.videoPoster;
+  delete result.videoDurationSeconds;
+  return result;
 }
 
 async function getRevision() {
@@ -349,14 +360,17 @@ async function getCaseDetail(event) {
   if (!record) return fail("CASE_NOT_FOUND", "案例不存在或已隐藏");
   const requestedMode = trimText(event.detailMode);
   const detailV2Enabled = isEnvironmentFlagEnabled("DETAIL_INITIAL_MODE_ENABLED");
+  const videoDisplayEnabled = isEnvironmentFlagEnabled("VIDEO_DISPLAY_ENABLED");
+  const videoFileIDs = videoDisplayEnabled ? collectDetailVideoFileIds(record) : [];
   if (detailV2Enabled && requestedMode === DETAIL_INITIAL_MODE) {
     const urlMap = await getTempUrlMap(
-      collectInitialDetailImageFileIds(record)
+      [...collectInitialDetailImageFileIds(record), ...videoFileIDs]
     );
+    const item = buildInitialDetail(record, urlMap);
     return ok({
       detailSchemaVersion: 2,
       detailMode: DETAIL_INITIAL_MODE,
-      item: buildInitialDetail(record, urlMap),
+      item: videoDisplayEnabled ? item : stripPublicVideo(item),
     });
   }
   if (detailV2Enabled && requestedMode === DETAIL_PATCH_MODE) {
@@ -377,9 +391,13 @@ async function getCaseDetail(event) {
       galleryPatch: buildDetailPatch(record, indexes, urlMap),
     });
   }
-  const urlMap = await getTempUrlMap(collectDetailImageFileIds(record));
+  const urlMap = await getTempUrlMap([
+    ...collectDetailImageFileIds(record),
+    ...videoFileIDs,
+  ]);
+  const item = buildDetail(record, urlMap);
   return ok({
-    item: buildDetail(record, urlMap),
+    item: videoDisplayEnabled ? item : stripPublicVideo(item),
   });
 }
 

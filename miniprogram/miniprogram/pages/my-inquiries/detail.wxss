@@ -1,0 +1,38 @@
+page { min-height: 100%; background: #f5efe4; color: #241d16; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+.page { min-height: 100vh; padding: 58rpx 30rpx 90rpx; box-sizing: border-box; }
+.hero { margin-bottom: 24rpx; }
+.page-title { font-size: 44rpx; line-height: 1.2; font-weight: 800; }
+.page-subtitle { margin-top: 10rpx; color: #766b60; font-size: 25rpx; }
+.section,
+.state-card { margin-top: 22rpx; padding: 28rpx; border: 2rpx solid rgba(223, 207, 183, .86); border-radius: 8rpx; background: #fffdf8; box-shadow: 0 10rpx 24rpx rgba(72, 49, 25, .07); box-sizing: border-box; }
+.section-kicker { color: #b77a2d; font-size: 20rpx; font-weight: 800; }
+.section-title { margin-top: 4rpx; font-size: 30rpx; font-weight: 800; }
+.status { display: inline-flex; margin-top: 12rpx; height: 48rpx; padding: 0 20rpx; border-radius: 24rpx; align-items: center; background: #b77a2d; color: #fff; font-size: 22rpx; font-weight: 800; }
+.status-contacted,
+.status-processing { background: #2d7253; }
+.status-done { background: #8c8176; }
+.status-invalid { background: #9d2b22; }
+.status-note { margin-top: 18rpx; color: #766b60; font-size: 22rpx; line-height: 1.55; }
+.outline-action { margin-top: 22rpx; min-height: 68rpx; border: 2rpx solid #b77a2d; border-radius: 34rpx; color: #8f5d22; display: flex; align-items: center; justify-content: center; font-size: 23rpx; font-weight: 800; }
+.action-disabled { opacity: .55; }
+.empty-reply { margin-top: 22rpx; padding: 24rpx; border-radius: 8rpx; background: #f5efe4; color: #766b60; font-size: 23rpx; line-height: 1.55; }
+.timeline { margin-top: 22rpx; }
+.message { position: relative; display: flex; gap: 18rpx; padding-bottom: 24rpx; }
+.message:last-child { padding-bottom: 0; }
+.message::before { content: ""; position: absolute; left: 9rpx; top: 18rpx; bottom: -2rpx; width: 2rpx; background: #d8c7af; }
+.message:last-child::before { display: none; }
+.message-dot { position: relative; z-index: 1; width: 20rpx; height: 20rpx; margin-top: 6rpx; border-radius: 10rpx; background: #2d7253; flex: 0 0 20rpx; }
+.message-body { min-width: 0; flex: 1; }
+.message-meta { color: #8c8176; font-size: 20rpx; }
+.message-content { margin-top: 8rpx; padding: 18rpx; border-radius: 8rpx; background: #e8f2eb; font-size: 24rpx; line-height: 1.6; white-space: pre-wrap; }
+.info-row { margin-top: 20rpx; display: flex; gap: 20rpx; }
+.info-label { width: 112rpx; color: #8c8176; font-size: 23rpx; flex: 0 0 112rpx; }
+.info-value { min-width: 0; flex: 1; font-size: 24rpx; line-height: 1.5; font-weight: 700; }
+.content-box { margin-top: 22rpx; padding: 22rpx; border-radius: 8rpx; background: #f5efe4; font-size: 24rpx; line-height: 1.6; white-space: pre-wrap; }
+.contact-box { margin-top: 18rpx; padding: 20rpx; border-radius: 8rpx; background: #e8f2eb; }
+.contact-label { color: #2d7253; font-size: 21rpx; font-weight: 700; }
+.contact-value { margin-top: 6rpx; font-size: 27rpx; font-weight: 800; word-break: break-all; }
+.state-card { color: #766b60; text-align: center; }
+.state-title { color: #241d16; font-size: 29rpx; font-weight: 800; }
+.state-text { margin-top: 10rpx; font-size: 23rpx; }
+.state-action { margin: 24rpx auto 0; width: 180rpx; height: 66rpx; border-radius: 33rpx; background: #241d16; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 23rpx; font-weight: 800; }

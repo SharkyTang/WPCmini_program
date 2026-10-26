@@ -51,8 +51,20 @@ test("builds inquiry records from whitelisted fields and server openid", () => {
   assert.equal(validation.valid, true);
   assert.equal(record.openid, "server_openid");
   assert.equal(record.status, "new");
+  assert.equal(record.replyCount, 0);
   assert.equal(record.contactType, "wechat");
   assert.equal(Object.prototype.hasOwnProperty.call(record, "adminNote"), false);
+});
+
+test("builds stable private reply subscription IDs per inquiry and server identity", () => {
+  const first = logic.buildInquiryReplySubscriptionId("inquiry_a", "openid_a");
+  const repeated = logic.buildInquiryReplySubscriptionId("inquiry_a", "openid_a");
+  const otherCustomer = logic.buildInquiryReplySubscriptionId("inquiry_a", "openid_b");
+  assert.equal(first, repeated);
+  assert.notEqual(first, otherCustomer);
+  assert.match(first, /^irs_[a-f0-9]{28}$/);
+  assert.equal(first.length, 32);
+  assert.equal(first.includes("openid_a"), false);
 });
 
 test("validates feedback type, content, and contact length", () => {

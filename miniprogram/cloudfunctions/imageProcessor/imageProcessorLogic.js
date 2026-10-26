@@ -23,20 +23,129 @@ function parseOpenidSet(value) {
   );
 }
 
-function resolveAdminOpenidsEnv(roleValue, fallbackValue) {
-  return trimText(roleValue) || trimText(fallbackValue);
-}
-
 function isAdminOpenid(openid, envValue) {
   return Boolean(openid && parseOpenidSet(envValue).has(openid));
 }
 
+function getRoleAdminOpenidsEnv(roleValue, fallbackValue) {
+  return trimText(roleValue) || trimText(fallbackValue);
+}
+
 function isRoleAdminOpenid(openid, roleValue, fallbackValue) {
-  return isAdminOpenid(openid, resolveAdminOpenidsEnv(roleValue, fallbackValue));
+  return isAdminOpenid(openid, getRoleAdminOpenidsEnv(roleValue, fallbackValue));
+}
+
+function parseContext(value) {
+  if (!value) return {};
+  if (typeof value === "object") return value;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function firstText(source = {}, keys = []) {
+  for (const key of keys) {
+    const value = trimText(source && source[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function resolveAdminActor(context = {}, env = {}) {
+  const runtime = parseContext(env.TCB_CONTEXT_CNFG);
+  const openid =
+    firstText(context, ["OPENID", "openid"]) ||
+    firstText(runtime, ["OPENID", "openid"]);
+  if (openid) {
+    return { authenticated: true, actor: { type: "wechat_openid", id: openid } };
+  }
+  const uidKeys = [
+    "UID",
+    "uid",
+    "UUID",
+    "uuid",
+    "TCB_UUID",
+    "CLOUDBASE_UID",
+    "CLOUDBASE_USER_ID",
+    "USER_ID",
+  ];
+  const uid =
+    firstText(context, uidKeys) ||
+    firstText(runtime, uidKeys) ||
+    firstText(env, ["TCB_UUID", "CLOUDBASE_UID", "CLOUDBASE_USER_ID"]);
+  return uid
+    ? { authenticated: true, actor: { type: "cloudbase_uid", id: uid } }
+    : { authenticated: false, actor: null };
+}
+
+function isAdminActor(actor, env = {}) {
+  if (!actor || !actor.id) return false;
+  if (actor.type === "wechat_openid") {
+    return isRoleAdminOpenid(
+      actor.id,
+      env.CASE_ADMIN_OPENIDS,
+      env.ADMIN_OPENIDS
+    );
+  }
+  if (actor.type === "cloudbase_uid") {
+    return parseOpenidSet(env.CASE_ADMIN_UIDS).has(actor.id);
+  }
+  return false;
+}
+
+function isWebWriteEnabled(value) {
+  return ["1", "true", "yes", "on"].includes(trimText(value).toLowerCase());
 }
 
 function isCloudFileId(value) {
   return trimText(value).indexOf("cloud://") === 0;
+}
+
+function getCloudFilePath(fileID) {
+  const value = trimText(fileID);
+  if (!isCloudFileId(value)) return "";
+  const body = value.slice("cloud://".length);
+  const slashIndex = body.indexOf("/");
+  return slashIndex === -1 ? "" : body.slice(slashIndex + 1);
+}
+
+function isWebAdminUploadFile(fileID, uid) {
+  const path = getCloudFilePath(fileID);
+  const normalizedUid = trimText(uid);
+  if (!path || !normalizedUid || path.includes("..")) return false;
+  const parts = path.split("/").filter(Boolean);
+  return (
+    parts.length >= 5 &&
+    parts[0] === "wine-packaging" &&
+    parts[1] === "admin-web" &&
+    [normalizedUid, encodeURIComponent(normalizedUid)].includes(parts[2]) &&
+    Boolean(parts[3]) &&
+    /\.(?:jpe?g|png|webp)$/i.test(parts.slice(4).join("/"))
+  );
+}
+
+function detectSupportedImageType(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 12) return "";
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "jpeg";
+  if (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return "png";
+  }
+  if (buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP") {
+    return "webp";
+  }
+  return "";
 }
 
 function normalizeSourceFiles(value) {
@@ -178,10 +287,16 @@ module.exports = {
   THUMBNAIL_SIZE,
   THUMBNAIL_TARGET_BYTES,
   buildVariantPaths,
+  detectSupportedImageType,
   generateVariantBuffers,
+  getCloudFilePath,
+  getRoleAdminOpenidsEnv,
+  isAdminActor,
   isAdminOpenid,
   isRoleAdminOpenid,
+  isWebAdminUploadFile,
+  isWebWriteEnabled,
   normalizeSourceFiles,
-  resolveAdminOpenidsEnv,
+  resolveAdminActor,
   trimText,
 };

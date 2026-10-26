@@ -10,9 +10,9 @@ import {
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const BACKUP_SCHEMA_VERSION = 2;
+const BACKUP_SCHEMA_VERSION = 3;
 const DEFAULT_ENV_ID = "cloud1-d3gznsms746425a42";
-const DEFAULT_COLLECTIONS = Object.freeze([
+const LEGACY_COLLECTIONS_V2 = Object.freeze([
   "wine_packaging",
   "home_banners",
   "catalog_meta",
@@ -27,7 +27,34 @@ const DEFAULT_COLLECTIONS = Object.freeze([
   "notification_push_jobs",
   "notification_delivery_logs",
 ]);
+const INQUIRY_FOLLOWUP_COLLECTIONS = Object.freeze([
+  "inquiry_messages",
+  "inquiry_alert_jobs",
+  "inquiry_reply_subscriptions",
+  "inquiry_admin_events",
+]);
+const DEFAULT_COLLECTIONS = Object.freeze([
+  ...LEGACY_COLLECTIONS_V2.slice(0, 8),
+  ...INQUIRY_FOLLOWUP_COLLECTIONS,
+  ...LEGACY_COLLECTIONS_V2.slice(8),
+]);
 const PAGE_SIZE = 100;
+
+function getCollectionsForSchemaVersion(schemaVersion) {
+  if (schemaVersion === 2) return LEGACY_COLLECTIONS_V2;
+  if (schemaVersion === 3) return DEFAULT_COLLECTIONS;
+  return null;
+}
+
+function isMissingCollectionError(error) {
+  const code = error && (error.errCode || error.code);
+  const message = error && (error.errMsg || error.message);
+  return (
+    code === "DATABASE_COLLECTION_NOT_EXIST"
+    || code === "COLLECTION_NOT_EXIST"
+    || /collection.*(?:not exist|not found)|集合.*不存在/i.test(message || "")
+  );
+}
 
 function parseEnvFile(content) {
   return content.split(/\r?\n/).reduce((env, line) => {
@@ -151,7 +178,10 @@ function validateBackupManifest(backupDir, manifestInput) {
   const manifest = manifestInput || JSON.parse(
     readFileSync(resolve(directory, "manifest.json"), "utf8")
   );
-  if (!manifest || manifest.schemaVersion !== BACKUP_SCHEMA_VERSION) {
+  const collectionNames = manifest
+    ? getCollectionsForSchemaVersion(manifest.schemaVersion)
+    : null;
+  if (!manifest || !collectionNames) {
     throw new Error("备份清单版本无效");
   }
   if (manifest.status !== "complete" || !manifest.envId) {
@@ -162,7 +192,7 @@ function validateBackupManifest(backupDir, manifestInput) {
   }
 
   const summary = {};
-  for (const collectionName of DEFAULT_COLLECTIONS) {
+  for (const collectionName of collectionNames) {
     const info = manifest.collections[collectionName];
     if (!info) throw new Error(`备份缺少集合：${collectionName}`);
     const expectedFilename = `${collectionName}.json`;
@@ -180,6 +210,15 @@ function validateBackupManifest(backupDir, manifestInput) {
     if (count !== info.count) {
       throw new Error(`${collectionName} 文档数量与清单不一致`);
     }
+    if (info.sourceMissing === true) {
+      if (
+        manifest.schemaVersion !== 3
+        || !INQUIRY_FOLLOWUP_COLLECTIONS.includes(collectionName)
+        || count !== 0
+      ) {
+        throw new Error(`${collectionName} 的源集合缺失标记无效`);
+      }
+    }
     summary[collectionName] = { count, sha256: info.sha256 };
   }
 
@@ -192,8 +231,10 @@ function validateBackupManifest(backupDir, manifestInput) {
   }
   return {
     valid: true,
+    schemaVersion: manifest.schemaVersion,
     envId: manifest.envId,
     createdAt: manifest.createdAt,
+    collectionNames: [...collectionNames],
     collections: summary,
   };
 }
@@ -217,10 +258,25 @@ async function createBackup({ db, envId, outputDir, now = new Date() }) {
       cloudStorage: false,
     },
     collections: {},
+    sourceMissingCollections: [],
   };
 
   for (const collectionName of DEFAULT_COLLECTIONS) {
-    const records = await fetchCollection(db, collectionName);
+    let records;
+    let sourceMissing = false;
+    try {
+      records = await fetchCollection(db, collectionName);
+    } catch (error) {
+      if (
+        !INQUIRY_FOLLOWUP_COLLECTIONS.includes(collectionName)
+        || !isMissingCollectionError(error)
+      ) {
+        throw error;
+      }
+      records = [];
+      sourceMissing = true;
+      manifest.sourceMissingCollections.push(collectionName);
+    }
     validateCollectionRecords(collectionName, records);
     const filename = `${collectionName}.json`;
     const content = serializeRecords(records);
@@ -229,6 +285,7 @@ async function createBackup({ db, envId, outputDir, now = new Date() }) {
       filename,
       count: records.length,
       sha256: sha256(content),
+      sourceMissing,
     };
   }
 
@@ -293,8 +350,12 @@ if (import.meta.url === executedPath) {
 export {
   BACKUP_SCHEMA_VERSION,
   DEFAULT_COLLECTIONS,
+  INQUIRY_FOLLOWUP_COLLECTIONS,
+  LEGACY_COLLECTIONS_V2,
   createBackup,
   fetchCollection,
+  getCollectionsForSchemaVersion,
+  isMissingCollectionError,
   parseArgs,
   parseEnvFile,
   serializeRecords,

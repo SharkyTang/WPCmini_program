@@ -22,8 +22,35 @@ const VALUE_MIGRATIONS = {
     "热门": "热门产品",
     "新上传": "最新产品",
     "最新": "最新产品"
+  },
+  scenes: {
+    "婚宴/喜宴": "婚宴",
+    "喜宴": "婚宴"
   }
 };
+
+export const SCENE_VALUES = Object.freeze([
+  "婚宴",
+  "百日/满月",
+  "生日宴",
+  "寿宴",
+  "乔迁宴",
+  "送礼",
+  "商务招待",
+  "节庆礼赠",
+  "企业纪念",
+  "商超陈列",
+  "电商展示"
+]);
+
+const SCENE_LABELS = Object.freeze({
+  "婚宴": "婚宴/喜宴"
+});
+
+export function getSceneLabel(value) {
+  const normalizedValue = normalizeFieldValue("scenes", value);
+  return SCENE_LABELS[normalizedValue] || normalizedValue;
+}
 
 export const CLASSIFICATION_CONFIG = {
   wineType: {
@@ -54,7 +81,7 @@ export const CLASSIFICATION_CONFIG = {
     label: "场景",
     type: "multi",
     required: false,
-    options: ["婚宴", "送礼", "商务招待", "节庆礼赠", "商超陈列", "电商展示", "企业纪念"]
+    options: SCENE_VALUES
   },
   statuses: {
     label: "状态",

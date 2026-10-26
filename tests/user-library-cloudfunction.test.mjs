@@ -80,6 +80,12 @@ function loadUserLibrary(options = {}) {
         recordsByCollection[name] = recordsByCollection[name].filter((record) =>
           state.where ? !matches(record, state.where) : false
         );
+        if (options.removeResultShape === "stats") {
+          return { stats: { removed: removed.length } };
+        }
+        if (options.removeResultShape === "removed") {
+          return { removed: removed.length };
+        }
         return { deleted: removed.length };
       },
       doc(id) {
@@ -292,8 +298,28 @@ await test("record removal cannot delete another user's data", async () => {
   assert.equal(runtime.calls.transactions, 0);
 });
 
+await test("record removal accepts the wx-server-sdk stats.removed result", async () => {
+  const runtime = loadUserLibrary({
+    removeResultShape: "stats",
+    recordsByCollection: {
+      favorites: [
+        { _id: "mine", _openid: "openid_server", caseDocId: "doc_1" },
+      ],
+    },
+  });
+
+  const result = await runtime.main({
+    action: "removeFavorites",
+    ids: ["mine"],
+  });
+
+  assert.equal(result.removedCount, 1);
+  assert.deepEqual(runtime.recordsByCollection.favorites, []);
+});
+
 await test("clear removes every owned record and leaves other users untouched", async () => {
   const runtime = loadUserLibrary({
+    removeResultShape: "stats",
     recordsByCollection: {
       browse_history: [
         { _id: "mine_1", _openid: "openid_server", caseDocId: "doc_1" },

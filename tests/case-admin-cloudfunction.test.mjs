@@ -12,22 +12,44 @@ const logic = require(resolve(
 
 const {
   ALLOWED_CASE_FIELDS,
+  CASE_ADMIN_OPTIONS,
   CASE_GALLERY_MAX,
   HOME_DISPLAY_LIMITS,
   VALID_CASE_ADMIN_ACTIONS,
+  VIDEO_DURATION_SECONDS_MAX,
+  VIDEO_POSTER_UPLOAD_BYTES,
+  VIDEO_UPLOAD_BYTES,
+  buildBatchCasePatch,
   buildCaseSearchText,
+  buildExpectedVariantPaths,
+  buildPreparedVideoUpload,
   buildHomepageDisplayItems,
   filterCaseItems,
+  filterCaseItemsV2,
   generateSequentialCaseId,
   getActivatedHomepageSlots,
+  getAdminDisplayName,
   getAdminOpenidsFromEnv,
   getCaseIdNumber,
+  hasCaseImageChanges,
   isAdminOpenid,
-  isRoleAdminOpenid,
+  isAdminActor,
+  isCloudFileFromEnvironment,
+  isPreparedVideoUploadFile,
+  isVideoUploadFileForActor,
+  isWebAdminUploadFile,
+  normalizeClientMutationId,
   normalizeCloudFileIds,
+  parseAdminDisplayNames,
   pickAllowedCaseFields,
   sanitizeCasePayload,
+  sanitizeVideoPatch,
+  sortCaseItemsV2,
+  resolveAdminActor,
+  validateExpectedVersion,
+  validateHomepageOrders,
   validateHomepageDisplayCapacity,
+  validateWebImageVariants,
 } = logic;
 
 function test(name, fn) {
@@ -50,22 +72,121 @@ test("checks admin openid from comma separated env value", () => {
   assert.equal(isAdminOpenid("x", "a,b,c"), false);
 });
 
-test("case-specific admins override a whitespace-safe general fallback", () => {
-  assert.equal(isRoleAdminOpenid("case_admin", " case_admin ", "general_admin"), true);
-  assert.equal(isRoleAdminOpenid("general_admin", "case_admin", "general_admin"), false);
-  assert.equal(isRoleAdminOpenid("general_admin", "   ", " general_admin "), true);
+test("resolves trusted CloudBase UIDs separately from WeChat OPENIDs", () => {
+  const web = resolveAdminActor({ UID: "web-admin-1" }, {});
+  const wechat = resolveAdminActor({ OPENID: "wx-admin-1", UID: "ignored" }, {});
+  const none = resolveAdminActor({}, {});
+  assert.deepEqual(plain(web), {
+    authenticated: true,
+    actor: { type: "cloudbase_uid", id: "web-admin-1" },
+  });
+  assert.deepEqual(plain(wechat.actor), {
+    type: "wechat_openid",
+    id: "wx-admin-1",
+  });
+  assert.equal(none.authenticated, false);
+  assert.equal(isAdminActor(web.actor, { CASE_ADMIN_UIDS: "web-admin-1,web-admin-2" }), true);
+  assert.equal(isAdminActor(web.actor, { CASE_ADMIN_UIDS: "other" }), false);
+});
+
+test("keeps the case-specific WeChat admin allowlist with legacy fallback", () => {
+  const actor = { type: "wechat_openid", id: "wx-case-admin" };
+  assert.equal(isAdminActor(actor, {
+    CASE_ADMIN_OPENIDS: "wx-case-admin",
+    ADMIN_OPENIDS: "legacy-admin",
+  }), true);
+  assert.equal(isAdminActor(actor, {
+    CASE_ADMIN_OPENIDS: "other-case-admin",
+    ADMIN_OPENIDS: "wx-case-admin",
+  }), false);
+  assert.equal(isAdminActor(actor, {
+    CASE_ADMIN_OPENIDS: "",
+    ADMIN_OPENIDS: "wx-case-admin",
+  }), true);
+});
+
+test("parses administrator display names", () => {
+  assert.deepEqual(plain(parseAdminDisplayNames(
+    '{"uid-mother":"sharky","uid-owner":"administrator","blank":""}'
+  )), {
+    "uid-mother": "sharky",
+    "uid-owner": "administrator",
+  });
+  assert.deepEqual(plain(parseAdminDisplayNames(
+    'json:{"uid-mother":"sharky","uid-owner":"administrator"}'
+  )), {
+    "uid-mother": "sharky",
+    "uid-owner": "administrator",
+  });
+  assert.deepEqual(plain(parseAdminDisplayNames("invalid-json")), {});
+  assert.equal(getAdminDisplayName(
+    { type: "cloudbase_uid", id: "uid-mother" },
+    { CASE_ADMIN_DISPLAY_NAMES: '{"uid-mother":"sharky"}' }
+  ), "sharky");
+});
+
+test("validates web upload ownership and task ids", () => {
+  assert.equal(
+    isWebAdminUploadFile(
+      "cloud://env/wine-packaging/admin-web/web-admin-1/batch-1/source.jpg",
+      "web-admin-1"
+    ),
+    true
+  );
+  assert.equal(
+    isWebAdminUploadFile(
+      "cloud://env/wine-packaging/admin-web/other/batch-1/source.jpg",
+      "web-admin-1"
+    ),
+    false
+  );
+  assert.equal(normalizeClientMutationId("batch:item-1").valid, true);
+  assert.equal(normalizeClientMutationId("../unsafe").valid, false);
+});
+
+test("binds every web image variant to its administrator-owned source", () => {
+  const actor = { type: "cloudbase_uid", id: "web-admin-1" };
+  const source =
+    "cloud://env/wine-packaging/admin-web/web-admin-1/batch-1/source.jpg";
+  const paths = buildExpectedVariantPaths(source);
+  const item = {
+    sourceGalleryImages: [source],
+    galleryImages: [`cloud://env/${paths.displayPath}`],
+    galleryThumbnails: [`cloud://env/${paths.thumbnailPath}`],
+    galleryBanners: [`cloud://env/${paths.bannerPath}`],
+    coverImage: `cloud://env/${paths.displayPath}`,
+    coverThumbnail: `cloud://env/${paths.thumbnailPath}`,
+    coverBanner: `cloud://env/${paths.bannerPath}`,
+  };
+  assert.equal(validateWebImageVariants(item, actor).valid, true);
+  const forged = validateWebImageVariants({
+    ...item,
+    galleryImages: ["cloud://env/private/customer-contract.pdf"],
+    coverImage: "cloud://env/private/customer-contract.pdf",
+  }, actor);
+  assert.equal(forged.valid, false);
+  assert.equal(forged.code, "INVALID_IMAGE_VARIANTS");
+  assert.equal(hasCaseImageChanges(item, { galleryImages: item.galleryImages }), false);
+  assert.equal(
+    hasCaseImageChanges(item, { galleryImages: ["cloud://env/other.jpg"] }),
+    true
+  );
 });
 
 test("declares supported case admin actions", () => {
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("checkAccess"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getCaseImageUrls"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("getVisibleImageUrls"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("prepareVideoUpload"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listHomepageDisplay"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listRecentCases"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("createCase"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("setCaseVisibility"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("deleteCase"), true);
   assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("cleanupUnreferencedFiles"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("permanentlyDeleteCases"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("retryPurgeCleanup"), true);
+  assert.equal(VALID_CASE_ADMIN_ACTIONS.includes("listPendingPurgeJobs"), true);
 });
 
 test("accepts complete v2 image arrays and rejects incomplete banners", () => {
@@ -107,6 +228,9 @@ test("keeps only writable case fields", () => {
     title: "案例",
     coverImage: "cloud://cloud1/file.jpg",
     galleryImages: ["cloud://cloud1/file.jpg", "cloud://cloud1/detail.jpg"],
+    videoUrl: "https://media.example.com/case.mp4",
+    videoPoster: "https://media.example.com/case.jpg",
+    videoDurationSeconds: 75,
     isPinned: true,
     homeSections: ["popular"],
     _openid: "hacker",
@@ -114,9 +238,121 @@ test("keeps only writable case fields", () => {
     updatedByOpenid: "bad",
   });
 
-  assert.deepEqual(plain(Object.keys(picked)), ["title", "coverImage", "galleryImages", "homeSections", "isPinned"]);
+  assert.deepEqual(plain(Object.keys(picked)), [
+    "title",
+    "coverImage",
+    "galleryImages",
+    "homeSections",
+    "isPinned",
+  ]);
   assert.equal(ALLOWED_CASE_FIELDS.includes("_openid"), false);
   assert.equal(ALLOWED_CASE_FIELDS.includes("homeSections"), true);
+});
+
+test("validates atomic external, upload and clear video patches", () => {
+  const accepted = sanitizeVideoPatch({
+    mode: "external",
+    url: "  https://media.example.com/cases/demo.mp4  ",
+    posterUrl: "https://media.example.com/cases/demo.jpg",
+    durationSeconds: 90.2,
+  });
+  assert.equal(accepted.valid, true);
+  assert.deepEqual(plain(accepted.data), {
+    videoFileID: "",
+    videoUrl: "https://media.example.com/cases/demo.mp4",
+    videoPosterFileID: "",
+    videoPoster: "https://media.example.com/cases/demo.jpg",
+    videoDurationSeconds: 91,
+    videoFileSizeBytes: null,
+  });
+
+  const insecureUrl = sanitizeVideoPatch({
+    mode: "external",
+    url: "http://media.example.com/demo.mp4",
+  });
+  assert.equal(insecureUrl.valid, false);
+  assert.equal(insecureUrl.code, "INVALID_VIDEO_URL");
+
+  const badPoster = sanitizeVideoPatch({
+    mode: "external",
+    url: "https://media.example.com/demo.mp4",
+    posterUrl: "https://user:secret@media.example.com/demo.jpg",
+  });
+  assert.equal(badPoster.valid, false);
+  assert.equal(badPoster.code, "INVALID_VIDEO_URL");
+
+  const badDuration = sanitizeVideoPatch({
+    mode: "upload",
+    fileID: "cloud://env/wine-packaging/videos/demo.mp4",
+    durationSeconds: 120.01,
+  });
+  assert.equal(badDuration.valid, false);
+  assert.equal(badDuration.code, "INVALID_VIDEO_DURATION");
+
+  const upload = sanitizeVideoPatch({
+    mode: "upload",
+    fileID: "cloud://env/wine-packaging/videos/video.mp4",
+    durationSeconds: 120,
+    posterFileID: "cloud://env/wine-packaging/videos/poster.jpg",
+  });
+  assert.equal(upload.valid, true);
+  assert.equal(upload.data.videoDurationSeconds, 120);
+  assert.deepEqual(plain(upload.fileIDs), [
+    "cloud://env/wine-packaging/videos/video.mp4",
+    "cloud://env/wine-packaging/videos/poster.jpg",
+  ]);
+
+  const clearPatch = sanitizeVideoPatch({ mode: "clear" });
+  assert.equal(clearPatch.valid, true);
+  assert.deepEqual(plain(clearPatch.data), {
+    videoFileID: "",
+    videoUrl: "",
+    videoPosterFileID: "",
+    videoPoster: "",
+    videoDurationSeconds: null,
+    videoFileSizeBytes: null,
+  });
+
+  assert.equal(sanitizeVideoPatch(undefined).omitted, true);
+  assert.equal(sanitizeVideoPatch({ mode: "unknown" }).valid, false);
+  assert.equal(VIDEO_UPLOAD_BYTES, 104857600);
+  assert.equal(VIDEO_POSTER_UPLOAD_BYTES, 5242880);
+  assert.equal(VIDEO_DURATION_SECONDS_MAX, 120);
+});
+
+test("binds prepared video paths to one actor, case and file kind", () => {
+  const actor = { type: "cloudbase_uid", id: "web-admin-1" };
+  const uploadId = "a".repeat(32);
+  const video = buildPreparedVideoUpload({
+    actor,
+    caseDocumentId: "case-doc-1",
+    kind: "video",
+    fileName: "demo.MP4",
+    uploadId,
+  });
+  assert.equal(video.valid, true);
+  const fileID = `cloud://current-env/${video.cloudPath}`;
+  assert.equal(isPreparedVideoUploadFile(fileID, actor, "case-doc-1", "video"), true);
+  assert.equal(isPreparedVideoUploadFile(fileID, actor, "case-doc-2", "video"), false);
+  assert.equal(isPreparedVideoUploadFile(fileID, actor, "case-doc-1", "poster"), false);
+  assert.equal(isVideoUploadFileForActor(fileID, actor), true);
+  assert.equal(
+    isVideoUploadFileForActor(fileID, { type: "cloudbase_uid", id: "other" }),
+    false
+  );
+  assert.equal(isCloudFileFromEnvironment(fileID, "current-env"), true);
+  assert.equal(isCloudFileFromEnvironment(fileID, "other-env"), false);
+  assert.equal(isCloudFileFromEnvironment(
+    "cloud://cloud1-d3gznsms746425a42.636c-cloud1-d3gznsms746425a42/wine-packaging/videos/demo.mp4",
+    "cloud1-d3gznsms746425a42"
+  ), true);
+  assert.equal(buildPreparedVideoUpload({
+    actor,
+    caseDocumentId: "case-doc-1",
+    kind: "video",
+    fileName: "demo.mov",
+    uploadId,
+  }).code, "INVALID_VIDEO_FORMAT");
 });
 
 test("uses the first gallery image as the server-side cover", () => {
@@ -352,6 +588,101 @@ test("filters case items by visibility and keyword", () => {
   );
 });
 
+test("keeps canonical scene values while wedding search accepts the display label", () => {
+  assert.deepEqual(plain(CASE_ADMIN_OPTIONS.scenes), [
+    "婚宴",
+    "百日/满月",
+    "生日宴",
+    "寿宴",
+    "乔迁宴",
+    "送礼",
+    "商务招待",
+    "节庆礼赠",
+    "企业纪念",
+    "商超陈列",
+    "电商展示",
+  ]);
+  const weddingCase = {
+    _id: "wedding_case",
+    caseId: "case_888",
+    title: "红色礼盒",
+    scenes: { values: ["婚宴"] },
+    isVisible: true,
+  };
+  assert.equal(buildCaseSearchText(weddingCase).includes("婚宴/喜宴"), true);
+  assert.deepEqual(
+    plain(filterCaseItemsV2([weddingCase], { keyword: "喜宴" }).map((item) => item._id)),
+    ["wedding_case"],
+  );
+  assert.equal(filterCaseItemsV2([weddingCase], { scenes: ["婚宴"] }).length, 1);
+  assert.equal(filterCaseItemsV2([weddingCase], { scenes: ["婚宴/喜宴"] }).length, 0);
+  const sanitized = sanitizeCasePayload(
+    {
+      title: "婚宴礼盒",
+      coverImage: "cloud://cloud1/wedding.jpg",
+      packageTypes: ["礼盒"],
+      scenes: ["婚宴"],
+    },
+    { isCreate: true, defaultCaseId: "case_888" },
+  );
+  assert.equal(sanitized.valid, true);
+  assert.deepEqual(plain(sanitized.data.scenes), { values: ["婚宴"] });
+  assert.equal(sanitized.data.keywords.values.includes("婚宴"), true);
+  assert.equal(sanitized.data.keywords.values.includes("婚宴/喜宴"), false);
+});
+
+test("saves and batch patches the four added scene values", () => {
+  const addedSceneValues = ["百日/满月", "生日宴", "寿宴", "乔迁宴"];
+  const created = sanitizeCasePayload(
+    {
+      title: "新增宴席场景",
+      coverImage: "cloud://cloud1/banquet.jpg",
+      packageTypes: ["礼盒"],
+      scenes: addedSceneValues,
+    },
+    { isCreate: true, defaultCaseId: "case_889" },
+  );
+  assert.equal(created.valid, true);
+  assert.deepEqual(plain(created.data.scenes), { values: addedSceneValues });
+  addedSceneValues.forEach((scene) => {
+    assert.equal(
+      filterCaseItemsV2(
+        [{ _id: `scene_${scene}`, ...created.data, isVisible: true }],
+        { scenes: [scene] },
+      ).length,
+      1,
+    );
+  });
+  const existing = { scenes: { values: ["送礼", "百日/满月"] } };
+  assert.deepEqual(
+    plain(
+      buildBatchCasePatch(existing, {
+        tags: { scenes: ["生日宴", "寿宴"] },
+        tagMode: "append",
+      }).data.scenes,
+    ),
+    { values: ["送礼", "百日/满月", "生日宴", "寿宴"] },
+  );
+  assert.deepEqual(
+    plain(
+      buildBatchCasePatch(existing, {
+        tags: { scenes: ["百日/满月"] },
+        tagMode: "remove",
+      }).data.scenes,
+    ),
+    { values: ["送礼"] },
+  );
+  assert.deepEqual(
+    plain(
+      buildBatchCasePatch(existing, {
+        tags: { scenes: ["乔迁宴"] },
+        tagMode: "replace",
+      }).data.scenes,
+    ),
+    { values: ["乔迁宴"] },
+  );
+});
+
 test("builds the same limited homepage display snapshots as the homepage", () => {
   const cases = [
     { _id: "case_1", caseId: "case_001", title: "轮播案例", coverImage: "cloud://env/case-1.jpg", isVisible: true, sortOrder: 1, homeSections: { values: ["banner", "popular", "latest"] } },
@@ -399,4 +730,143 @@ test("builds the same limited homepage display snapshots as the homepage", () =>
   const searchedLatest = buildHomepageDisplayItems(cases, banners, { slot: "latest", keyword: "最新案例 3" });
   assert.equal(searchedLatest.length, 1);
   assert.equal(searchedLatest[0].displayOrderLabel, "第 4 个");
+});
+
+test("filters and stably sorts more than the legacy search window", () => {
+  const items = Array.from({ length: 350 }, (_, index) => ({
+    _id: `doc_${index}`,
+    caseId: `case_${String(index + 1).padStart(3, "0")}`,
+    title: index % 2 ? "青花礼盒" : "商务瓶标",
+    packageTypes: { values: [index % 2 ? "礼盒" : "瓶标"] },
+    isVisible: index % 3 !== 0,
+    sortOrder: 350 - index,
+  }));
+  const filtered = filterCaseItemsV2(items, {
+    keyword: "青花",
+    packageTypes: ["礼盒"],
+    visibility: "visible",
+    trash: false,
+  });
+  assert.equal(filtered.length > 50, true);
+  const sorted = sortCaseItemsV2(filtered, { field: "sortOrder", direction: "asc" });
+  assert.equal(sorted[0].sortOrder <= sorted.at(-1).sortOrder, true);
+});
+
+test("applies append, remove and replace tag patches without losing other fields", () => {
+  const existing = {
+    title: "礼盒",
+    caseId: "case_001",
+    packageTypes: { values: ["礼盒"] },
+    styles: { values: ["国风", "简约"] },
+    isVisible: false,
+  };
+  const appended = buildBatchCasePatch(existing, {
+    tags: { styles: ["轻奢"] },
+    tagMode: "append",
+  });
+  const removed = buildBatchCasePatch(existing, {
+    tags: { styles: ["简约"] },
+    tagMode: "remove",
+  });
+  const replaced = buildBatchCasePatch(existing, {
+    tags: { styles: ["时尚"] },
+    tagMode: "replace",
+  });
+  assert.deepEqual(plain(appended.data.styles), { values: ["国风", "简约", "轻奢"] });
+  assert.deepEqual(plain(removed.data.styles), { values: ["国风"] });
+  assert.deepEqual(plain(replaced.data.styles), { values: ["时尚"] });
+});
+
+test("applies single-value price level batch semantics", () => {
+  const filled = { title: "礼盒", priceLevel: "品质款", isVisible: false };
+  const empty = { title: "礼盒", priceLevel: "", isVisible: false };
+
+  assert.equal(
+    buildBatchCasePatch(empty, {
+      tags: { priceLevel: ["高端款"] },
+      tagMode: "append",
+    }).data.priceLevel,
+    "高端款"
+  );
+  assert.equal(
+    buildBatchCasePatch(filled, {
+      tags: { priceLevel: ["高端款"] },
+      tagMode: "append",
+    }).data.priceLevel,
+    "品质款"
+  );
+  assert.equal(
+    buildBatchCasePatch(filled, {
+      tags: { priceLevel: ["高端款"] },
+      tagMode: "remove",
+    }).data.priceLevel,
+    "品质款"
+  );
+  assert.equal(
+    buildBatchCasePatch(filled, {
+      tags: { priceLevel: ["品质款"] },
+      tagMode: "remove",
+    }).data.priceLevel,
+    ""
+  );
+  assert.equal(
+    buildBatchCasePatch(filled, {
+      tags: { priceLevel: ["珍藏款"] },
+      tagMode: "replace",
+    }).data.priceLevel,
+    "珍藏款"
+  );
+  assert.equal(
+    buildBatchCasePatch(filled, {
+      tags: { priceLevel: [] },
+      tagMode: "replace",
+    }).data.priceLevel,
+    ""
+  );
+  assert.equal(
+    buildBatchCasePatch(filled, {
+      tags: { priceLevel: ["基础款", "高端款"] },
+      tagMode: "replace",
+    }).code,
+    "INVALID_BATCH_PATCH"
+  );
+});
+
+test("requires and checks optimistic versions for desktop writes", () => {
+  const item = { version: 4 };
+  assert.equal(validateExpectedVersion(item, undefined, { required: true }).code, "EXPECTED_VERSION_REQUIRED");
+  assert.equal(validateExpectedVersion(item, 3, { required: true }).code, "VERSION_CONFLICT");
+  assert.equal(validateExpectedVersion(item, 4, { required: true }).valid, true);
+  assert.equal(validateExpectedVersion({}, undefined, { required: false }).valid, true);
+});
+
+test("allows one case in multiple homepage sections but rejects duplicates within a section", () => {
+  const accepted = validateHomepageOrders({
+    banner: ["case_1"],
+    popular: ["case_1"],
+    latest: [],
+  });
+  const rejected = validateHomepageOrders({
+    banner: ["case_1", "case_1"],
+    popular: [],
+    latest: [],
+  });
+  assert.equal(accepted.valid, true);
+  assert.equal(rejected.code, "DUPLICATE_HOME_CASE");
+});
+
+test("prefers per-section order and falls back to legacy latest descending order", () => {
+  const cases = [
+    { _id: "a", caseId: "case_001", isVisible: true, sortOrder: 1, homeSections: { values: ["latest"] }, homeSectionOrder: { latest: 2 } },
+    { _id: "b", caseId: "case_002", isVisible: true, sortOrder: 99, homeSections: { values: ["latest"] }, homeSectionOrder: { latest: 1 } },
+  ];
+  assert.deepEqual(
+    plain(buildHomepageDisplayItems(cases, [], { slot: "latest" }).map((item) => item.id)),
+    ["b", "a"]
+  );
+  const legacy = cases.map(({ homeSectionOrder, ...item }) => item);
+  assert.deepEqual(
+    plain(buildHomepageDisplayItems(legacy, [], { slot: "latest" }).map((item) => item.id)),
+    ["b", "a"]
+  );
 });

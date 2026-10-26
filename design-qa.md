@@ -1,40 +1,42 @@
-# Design QA — 首页轮播图固定比例
+# Design QA — 案例详情页 V2
 
-- Source visual truth: `/var/folders/dw/b62m5m1j0ygdwflpyv2mqykc0000gn/T/TemporaryItems/NSIRD_screencaptureui_rENdEv/截屏2026-07-30 20.24.38.png`
-- Implementation screenshot: `/private/tmp/home-carousel-fixed-ratio-after.jpg`
-- Side-by-side comparison: `/private/tmp/home-carousel-fixed-ratio-comparison.png`
-- Viewport: 微信开发者工具 iPhone 15 Pro Max 模拟器，界面缩放 `63%`
-- State: 将右侧案例 “7” 手动滑动到中间
+- Source visual truth: `/var/folders/dw/b62m5m1j0ygdwflpyv2mqykc0000gn/T/codex-clipboard-4b48fefb-2489-428c-a1ef-5f39c28776cc.png`
+- Implementation screenshot: `/private/tmp/detail-v2-implementation-final.png`
+- Side-by-side comparison: `/private/tmp/detail-v2-comparison-final.png`
+- Viewport: 微信开发者工具，iPhone 12/13 (Pro)，模拟器缩放 `88%`
+- Visual state: 6 张图片的案例；仅为布局验收临时注入视频地址、封面地址和 `01:28` 时长，不写数据库
+- Interaction state: 5 张图片的真实无视频案例，用于验证无空白、全图预览和主 CTA 跳转
 
-## Full-view comparison evidence
+## Comparison evidence
 
-- 修复前，当前案例会从侧卡的 `aspectFill` 切换为 `aspectFit`，出现上下色块并产生明显的缩小感。
-- 修复后，主卡和左右侧卡始终使用同一个 `aspectFill` 裁切规则；案例从侧边移动到中间时不再切换显示比例。
-
-## Focused region comparison evidence
-
-- 对比图上半部分记录完整轮播区域，下半部分放大中间案例卡。
-- 修复后的中间卡不再出现上下黄色留白，和两侧案例保持一致的铺满方式与缩放比例。
+- 页面顺序与参考一致：主图、缩略图、滑动提示、可选视频、案例信息、主 CTA、次 CTA。
+- 收藏入口固定在主图右上角；图片数量保留在左下角；“点击查看大图”使用右下角深色胶囊并避开主体中心。
+- 主图由接近正方形收紧为 `5:4`，使首屏信息密度更接近参考，同时继续使用响应式宽度和真实案例图片。
+- 视频卡与信息卡左右对齐，使用原生 `video`、现有圆角和阴影；标题及可选时长使用同层 `view` 覆盖层。
+- 信息卡保留原字段结构，长场景文案可换行；两个 CTA 延续项目的深色主按钮和深绿色次按钮语言。
 
 ## Findings
 
-- 本次目标没有遗留可执行的 P0、P1 或 P2 问题。
-- 字体、文案、颜色、卡片尺寸和整体布局均未改动。
-- 图片显示在所有轮播状态中统一为 `aspectFill`。
-- 取舍：`aspectFill` 可能裁掉原图边缘；这是为遵守两侧案例的比例并避免切换时缩放而采用的统一规则。
-- 控制台中历史图片临时地址的 `403`、`404` 与本次显示模式修改无关。
+- 未发现仍需处理的 P0、P1 或 P2 视觉问题。
+- 模拟器中的临时公开视频源无法完成媒体解码，因此对照截图里的播放器为黑色原生待播放状态；生产封面字段绑定、时长格式化、播放失败降级和重试均已在代码及测试中覆盖。
+- 上线前仍需用已加入小程序合法域名的真实 HTTPS 视频，在真机完成一次播放、暂停、全屏和封面显示核验。
+- 本次没有修改全局导航、收藏资料门槛、询价表单或客服会话逻辑。
 
 ## Interaction checks
 
-- 手动滑动后，右侧案例 “7” 成为主卡，图片比例和裁切方式保持不变。
-- 自动轮播、循环轮播、点击案例、标题跟随当前项等原有逻辑未改动。
-- 微信开发者工具“问题”面板为 0 个问题。
+- 在真实 5 图案例点击“点击查看大图”，原生预览成功打开并显示 `1 / 5`，可浏览该案例全部图片。
+- 在真实无视频案例中，缩略图提示后直接进入案例信息，没有视频空白占位。
+- 点击“提交定制需求”成功进入现有定制需求页；返回后案例详情状态正常。
+- 页面底部可见“提交定制需求”和“咨询同款包装方案”两个入口；客服入口未主动发起外部联系。
+- 单图时缩略图条和滑动提示均由 `galleryItems.length > 1` 控制；自动化测试覆盖单图/多图结构、预览 current 和全部 URLs。
+- 微信开发者工具重新编译成功，“问题”面板为 0；调试器中的历史图片临时 URL 失败与本次布局代码无关。
 
 ## Comparison history
 
-1. 原实现混用 `aspectFill` 与 `aspectFit`，案例进入中间时出现可见的比例跳变。
-2. 将轮播图片统一为固定的 `aspectFill`。
-3. 修复后再次滑动并对比，确认进入中间时不再因图片模式切换而改变比例。
+1. 第一轮完成 V2 信息顺序、图片交互提示、可选视频区和 CTA 层级。
+2. 对照参考后将主图比例由接近 `1:1` 收紧为 `5:4`，减少首屏纵向占用。
+3. 将视频标题和时长从原生视频子节点移为同层兄弟 `view`，消除新基础库对 `cover-view` 的兼容提示。
+4. 重新编译、截取同视口实现图并生成最终并排对照，确认间距、圆角、层级和长文本布局通过。
 
 ## Final result
 

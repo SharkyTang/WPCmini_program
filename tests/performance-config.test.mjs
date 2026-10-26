@@ -145,6 +145,7 @@ test("cloud deployment includes every required function in dependency order", ()
   );
   assert.deepEqual(deployedFunctions, [
     "quickstartFunctions",
+    "inquiryNotifier",
     "userData",
     "userLibrary",
     "caseAdmin",

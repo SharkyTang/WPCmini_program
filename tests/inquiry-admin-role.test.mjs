@@ -1,14 +1,20 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 const functionPath = resolve(
   __dirname,
   "../miniprogram/cloudfunctions/inquiryAdmin/index.js"
 );
+const logic = require(resolve(
+  __dirname,
+  "../miniprogram/cloudfunctions/inquiryAdmin/inquiryAdminLogic.js"
+));
 
 function loadInquiryAdmin(options = {}) {
   const cloud = {
@@ -33,10 +39,15 @@ function loadInquiryAdmin(options = {}) {
       env: {
         ADMIN_OPENIDS: options.adminOpenids || "",
         INQUIRY_ADMIN_OPENIDS: options.inquiryAdminOpenids || "",
+        INQUIRY_FOLLOWUP_ENABLED: options.followupEnabled || "",
+        INQUIRY_EMAIL_ALERTS_ENABLED: options.emailAlertsEnabled || "",
+        INQUIRY_CUSTOMER_PUSH_ENABLED: options.customerPushEnabled || "",
       },
     },
     require(moduleName) {
       if (moduleName === "wx-server-sdk") return cloud;
+      if (moduleName === "crypto") return require("node:crypto");
+      if (moduleName === "./inquiryAdminLogic") return logic;
       throw new Error(`Unexpected require: ${moduleName}`);
     },
   };
@@ -70,11 +81,23 @@ await test("inquiry-specific admins override the general admin list", async () =
   });
   assert.deepEqual(
     JSON.parse(JSON.stringify(await roleAdmin({ action: "checkAccess" }))),
-    { ok: true, isAdmin: true }
+    {
+      ok: true,
+      isAdmin: true,
+      followupEnabled: false,
+      emailAlertsEnabled: false,
+      customerPushEnabled: false,
+    }
   );
   assert.deepEqual(
     JSON.parse(JSON.stringify(await generalAdmin({ action: "checkAccess" }))),
-    { ok: true, isAdmin: false }
+    {
+      ok: true,
+      isAdmin: false,
+      followupEnabled: false,
+      emailAlertsEnabled: false,
+      customerPushEnabled: false,
+    }
   );
 });
 
@@ -86,6 +109,12 @@ await test("blank inquiry role configuration falls back to ADMIN_OPENIDS", async
   });
   assert.deepEqual(
     JSON.parse(JSON.stringify(await main({ action: "checkAccess" }))),
-    { ok: true, isAdmin: true }
+    {
+      ok: true,
+      isAdmin: true,
+      followupEnabled: false,
+      emailAlertsEnabled: false,
+      customerPushEnabled: false,
+    }
   );
 });

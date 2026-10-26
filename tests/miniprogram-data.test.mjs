@@ -22,7 +22,9 @@ const {
   normalizeCaseRecord,
   filterCases,
   buildFallbackBanners,
+  getSceneLabel,
   HOME_SECTION_VALUES,
+  SCENE_VALUES,
 } = sandbox.module.exports;
 
 function test(name, fn) {
@@ -70,6 +72,43 @@ test("normalizes CloudBase CMS case records into display-ready fields", () => {
   assert.equal(normalized.searchText.includes("国潮"), false);
   assert.equal(normalized.searchText.includes("烫金"), false);
   assert.equal(normalized.tags.includes("烫金"), false);
+});
+
+test("keeps scene values stable while exposing the complete ordered label catalog", () => {
+  assert.deepEqual(plain(SCENE_VALUES), [
+    "婚宴",
+    "百日/满月",
+    "生日宴",
+    "寿宴",
+    "乔迁宴",
+    "送礼",
+    "商务招待",
+    "节庆礼赠",
+    "企业纪念",
+    "商超陈列",
+    "电商展示",
+  ]);
+  assert.equal(getSceneLabel("婚宴"), "婚宴/喜宴");
+  assert.equal(getSceneLabel("送礼"), "送礼");
+});
+
+test("indexes the wedding display alias without rewriting legacy scene data", () => {
+  const weddingCase = normalizeCaseRecord({
+    _id: "wedding",
+    title: "婚庆礼盒",
+    scenes: { values: ["婚宴"] },
+    isVisible: true,
+  });
+
+  assert.deepEqual(plain(weddingCase.scenes), ["婚宴"]);
+  assert.deepEqual(
+    plain(filterCases([weddingCase], { query: "喜宴" }).map((item) => item.id)),
+    ["wedding"]
+  );
+  assert.deepEqual(
+    plain(filterCases([weddingCase], { query: "婚宴/喜宴" }).map((item) => item.id)),
+    ["wedding"]
+  );
 });
 
 test("filters visible cases by text, single-value fields, and multi-value fields", () => {
@@ -133,6 +172,28 @@ test("client normalization preserves up to nine case images", () => {
 
   assert.equal(normalized.galleryImages.length, 9);
   assert.deepEqual(plain(normalized.galleryImages), galleryImages.slice(0, 9));
+});
+
+test("client normalization keeps only valid HTTPS video metadata", () => {
+  const normalized = normalizeCaseRecord({
+    _id: "video-case",
+    videoUrl: "  https://media.example.com/cases/demo.mp4  ",
+    videoPoster: "https://media.example.com/cases/demo-poster.jpg",
+    videoDurationSeconds: "88",
+  });
+  assert.equal(normalized.videoUrl, "https://media.example.com/cases/demo.mp4");
+  assert.equal(normalized.videoPoster, "https://media.example.com/cases/demo-poster.jpg");
+  assert.equal(normalized.videoDurationSeconds, 88);
+
+  const invalid = normalizeCaseRecord({
+    _id: "invalid-video-case",
+    videoUrl: "http://media.example.com/demo.mp4",
+    videoPoster: "https://media.example.com/orphan-poster.jpg",
+    videoDurationSeconds: 1.5,
+  });
+  assert.equal(invalid.videoUrl, "");
+  assert.equal(invalid.videoPoster, "");
+  assert.equal(invalid.videoDurationSeconds, null);
 });
 
 test("builds fallback banners from home section cases when CMS banners are empty", () => {

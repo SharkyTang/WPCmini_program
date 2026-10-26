@@ -1,8 +1,10 @@
+const caseData = require("../../utils/caseData");
 const {
   DEFAULT_FILTERS,
   filterCases,
   selectedFilterCount,
-} = require("../../utils/caseData");
+} = caseData;
+const getSceneLabel = caseData.getSceneLabel || ((value) => value || "");
 const { attachCaseImageUrls, fetchVisibleCases, refreshImageUrl } = require("../../utils/cloudData");
 const {
   fetchCatalogImageUrls,
@@ -20,6 +22,11 @@ const {
   shouldRefreshCaseData,
 } = require("../../utils/caseRefresh");
 const { reportClientFault } = require("../../utils/errorTelemetry");
+const {
+  beginPageLoading,
+  finishPageLoading,
+  cancelPageLoading,
+} = require("../../utils/nativePageLoading");
 
 const FILTER_TITLE_OVERRIDES = {
   packageTypes: "包装",
@@ -37,6 +44,22 @@ const PENDING_CATEGORY_SORT_KEY = "pendingCategorySort";
 const CARD_PAGE_SIZE = 12;
 const SEARCH_DEBOUNCE_MS = 250;
 const CATEGORY_SHARE_TITLE = "酒包装案例库｜金亿诚包装科技";
+const CATEGORY_ENTRY_LOADING_OPTIONS = {
+  owner: "category-entry",
+  title: "加载中",
+  delayMs: 120,
+  minVisibleMs: 300,
+  maxVisibleMs: 3000,
+  mask: false,
+};
+const CATEGORY_LOAD_MORE_LOADING_OPTIONS = {
+  owner: "category-load-more",
+  title: "加载更多",
+  delayMs: 0,
+  minVisibleMs: 0,
+  maxVisibleMs: 3000,
+  mask: false,
+};
 const PANEL_SUBTITLES = {
   sort: "选择案例排序方式",
   wineType: "按酒类查看产品与案例",
@@ -102,7 +125,20 @@ function safeSetData(page, data, options = {}) {
     return false;
   }
   try {
-    page.setData(data);
+    page.setData(data, () => {
+      if (!isPageAlive(page)) return;
+      if (
+        options.dataRequestVersion !== undefined &&
+        !isCurrentDataRequest(page, options.dataRequestVersion)
+      ) return;
+      if (
+        options.imageRequestVersion !== undefined &&
+        !isCurrentImageRequest(page, options.imageRequestVersion)
+      ) return;
+      if (typeof options.onCommitted === "function") {
+        options.onCommitted();
+      }
+    });
     return true;
   } catch (error) {
     console.error("分类页状态更新失败", error);
@@ -112,6 +148,127 @@ function safeSetData(page, data, options = {}) {
     });
     return false;
   }
+}
+
+function beginCategoryEntryIndicator(page) {
+  if (!isPageAlive(page)) return null;
+  if (page._categoryEntryLoadingToken) {
+    cancelPageLoading(page._categoryEntryLoadingToken);
+  }
+  const token = beginPageLoading(CATEGORY_ENTRY_LOADING_OPTIONS);
+  page._categoryEntryLoadingToken = token;
+  page._categoryEntryLoadingFinished = false;
+  page._categoryEntryAwaitingImageId = "";
+  page._categoryEntryAwaitingImageUrl = "";
+  page._categoryEntryAwaitingImageRequestVersion = 0;
+  return token;
+}
+
+function finishCategoryEntryIndicator(page, token = page._categoryEntryLoadingToken) {
+  if (!token || page._categoryEntryLoadingToken !== token) return false;
+  if (page._categoryEntryLoadingFinished) return false;
+  page._categoryEntryLoadingFinished = true;
+  page._categoryEntryAwaitingImageId = "";
+  page._categoryEntryAwaitingImageUrl = "";
+  page._categoryEntryAwaitingImageRequestVersion = 0;
+  finishPageLoading(token);
+  return true;
+}
+
+function cancelCategoryEntryIndicator(page) {
+  const token = page._categoryEntryLoadingToken;
+  page._categoryEntryLoadingToken = null;
+  page._categoryEntryLoadingFinished = false;
+  page._categoryEntryAwaitingImageId = "";
+  page._categoryEntryAwaitingImageUrl = "";
+  page._categoryEntryAwaitingImageRequestVersion = 0;
+  if (!token) return false;
+  cancelPageLoading(token);
+  return true;
+}
+
+function getCategoryImageIdentity(id, url) {
+  return id && url ? `${id}\n${url}` : "";
+}
+
+function rememberCategoryImageSettled(page, id, url) {
+  const identity = getCategoryImageIdentity(id, url);
+  if (!identity) return false;
+  if (!(page._categorySettledImageIdentities instanceof Set)) {
+    page._categorySettledImageIdentities = new Set();
+  }
+  page._categorySettledImageIdentities.add(identity);
+  while (page._categorySettledImageIdentities.size > 32) {
+    const oldest = page._categorySettledImageIdentities.values().next().value;
+    page._categorySettledImageIdentities.delete(oldest);
+  }
+  return true;
+}
+
+function hasCategoryImageSettled(page, id, url) {
+  const identity = getCategoryImageIdentity(id, url);
+  return Boolean(
+    identity
+    && page._categorySettledImageIdentities instanceof Set
+    && page._categorySettledImageIdentities.has(identity)
+  );
+}
+
+function getVisibleCategoryEntryCard(page) {
+  const cards = page && page.data && Array.isArray(page.data.visibleCards)
+    ? page.data.visibleCards
+    : [];
+  return cards[0] || null;
+}
+
+function primeCategoryEntryFromVisibleCard(page) {
+  const firstCard = getVisibleCategoryEntryCard(page);
+  if (!firstCard || !firstCard.id || !firstCard.coverImageUrl) return false;
+  if (hasCategoryImageSettled(page, firstCard.id, firstCard.coverImageUrl)) {
+    finishCategoryEntryIndicator(page);
+    return true;
+  }
+  page._categoryEntryAwaitingImageId = firstCard.id;
+  page._categoryEntryAwaitingImageUrl = firstCard.coverImageUrl;
+  page._categoryEntryAwaitingImageRequestVersion = Number(
+    firstCard.entryLoadRequestVersion
+  ) || 0;
+  return true;
+}
+
+function prepareCategoryEntryCards(page, cards = [], imageRequestVersion = 0) {
+  const token = page._categoryEntryLoadingToken;
+  if (!token || page._categoryEntryLoadingFinished) return cards;
+  const firstCard = Array.isArray(cards) ? cards[0] : null;
+  if (firstCard && firstCard.id && firstCard.coverImageUrl) {
+    page._categoryEntryAwaitingImageId = firstCard.id;
+    page._categoryEntryAwaitingImageUrl = firstCard.coverImageUrl;
+    page._categoryEntryAwaitingImageRequestVersion = imageRequestVersion;
+    return cards.map((item, index) => index === 0
+      ? { ...item, entryLoadRequestVersion: imageRequestVersion }
+      : item);
+  }
+  page._categoryEntryAwaitingImageId = "";
+  page._categoryEntryAwaitingImageUrl = "";
+  page._categoryEntryAwaitingImageRequestVersion = 0;
+  return cards;
+}
+
+function settleCategoryEntryAfterCards(page, cards = []) {
+  const token = page._categoryEntryLoadingToken;
+  if (!token || page._categoryEntryLoadingFinished) return false;
+  const firstCard = Array.isArray(cards) ? cards[0] : null;
+  if (firstCard && firstCard.id && firstCard.coverImageUrl) {
+    if (hasCategoryImageSettled(page, firstCard.id, firstCard.coverImageUrl)) {
+      return finishCategoryEntryIndicator(page, token);
+    }
+    return true;
+  }
+  return finishCategoryEntryIndicator(page, token);
+}
+
+function cachedCatalogNeedsEntryLoading(cache) {
+  return Boolean(cache && cache.data && Array.isArray(cache.data.items));
 }
 
 function stopPullDownRefresh() {
@@ -131,6 +288,7 @@ function createFilters() {
     selectedValues: [],
     optionItems: filter.options.map((value) => ({
       value,
+      label: filter.key === "scenes" ? getSceneLabel(value) : value,
       selected: false,
     })),
   }));
@@ -153,6 +311,7 @@ function syncOptionItems(filter) {
     ...filter,
     optionItems: filter.options.map((value) => ({
       value,
+      label: filter.key === "scenes" ? getSceneLabel(value) : value,
       selected: filter.selectedValues.includes(value),
     })),
   };
@@ -189,7 +348,7 @@ function buildSelectedPills(filters, selectedSort) {
         id: `${filter.key}:${value}`,
         key: filter.key,
         value,
-        label: value,
+        label: filter.key === "scenes" ? getSceneLabel(value) : value,
         title: filter.title,
       });
     });
@@ -267,33 +426,30 @@ function normalizeInitialSort(sortKey) {
 }
 
 function showLoadMoreIndicator(page) {
-  const token = Number(page._loadMoreIndicatorVersion || 0) + 1;
-  page._loadMoreIndicatorVersion = token;
-  page._loadMoreIndicatorToken = token;
-  try {
-    if (typeof wx !== "undefined" && typeof wx.showLoading === "function") {
-      wx.showLoading({
-        title: "加载更多",
-        mask: false,
-      });
-    }
-  } catch (error) {
-    reportCategoryFault("show_loading", error, { action: "load_more" });
+  if (!isPageAlive(page)) return null;
+  cancelCategoryEntryIndicator(page);
+  if (page._loadMoreIndicatorToken) {
+    cancelPageLoading(page._loadMoreIndicatorToken);
   }
+  const token = beginPageLoading(CATEGORY_LOAD_MORE_LOADING_OPTIONS);
+  page._loadMoreIndicatorToken = token;
   return token;
 }
 
 function hideLoadMoreIndicator(page, token) {
   if (!page._loadMoreIndicatorToken) return;
   if (token && page._loadMoreIndicatorToken !== token) return;
+  const activeToken = page._loadMoreIndicatorToken;
   page._loadMoreIndicatorToken = null;
-  try {
-    if (typeof wx !== "undefined" && typeof wx.hideLoading === "function") {
-      wx.hideLoading();
-    }
-  } catch (error) {
-    reportCategoryFault("hide_loading", error, { action: "load_more" });
-  }
+  finishPageLoading(activeToken);
+}
+
+function cancelLoadMoreIndicator(page) {
+  const token = page._loadMoreIndicatorToken;
+  page._loadMoreIndicatorToken = null;
+  if (!token) return false;
+  cancelPageLoading(token);
+  return true;
 }
 
 function takePendingCategorySort() {
@@ -368,12 +524,15 @@ function buildActivePanel(filters, activeNavKey, selectedSort, focusedFilterValu
   }
   const activeFilter = filters.find((filter) => filter.key === activeNavKey) || filters[0];
   const focusedTitle = resolveFocusedValue(activeFilter, focusedFilterValue);
+  const displayFocusedTitle = activeFilter.key === "scenes"
+    ? getSceneLabel(focusedTitle)
+    : focusedTitle;
   const showPackageNote = activeFilter.key === "packageTypes" && focusedTitle === "整套包装";
   const selectedPackageSubtitle = showPackageNote ? `(${PANEL_SUBTITLES.packageTypes})` : "";
 
   return {
     ...activeFilter,
-    displayTitle: focusedTitle || activeFilter.title,
+    displayTitle: displayFocusedTitle || activeFilter.title,
     showPackageNote,
     displaySubtitle: focusedTitle
       ? activeFilter.key === "packageTypes"
@@ -381,6 +540,14 @@ function buildActivePanel(filters, activeNavKey, selectedSort, focusedFilterValu
         : PANEL_SUBTITLES[activeFilter.key] || `按${activeFilter.title}查看产品与案例`
       : `按${activeFilter.title}查看产品与案例`,
   };
+}
+
+function buildEmptyMessage(activePanel, query) {
+  const keyword = String(query || "").trim();
+  if (keyword) return `没有找到与“${keyword}”匹配的案例，换个关键词试试`;
+  const displayTitle = activePanel && activePanel.displayTitle;
+  if (!displayTitle || activePanel.key === "sort") return "暂无匹配案例，换个条件试试";
+  return `暂无“${displayTitle}”案例，换个条件试试`;
 }
 
 function buildNavItems(filters, selectedSort, expandedNavKey) {
@@ -423,6 +590,7 @@ Page({
     filters: createFilters(),
     navItems: [],
     activePanel: null,
+    emptyMessage: "暂无匹配案例，换个条件试试",
     selectedPills: [],
     selectedCount: 0,
     focusedFilterValue: null,
@@ -438,12 +606,20 @@ Page({
     this._filteredCases = [];
     this._displayLimit = CARD_PAGE_SIZE;
     this._imageRequestVersion = 0;
-    this._loadMoreIndicatorVersion = 0;
     this._loadMoreIndicatorToken = null;
+    this._categoryEntryLoadingToken = null;
+    this._categoryEntryLoadingFinished = false;
+    this._categoryEntryAwaitingImageId = "";
+    this._categoryEntryAwaitingImageUrl = "";
+    this._categoryEntryAwaitingImageRequestVersion = 0;
+    this._categorySettledImageIdentities = new Set();
     this._catalogImageCache = {};
     this._catalogImageEndpointAvailable = true;
     this._searchTimer = null;
     this._catalogCache = readCache(CATALOG_CACHE_KEY);
+    if (cachedCatalogNeedsEntryLoading(this._catalogCache)) {
+      beginCategoryEntryIndicator(this);
+    }
     const initialSort = normalizeInitialSort(options.sort || takePendingCategorySort());
     this.applySortFromEntry(initialSort);
     this.refreshPanels();
@@ -457,6 +633,13 @@ Page({
 
   onShow() {
     if (!isPageAlive(this)) return Promise.resolve({ ok: false, cancelled: true });
+    if (
+      !this._categoryEntryLoadingToken
+      && (this._loadPromise || this.data.loading)
+    ) {
+      beginCategoryEntryIndicator(this);
+      primeCategoryEntryFromVisibleCard(this);
+    }
     const pendingSort = normalizeInitialSort(takePendingCategorySort());
     if (pendingSort !== "default") {
       this.applySortFromEntry(pendingSort);
@@ -473,11 +656,12 @@ Page({
   },
 
   onHide() {
-    hideLoadMoreIndicator(this);
+    cancelCategoryEntryIndicator(this);
+    cancelLoadMoreIndicator(this);
   },
 
   onPullDownRefresh() {
-    return this.loadData({ forceRefresh: true }).then(
+    return this.loadData({ forceRefresh: true, pageLoading: false }).then(
       (result) => {
         stopPullDownRefresh();
         return result;
@@ -517,7 +701,8 @@ Page({
     if (this._searchTimer) clearTimeout(this._searchTimer);
     this._searchTimer = null;
     this._imageRequestVersion += 1;
-    hideLoadMoreIndicator(this);
+    cancelCategoryEntryIndicator(this);
+    cancelLoadMoreIndicator(this);
   },
 
   applyCatalogItems(items, options = {}) {
@@ -554,6 +739,10 @@ Page({
     const requestVersion = Number(this._dataRequestVersion || 0) + 1;
     this._dataRequestVersion = requestVersion;
 
+    if (!options.silent && options.pageLoading !== false) {
+      beginCategoryEntryIndicator(this);
+    }
+
     if (!options.silent) {
       safeSetData(this, {
         loading: true,
@@ -585,6 +774,7 @@ Page({
         }, {
           dataRequestVersion: requestVersion,
           stage: "load_unexpected",
+          onCommitted: () => finishCategoryEntryIndicator(this),
         });
         return { ok: false, error };
       })
@@ -720,6 +910,7 @@ Page({
       }, {
         dataRequestVersion: requestVersion,
         stage: "load_error",
+        onCommitted: () => finishCategoryEntryIndicator(this),
       });
       return { ok: false, error };
     }
@@ -727,6 +918,12 @@ Page({
 
   refreshPanels() {
     if (!isPageAlive(this)) return false;
+    const activePanel = buildActivePanel(
+      this.data.filters,
+      this.data.activeNavKey,
+      this.data.selectedSort,
+      this.data.focusedFilterValue
+    );
     return safeSetData(this, {
       selectedPills: buildSelectedPills(
         this.data.filters,
@@ -737,12 +934,8 @@ Page({
         this.data.selectedSort,
         this.data.expandedNavKey
       ),
-      activePanel: buildActivePanel(
-        this.data.filters,
-        this.data.activeNavKey,
-        this.data.selectedSort,
-        this.data.focusedFilterValue
-      ),
+      activePanel,
+      emptyMessage: buildEmptyMessage(activePanel, this.data.query),
     }, {
       stage: "refresh_panels",
     });
@@ -761,7 +954,7 @@ Page({
 
   applyFilters() {
     if (!isPageAlive(this)) return false;
-    hideLoadMoreIndicator(this);
+    cancelLoadMoreIndicator(this);
     try {
       const selectedFilters = buildSelectedFilters(this.data.filters);
       const filteredCases = filterCases(
@@ -802,6 +995,7 @@ Page({
         isLoadingMore: false,
       }, {
         stage: "apply_filters_error",
+        onCommitted: () => finishCategoryEntryIndicator(this),
       });
       return false;
     }
@@ -839,14 +1033,20 @@ Page({
           return { ok: false, cancelled: true };
         }
         if (!options.append) {
-          const committed = safeSetData(this, {
+          const entryCards = prepareCategoryEntryCards(
+            this,
             visibleCards,
+            requestVersion
+          );
+          const committed = safeSetData(this, {
+            visibleCards: entryCards,
             isLoadingMore: false,
           }, {
             imageRequestVersion: requestVersion,
             stage: "image_load_complete",
+            onCommitted: () => settleCategoryEntryAfterCards(this, entryCards),
           });
-          return { ok: committed, cards: visibleCards };
+          return { ok: committed, cards: entryCards };
         }
         const patch = { isLoadingMore: false };
         visibleCards.forEach((item, index) => {
@@ -873,14 +1073,20 @@ Page({
           imageLoadState: "failed",
         }));
         if (!options.append) {
+          const entryCards = prepareCategoryEntryCards(
+            this,
+            failedCards,
+            requestVersion
+          );
           safeSetData(this, {
-            visibleCards: failedCards,
+            visibleCards: entryCards,
             isLoadingMore: false,
           }, {
             imageRequestVersion: requestVersion,
             stage: "image_load_error",
+            onCommitted: () => settleCategoryEntryAfterCards(this, entryCards),
           });
-          return { ok: false, cards: failedCards, error };
+          return { ok: false, cards: entryCards, error };
         }
         const patch = { isLoadingMore: false };
         failedCards.forEach((item, index) => {
@@ -1002,8 +1208,39 @@ Page({
     }
   },
 
+  onCardImageLoad(event) {
+    if (!isPageAlive(this)) return false;
+    const target = event && event.currentTarget ? event.currentTarget : {};
+    const id = target.dataset && target.dataset.id;
+    const currentCard = Array.isArray(this.data.visibleCards)
+      ? this.data.visibleCards.find((item) => item && item.id === id)
+      : null;
+    const imageUrl = target.dataset && target.dataset.url
+      ? target.dataset.url
+      : currentCard && currentCard.coverImageUrl || "";
+    const imageRequestVersion = Number(
+      target.dataset && target.dataset.entryLoadRequestVersion
+    );
+    rememberCategoryImageSettled(this, id, imageUrl);
+    if (
+      !id
+      || id !== this._categoryEntryAwaitingImageId
+      || (
+        this._categoryEntryAwaitingImageUrl
+        && imageUrl !== this._categoryEntryAwaitingImageUrl
+      )
+      || (
+        this._categoryEntryAwaitingImageRequestVersion
+        && imageRequestVersion
+        && imageRequestVersion !== this._categoryEntryAwaitingImageRequestVersion
+      )
+    ) return false;
+    return finishCategoryEntryIndicator(this);
+  },
+
   async retryCardImage(event) {
     if (!isPageAlive(this)) return false;
+    this.onCardImageLoad(event);
     const requestVersion = this._imageRequestVersion;
     const target = event && event.currentTarget ? event.currentTarget : {};
     const dataset = target.dataset || {};

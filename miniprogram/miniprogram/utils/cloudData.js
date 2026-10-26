@@ -10,6 +10,16 @@ const IMAGE_URL_FUNCTION = "caseAdmin";
 const PAGE_SIZE = 20;
 const TEMP_FILE_URL_BATCH_SIZE = 20;
 const TEMP_FILE_URL_CACHE_TTL = 30 * 60 * 1000;
+const PUBLIC_VIDEO_FIELDS = [
+  "videoFileID",
+  "videoUrl",
+  "videoPosterFileID",
+  "videoPoster",
+  "videoDurationSeconds",
+  "videoFileSizeBytes",
+  "videoPreviewUrl",
+  "videoPosterPreviewUrl",
+];
 
 let visibleCasesCache = null;
 let visibleBannersCache = null;
@@ -22,6 +32,16 @@ function shouldForceRefresh(options = {}) {
 
 function copyList(items) {
   return (items || []).map((item) => ({ ...item }));
+}
+
+// 直读数据库是旧版兼容链路，不具备服务端视频开关与临时链接保护。
+// 因此此链路必须默认禁止视频，只允许 caseCatalog 成功响应携带公开视频。
+function stripPublicVideoFields(record = {}) {
+  const safeRecord = { ...record };
+  PUBLIC_VIDEO_FIELDS.forEach((field) => {
+    delete safeRecord[field];
+  });
+  return safeRecord;
 }
 
 function clearCloudDataCache(options = {}) {
@@ -230,8 +250,11 @@ async function refreshImageUrl(fileID) {
   return resolveImageUrl(fileID, urls);
 }
 
-async function attachBannerImageUrls(banners) {
-  const tempUrlMap = await getTempUrlMap(banners.map((item) => item.image));
+async function attachBannerImageUrls(banners, options = {}) {
+  const tempUrlMap = await getTempUrlMap(
+    banners.map((item) => item.image),
+    options
+  );
   return banners.map((item) => ({
     ...item,
     imageUrl: resolveImageUrl(item.image, tempUrlMap),
@@ -243,15 +266,21 @@ async function fetchVisibleCases(options = {}) {
 
   if (!shouldForceRefresh(options) && visibleCasesCache) {
     const cachedCases = copyList(visibleCasesCache);
-    return includeImageUrls ? attachCaseImageUrls(cachedCases) : cachedCases;
+    return includeImageUrls
+      ? attachCaseImageUrls(cachedCases, options)
+      : cachedCases;
   }
   const records = await fetchAll(CASE_COLLECTION, {
     where: { isVisible: true },
     orderField: "sortOrder",
   });
-  const cases = records.map(normalizeCaseRecord);
+  const cases = records.map((record) =>
+    normalizeCaseRecord(stripPublicVideoFields(record))
+  );
   visibleCasesCache = copyList(cases);
-  return includeImageUrls ? attachCaseImageUrls(cases) : copyList(cases);
+  return includeImageUrls
+    ? attachCaseImageUrls(cases, options)
+    : copyList(cases);
 }
 
 async function fetchVisibleBanners(cases, options = {}) {
@@ -263,7 +292,7 @@ async function fetchVisibleBanners(cases, options = {}) {
     orderField: "sortOrder",
   });
   const banners = buildFallbackBanners(records.map(normalizeBannerRecord), cases);
-  visibleBannersCache = await attachBannerImageUrls(banners);
+  visibleBannersCache = await attachBannerImageUrls(banners, options);
   return copyList(visibleBannersCache);
 }
 
@@ -296,7 +325,9 @@ async function fetchCaseById(id) {
   }
 
   if (!record) throw createCaseNotFoundError(id);
-  const cases = await attachCaseDetailImageUrls([normalizeCaseRecord(record)]);
+  const cases = await attachCaseDetailImageUrls([
+    normalizeCaseRecord(stripPublicVideoFields(record)),
+  ]);
   return cases[0];
 }
 

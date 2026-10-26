@@ -1,0 +1,31 @@
+{
+  "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
+  "envId": "wine-admin-staging-d5c4cf20f02c5",
+  "functionRoot": "./miniprogram/cloudfunctions",
+  "functions": [
+    {
+      "name": "userData",
+      "handler": "index.main",
+      "runtime": "Nodejs20.19",
+      "timeout": 10,
+      "memorySize": 256,
+      "installDependency": true
+    },
+    {
+      "name": "inquiryAdmin",
+      "handler": "index.main",
+      "runtime": "Nodejs20.19",
+      "timeout": 15,
+      "memorySize": 256,
+      "installDependency": true
+    },
+    {
+      "name": "inquiryNotifier",
+      "handler": "index.main",
+      "runtime": "Nodejs16.13",
+      "timeout": 60,
+      "memorySize": 256,
+      "installDependency": true
+    }
+  ]
+}

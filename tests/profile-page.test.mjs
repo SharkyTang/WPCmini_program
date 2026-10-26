@@ -21,6 +21,8 @@ function loadProfilePage(wxMock = {}, options = {}) {
     { filename: "customerServiceData.js" }
   );
   let pageConfig;
+  let loadingSequence = 0;
+  const nativeLoadingEvents = [];
   const sandbox = {
     Page(config) { pageConfig = config; },
     require(moduleName) {
@@ -44,6 +46,23 @@ function loadProfilePage(wxMock = {}, options = {}) {
         };
       }
       if (moduleName === "../../utils/customerServiceData") return customerServiceModule.exports;
+      if (moduleName === "../../utils/nativePageLoading") {
+        return options.nativePageLoading || {
+          beginPageLoading(payload) {
+            const token = { id: ++loadingSequence };
+            nativeLoadingEvents.push({ type: "begin", payload, token });
+            return token;
+          },
+          finishPageLoading(token) {
+            nativeLoadingEvents.push({ type: "finish", token });
+            return true;
+          },
+          cancelPageLoading(token) {
+            nativeLoadingEvents.push({ type: "cancel", token });
+            return true;
+          },
+        };
+      }
       if (moduleName === "../../utils/userService") {
         return {
           cacheCompletedProfileIdentity: options.cacheCompletedProfileIdentity || (() => {}),
@@ -63,13 +82,44 @@ function loadProfilePage(wxMock = {}, options = {}) {
             (async () => false),
         };
       }
+      if (moduleName === "../../utils/inquiryFollowupService") {
+        return {
+          fetchInquiryBadgeSummary:
+            options.fetchInquiryBadgeSummary
+            || (async () => ({ myUnreadCount: 0, adminNewCount: 0 })),
+        };
+      }
       throw new Error(`Unexpected require: ${moduleName}`);
     },
     console,
-    wx: { navigateTo() {}, showToast() {}, ...wxMock },
+    wx: {
+      navigateTo() {},
+      showToast() {},
+      nextTick(callback) { callback(); },
+      ...wxMock,
+    },
   };
   vm.runInNewContext(source, sandbox, { filename: modulePath });
-  pageConfig.setData = function setData(nextData) { this.data = { ...this.data, ...nextData }; };
+  const pendingSetDataCallbacks = [];
+  pageConfig.setData = function setData(nextData, callback) {
+    this.data = { ...this.data, ...nextData };
+    if (!callback) return;
+    if (options.deferSetDataCallbacks) {
+      pendingSetDataCallbacks.push(callback);
+      return;
+    }
+    callback();
+  };
+  pageConfig.__nativeLoadingEvents = nativeLoadingEvents;
+  pageConfig.__flushNextSetDataCallback = () => {
+    const callback = pendingSetDataCallbacks.shift();
+    if (callback) callback();
+  };
+  pageConfig.__flushSetDataCallbacks = () => {
+    while (pendingSetDataCallbacks.length) {
+      pendingSetDataCallbacks.shift()();
+    }
+  };
   return pageConfig;
 }
 
@@ -397,6 +447,221 @@ await test("profile card removes the legacy editor sheet", () => {
   assert.equal(wxml.includes('bindtap="openProfileEditor"'), true);
 });
 
+await test("profile avatar owns the non-blocking entry loading milestone", async () => {
+  const profile = {
+    nickname: "本地资料",
+    avatarFileId: "cloud://avatar",
+    avatarUrl: "https://avatar",
+  };
+  const page = loadProfilePage({}, {
+    getLegacyProfile: () => profile,
+    fetchSessionSummary: async () => ({
+      openid: "openid_1",
+      profile,
+      roles: {
+        inquiryAdmin: false,
+        caseAdmin: false,
+        notificationAdmin: false,
+      },
+    }),
+  });
+
+  await page.loadProfileInfo();
+  assert.equal(page.__nativeLoadingEvents[0].type, "begin");
+  assert.deepEqual(
+    plain(page.__nativeLoadingEvents[0].payload),
+    {
+      owner: "profile-entry",
+      title: "加载中",
+      mask: false,
+      delayMs: 120,
+      minVisibleMs: 300,
+      maxVisibleMs: 3000,
+    }
+  );
+  assert.equal(
+    page.__nativeLoadingEvents.some((event) => event.type === "finish"),
+    false
+  );
+
+  page.onProfileAvatarLoad({
+    currentTarget: { dataset: { url: "https://stale-avatar" } },
+  });
+  assert.equal(
+    page.__nativeLoadingEvents.some((event) => event.type === "finish"),
+    false
+  );
+
+  page.onProfileAvatarLoad({
+    currentTarget: { dataset: { url: "https://avatar" } },
+  });
+  assert.equal(page.__nativeLoadingEvents.at(-1).type, "finish");
+});
+
+await test("profile hot tab return with the same avatar does not restart entry loading", async () => {
+  const profile = {
+    nickname: "本地资料",
+    avatarFileId: "cloud://avatar",
+    avatarUrl: "https://avatar",
+  };
+  const page = loadProfilePage({}, {
+    getLegacyProfile: () => profile,
+    fetchSessionSummary: async () => ({
+      openid: "openid_1",
+      profile,
+      roles: {
+        inquiryAdmin: false,
+        caseAdmin: false,
+        notificationAdmin: false,
+      },
+    }),
+  });
+
+  page.onLoad();
+  await page.loadProfileInfo();
+  page.onProfileAvatarLoad({
+    currentTarget: { dataset: { url: "https://avatar" } },
+  });
+  page.onHide();
+  const beginsBeforeReturn = page.__nativeLoadingEvents.filter(
+    (event) => event.type === "begin"
+  ).length;
+
+  page.onShow();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(
+    page.__nativeLoadingEvents.filter((event) => event.type === "begin").length,
+    beginsBeforeReturn
+  );
+});
+
+await test("profile remembers an avatar that settles while its tab is hidden", async () => {
+  const profile = {
+    nickname: "本地资料",
+    avatarFileId: "cloud://avatar",
+    avatarUrl: "https://avatar",
+  };
+  const page = loadProfilePage({}, {
+    getLegacyProfile: () => profile,
+    fetchSessionSummary: async () => ({
+      openid: "openid_1",
+      profile,
+      roles: {
+        inquiryAdmin: false,
+        caseAdmin: false,
+        notificationAdmin: false,
+      },
+    }),
+  });
+
+  page.onLoad();
+  const firstLoad = page.loadProfileInfo();
+  page.onHide();
+  page.onProfileAvatarLoad({
+    currentTarget: { dataset: { url: "https://avatar" } },
+  });
+  await firstLoad;
+  page.onShow();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.deepEqual(
+    page.__nativeLoadingEvents.map((event) => event.type),
+    ["begin", "cancel", "begin", "finish"]
+  );
+});
+
+await test("a delayed local placeholder callback cannot finish a newer remote avatar", async () => {
+  const remoteProfile = {
+    nickname: "云端资料",
+    avatarFileId: "cloud://remote-avatar",
+    avatarUrl: "https://remote-avatar",
+  };
+  const page = loadProfilePage({}, {
+    deferSetDataCallbacks: true,
+    getLegacyProfile: () => ({}),
+    fetchSessionSummary: async () => ({
+      openid: "openid_1",
+      profile: remoteProfile,
+      roles: {
+        inquiryAdmin: false,
+        caseAdmin: false,
+        notificationAdmin: false,
+      },
+    }),
+  });
+
+  await page.loadProfileInfo();
+  assert.deepEqual(
+    page.__nativeLoadingEvents.map((event) => event.type),
+    ["begin", "cancel", "begin"]
+  );
+  page.__flushNextSetDataCallback();
+  assert.deepEqual(
+    page.__nativeLoadingEvents.map((event) => event.type),
+    ["begin", "cancel", "begin"]
+  );
+  page.__flushSetDataCallbacks();
+  page.onProfileAvatarLoad({
+    currentTarget: { dataset: { url: "https://remote-avatar" } },
+  });
+  assert.equal(page.__nativeLoadingEvents.at(-1).type, "finish");
+});
+
+await test("profile placeholder finishes quickly and page hide cancels pending avatar loading", async () => {
+  const placeholderPage = loadProfilePage();
+  await placeholderPage.loadProfileInfo();
+  assert.deepEqual(
+    placeholderPage.__nativeLoadingEvents.map((event) => event.type),
+    ["begin", "finish"]
+  );
+  placeholderPage.onHide();
+  assert.deepEqual(
+    placeholderPage.__nativeLoadingEvents.map((event) => event.type),
+    ["begin", "finish", "cancel"]
+  );
+
+  let resolveSummary;
+  const avatarPage = loadProfilePage({}, {
+    getLegacyProfile: () => ({
+      nickname: "缓存资料",
+      avatarFileId: "cloud://cached-avatar",
+      avatarUrl: "https://cached-avatar",
+    }),
+    fetchSessionSummary: () => new Promise((resolve) => {
+      resolveSummary = resolve;
+    }),
+  });
+  const refresh = avatarPage.loadProfileInfo();
+  avatarPage.onHide();
+  resolveSummary({
+    openid: "openid_1",
+    profile: {
+      nickname: "云端资料",
+      avatarFileId: "cloud://remote-avatar",
+      avatarUrl: "https://remote-avatar",
+    },
+    roles: {
+      inquiryAdmin: false,
+      caseAdmin: false,
+      notificationAdmin: false,
+    },
+  });
+  await refresh;
+  assert.deepEqual(
+    avatarPage.__nativeLoadingEvents.map((event) => event.type),
+    ["begin", "cancel"]
+  );
+});
+
+await test("profile avatar markup settles loading on success and failure", () => {
+  const wxml = readFileSync(wxmlPath, "utf8");
+  assert.equal(wxml.includes('bindload="onProfileAvatarLoad"'), true);
+  assert.equal(wxml.includes('binderror="onProfileAvatarError"'), true);
+  assert.equal(wxml.includes('data-url="{{profileInfo.avatarUrl}}"'), true);
+});
+
 await test("feedback quick action navigates to feedback page", () => {
   let navigatedUrl = "";
   const page = loadProfilePage({ navigateTo(options) { navigatedUrl = options.url; } });
@@ -436,4 +701,56 @@ await test("profile shows admin entries only when access is granted", async () =
   assert.equal(page.data.hasInquiryAdminAccess, true);
   assert.equal(page.data.hasNotificationAdminAccess, true);
   assert.equal(navigatedUrl, "/pages/case-admin/index");
+});
+
+await test("profile shows customer reply and admin new-inquiry badges", async () => {
+  const page = loadProfilePage({}, {
+    fetchInquiryBadgeSummary: async () => ({
+      myUnreadCount: 120,
+      adminNewCount: 3,
+    }),
+  });
+  page._alive = true;
+  page._pageVisible = true;
+  await page.loadInquiryBadges();
+  assert.equal(page.data.myInquiryUnreadCount, 120);
+  assert.equal(page.data.myInquiryUnreadLabel, "99+");
+  assert.equal(page.data.adminNewInquiryCount, 3);
+  assert.equal(page.data.adminNewInquiryLabel, "3");
+  const wxml = readFileSync(wxmlPath, "utf8");
+  assert.equal(wxml.includes("openMyInquiries"), true);
+  assert.equal(wxml.includes("adminNewInquiryLabel"), true);
+});
+
+await test("profile ignores stale inquiry badge responses after the page is hidden", async () => {
+  let resolveSummary;
+  const page = loadProfilePage({}, {
+    fetchInquiryBadgeSummary: () => new Promise((resolve) => {
+      resolveSummary = resolve;
+    }),
+  });
+  page.onLoad();
+  const pending = page.loadInquiryBadges();
+  page.onHide();
+  resolveSummary({ myUnreadCount: 8, adminNewCount: 5 });
+  await pending;
+  assert.equal(page.data.myInquiryUnreadCount, 0);
+  assert.equal(page.data.adminNewInquiryCount, 0);
+});
+
+await test("profile notice shortcut keeps opening the existing notification page", () => {
+  const navigations = [];
+  const page = loadProfilePage({
+    navigateTo(options) {
+      navigations.push(options.url);
+    },
+  });
+  page.data.myInquiryUnreadCount = 2;
+  page.handleQuickAction({ currentTarget: { dataset: { key: "notice" } } });
+  page.data.myInquiryUnreadCount = 0;
+  page.handleQuickAction({ currentTarget: { dataset: { key: "notice" } } });
+  assert.deepEqual(navigations, [
+    "/pages/notifications/index",
+    "/pages/notifications/index",
+  ]);
 });

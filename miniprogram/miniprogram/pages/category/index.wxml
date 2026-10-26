@@ -63,7 +63,7 @@
               data-key="{{navItem.key}}"
               data-value="{{optionItem.value}}"
             >
-              {{optionItem.value}}
+              <text class="sub-nav-label">{{optionItem.label}}</text>
             </view>
           </block>
         </view>
@@ -94,7 +94,7 @@
           <view>{{errorMessage}}</view>
           <button class="state-retry-button" bindtap="retryLoadData">重新加载</button>
         </view>
-        <view wx:elif="{{!filteredCount}}" class="state-box">暂无匹配案例，换个条件试试</view>
+        <view wx:elif="{{!filteredCount}}" class="state-box">{{emptyMessage}}</view>
         <view wx:else class="case-grid">
           <view
             wx:for="{{visibleCards}}"
@@ -110,8 +110,11 @@
               src="{{item.coverImageUrl}}"
               lazy-load
               fade-in="{{true}}"
+              bindload="onCardImageLoad"
               binderror="retryCardImage"
               data-id="{{item.id}}"
+              data-url="{{item.coverImageUrl}}"
+              data-entry-load-request-version="{{item.entryLoadRequestVersion || 0}}"
             ></image>
             <view wx:else class="case-placeholder" bindtap="retryCardImage" data-id="{{item.id}}" data-manual="{{true}}">{{item.imageLoadState === 'failed' ? '图片加载失败，点击重试' : '图片加载中'}}</view>
             <view class="case-title">{{item.title}}</view>

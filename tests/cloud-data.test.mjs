@@ -89,11 +89,12 @@ function mockCloudData(records) {
         assert.equal(data.action, "getVisibleImageUrls");
         const fileList = data.fileIDs || [];
         tempUrlBatches.push(fileList.slice());
+        const signatureVersion = tempUrlBatches.length;
         return {
           result: {
             ok: true,
             urls: fileList.reduce((urls, fileID) => {
-              urls[fileID] = `${fileID}?temp=1`;
+              urls[fileID] = `${fileID}?temp=${signatureVersion}`;
               return urls;
             }, {}),
           },
@@ -200,7 +201,7 @@ await test("fetches image temp URLs in controlled batches of 20 cloud IDs", asyn
   assert.equal(cases[0].coverImageUrl, "cloud://image_1?temp=1");
 });
 
-await test("caches visible cases and temp URLs until explicitly cleared", async () => {
+await test("force refresh bypasses visible case and temp URL caches", async () => {
   const records = [
     {
       _id: "case_doc_1",
@@ -225,16 +226,50 @@ await test("caches visible cases and temp URLs until explicitly cleared", async 
   assert.equal(getQueryCount(), 1);
   assert.equal(tempUrlBatches.length, 1);
 
-  await fetchVisibleCases({ forceRefresh: true });
+  const refreshed = await fetchVisibleCases({ forceRefresh: true });
 
   assert.equal(getQueryCount(), 2);
-  assert.equal(tempUrlBatches.length, 1);
+  assert.equal(tempUrlBatches.length, 2);
+  assert.equal(refreshed[0].coverImageUrl, "cloud://image_1?temp=2");
 
   clearCloudDataCache();
   await fetchVisibleCases();
 
   assert.equal(getQueryCount(), 3);
+  assert.equal(tempUrlBatches.length, 3);
+});
+
+await test("force refresh bypasses visible banner and temp URL caches", async () => {
+  const records = [
+    {
+      _id: "banner_doc_1",
+      caseId: "case_001",
+      title: "banner_001",
+      image: "cloud://banner_1",
+      isVisible: true,
+      sortOrder: 1,
+    },
+  ];
+
+  const {
+    fetchVisibleBanners,
+    tempUrlBatches,
+    getQueryCount,
+  } = mockCloudData(records);
+
+  const first = await fetchVisibleBanners([]);
+  const cached = await fetchVisibleBanners([]);
+
+  assert.equal(getQueryCount(), 1);
+  assert.equal(tempUrlBatches.length, 1);
+  assert.equal(first[0].imageUrl, "cloud://banner_1?temp=1");
+  assert.equal(cached[0].imageUrl, first[0].imageUrl);
+
+  const refreshed = await fetchVisibleBanners([], { forceRefresh: true });
+
+  assert.equal(getQueryCount(), 2);
   assert.equal(tempUrlBatches.length, 2);
+  assert.equal(refreshed[0].imageUrl, "cloud://banner_1?temp=2");
 });
 
 await test("does not expose raw cloud file ids when image URL exchange is unavailable", async () => {
@@ -321,6 +356,39 @@ await test("fetchCaseById returns a visible document id without an index fallbac
   assert.deepEqual(docCalls, ["doc_visible"]);
   assert.deepEqual(whereCalls, []);
   assert.equal(caseItem.id, "doc_visible");
+});
+
+await test("legacy database readers fail closed and never return video fields", async () => {
+  const record = {
+    _id: "doc_video",
+    caseId: "case_video",
+    title: "video",
+    coverImage: "https://example.com/visible.png",
+    videoFileID: "cloud://production.bucket/wine-packaging/videos/admin/case/video.mp4",
+    videoUrl: "https://media.example.com/video.mp4",
+    videoPosterFileID: "cloud://production.bucket/wine-packaging/videos/admin/case/poster.webp",
+    videoPoster: "https://media.example.com/poster.webp",
+    videoDurationSeconds: 60,
+    videoFileSizeBytes: 1024,
+    isVisible: true,
+    sortOrder: 1,
+  };
+  const lookup = mockCaseLookupData([record]);
+  const detail = await lookup.fetchCaseById("doc_video");
+
+  assert.equal(detail.videoUrl, "");
+  assert.equal(detail.videoPoster, "");
+  assert.equal(detail.videoDurationSeconds, null);
+  assert.equal(Object.hasOwn(detail, "videoFileID"), false);
+  assert.equal(Object.hasOwn(detail, "videoPosterFileID"), false);
+  assert.equal(Object.hasOwn(detail, "videoFileSizeBytes"), false);
+
+  const listReader = mockCloudData([record]);
+  const [card] = await listReader.fetchVisibleCases({ includeImageUrls: false });
+  assert.equal(card.videoUrl, "");
+  assert.equal(card.videoPoster, "");
+  assert.equal(card.videoDurationSeconds, null);
+  assert.equal(Object.hasOwn(card, "videoFileID"), false);
 });
 
 await test("fetchCaseById never exposes a hidden document through either lookup path", async () => {

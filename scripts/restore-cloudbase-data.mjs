@@ -1,11 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  DEFAULT_COLLECTIONS,
-  parseEnvFile,
-  validateBackupManifest,
-} from "./backup-cloudbase-data.mjs";
+import { DEFAULT_COLLECTIONS, parseEnvFile, validateBackupManifest } from "./backup-cloudbase-data.mjs";
 
 function parseRestoreArgs(argv = process.argv.slice(2)) {
   const options = {
@@ -54,21 +50,23 @@ function loadLocalEnv(envPath = ".env.local") {
 
 function buildRestorePlan(backupDir, targetEnv) {
   const verification = validateBackupManifest(backupDir);
+  const collectionNames = verification.collectionNames;
   return {
     sourceEnv: verification.envId,
     targetEnv,
-    totalCollections: DEFAULT_COLLECTIONS.length,
+    schemaVersion: verification.schemaVersion,
+    totalCollections: collectionNames.length,
     totalDocuments: Object.values(verification.collections)
       .reduce((total, item) => total + item.count, 0),
-    collections: DEFAULT_COLLECTIONS.map((name) => ({
+    collections: collectionNames.map((name) => ({
       name,
       count: verification.collections[name].count,
     })),
   };
 }
 
-async function assertCollectionsEmpty(db) {
-  for (const collectionName of DEFAULT_COLLECTIONS) {
+async function assertCollectionsEmpty(db, collectionNames = DEFAULT_COLLECTIONS) {
+  for (const collectionName of collectionNames) {
     const response = await db.collection(collectionName).count();
     const total = Number(response && response.total) || 0;
     if (total > 0) {
@@ -79,9 +77,13 @@ async function assertCollectionsEmpty(db) {
   }
 }
 
-async function restoreIntoEmptyCollections(db, backupDir) {
+async function restoreIntoEmptyCollections(
+  db,
+  backupDir,
+  collectionNames = DEFAULT_COLLECTIONS
+) {
   const restored = {};
-  for (const collectionName of DEFAULT_COLLECTIONS) {
+  for (const collectionName of collectionNames) {
     const records = JSON.parse(
       readFileSync(resolve(backupDir, `${collectionName}.json`), "utf8")
     );
@@ -121,8 +123,13 @@ async function main(argv = process.argv.slice(2)) {
   const { default: cloudbase } = await import("@cloudbase/node-sdk");
   const app = cloudbase.init({ env: options.targetEnv, secretId, secretKey });
   const db = app.database();
-  await assertCollectionsEmpty(db);
-  const restored = await restoreIntoEmptyCollections(db, options.backupDir);
+  const collectionNames = plan.collections.map((item) => item.name);
+  await assertCollectionsEmpty(db, collectionNames);
+  const restored = await restoreIntoEmptyCollections(
+    db,
+    options.backupDir,
+    collectionNames
+  );
   console.log("CloudBase 数据已写入空的恢复环境，请继续执行文档中的校验，暂勿切换正式流量");
   return { applied: true, plan, restored };
 }

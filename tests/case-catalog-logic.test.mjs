@@ -7,6 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 const {
   buildCatalogSnapshot,
+  buildCard,
   buildDetail,
   buildDetailPatch,
   buildHomeFeed,
@@ -14,6 +15,7 @@ const {
   buildInitialDetail,
   chunkList,
   collectDetailPatchFileIds,
+  collectDetailVideoFileIds,
   collectInitialDetailImageFileIds,
   mergeUserLibrary,
 } = require(resolve(
@@ -104,6 +106,7 @@ test("catalog snapshot handles target boundary sizes and hides records", () => {
   assert.deepEqual(plain(result.map((item) => item.id)), ["doc_1", "doc_2"]);
   assert.equal(Object.prototype.hasOwnProperty.call(result[0], "notes"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(result[0], "galleryImages"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result[0], "videoUrl"), false);
 });
 
 test("catalog cards prefer the aspect-preserving banner cover", () => {
@@ -221,6 +224,72 @@ test("detail preserves all nine case images", () => {
   assert.equal(detail.gallery.length, 9);
   assert.equal(detail.gallery[8].fileID, galleryImages[8]);
   assert.equal(detail.gallery[8].thumbnailUrl, urlMap[galleryThumbnails[8]]);
+});
+
+test("detail returns normalized video metadata without adding it to cards", () => {
+  const record = buildCase(14, {
+    videoUrl: " https://media.example.com/cases/case-014.mp4 ",
+    videoPoster: "https://media.example.com/cases/case-014.jpg",
+    videoDurationSeconds: "92",
+  });
+  const detail = buildDetail(record, {
+    [record.coverImage]: "https://temp/case-014.jpg",
+  });
+  const initialDetail = buildInitialDetail(record, {
+    [record.coverImage]: "https://temp/case-014.jpg",
+  });
+  const card = buildCard(record, {
+    [record.coverImage]: "https://temp/case-014.jpg",
+  });
+
+  assert.equal(detail.videoUrl, "https://media.example.com/cases/case-014.mp4");
+  assert.equal(detail.videoPoster, "https://media.example.com/cases/case-014.jpg");
+  assert.equal(detail.videoDurationSeconds, 92);
+  assert.equal(initialDetail.videoUrl, detail.videoUrl);
+  assert.equal(initialDetail.videoPoster, detail.videoPoster);
+  assert.equal(initialDetail.videoDurationSeconds, 92);
+  assert.equal(Object.prototype.hasOwnProperty.call(card, "videoUrl"), false);
+
+  const invalid = buildDetail(buildCase(15, {
+    videoUrl: "http://media.example.com/case-015.mp4",
+    videoPoster: "https://media.example.com/orphan-poster.jpg",
+    videoDurationSeconds: 75,
+  }));
+  assert.equal(invalid.videoUrl, "");
+  assert.equal(invalid.videoPoster, "");
+  assert.equal(invalid.videoDurationSeconds, null);
+});
+
+test("detail prefers signed CloudBase video files and never exposes file ids", () => {
+  const videoFileID = "cloud://env/wine-packaging/videos/video.mp4";
+  const posterFileID = "cloud://env/wine-packaging/videos/poster.jpg";
+  const record = buildCase(16, {
+    videoFileID,
+    videoUrl: "https://media.example.com/fallback.mp4",
+    videoPosterFileID: posterFileID,
+    videoPoster: "https://media.example.com/fallback.jpg",
+    videoDurationSeconds: 90,
+    videoFileSizeBytes: 1024,
+  });
+  assert.deepEqual(plain(collectDetailVideoFileIds(record)), [videoFileID, posterFileID]);
+  const detail = buildDetail(record, {
+    [record.coverImage]: "https://temp/cover.jpg",
+    [videoFileID]: "https://temp/video.mp4",
+    [posterFileID]: "https://temp/poster.jpg",
+  });
+  assert.equal(detail.videoUrl, "https://temp/video.mp4");
+  assert.equal(detail.videoPoster, "https://temp/poster.jpg");
+  assert.equal(detail.videoDurationSeconds, 90);
+  assert.equal(Object.prototype.hasOwnProperty.call(detail, "videoFileID"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(detail, "videoPosterFileID"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(detail, "videoFileSizeBytes"), false);
+
+  const unsigned = buildInitialDetail(record, {
+    [record.coverImage]: "https://temp/cover.jpg",
+  });
+  assert.equal(unsigned.videoUrl, "");
+  assert.equal(unsigned.videoPoster, "");
+  assert.equal(unsigned.videoDurationSeconds, null);
 });
 
 test("initial detail signs only the hero and thumbnails", () => {
